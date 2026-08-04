@@ -1,7 +1,7 @@
 {
   "name": "package-scripts-list",
   "displayName": "Package Scripts List",
-  "description": "Shows all package.json scripts in one dropdown, opened from an icon in the editor title bar.",
+  "description": "Every script in the workspace and every running task in one dropdown: Enter starts or stops, Shift+Enter restarts, and the toolbar icon badges how many tasks are running. npm, yarn, pnpm, bun and deno.",
   "version": "0.0.1",
   "publisher": "local",
   "private": true,

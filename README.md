@@ -1,18 +1,40 @@
-# Package Scripts List
+# ▶ Package Scripts List
 
-Collects every `scripts` entry from all `package.json` files and every `tasks` entry from all `deno.json(c)` files in the workspace and shows them in one
-dropdown — together with every task that is currently running, so the same list starts, stops and
-restarts them.
+**Every script in the workspace, and every task that is running, in one dropdown at the top of the
+window.**
 
-The toolbar icon is a filled disc with the play triangle knocked out of it, and carries a badge with
-the number of running tasks: plain → ① … ⑨ → `9+`.
+One click on the play icon and the whole workspace is in front of you: the `scripts` of every
+`package.json`, the `tasks` of every `deno.json`, grouped per package, searchable by name *or* by the
+command behind it. Anything currently running floats to the top of the list, spinner and all — so the
+list is not just a launcher, it is where you see what is alive and put a stop to it.
+
+There is no mode switch and nothing to learn: <kbd>Enter</kbd> starts a script, <kbd>Enter</kbd> on a
+running one stops it, <kbd>Shift</kbd>+<kbd>Enter</kbd> restarts it. The badge on the toolbar icon
+keeps the count of running tasks in your peripheral vision, so a forgotten `dev` server or a watcher
+left over from yesterday no longer hides in a stack of terminal tabs.
+
+It does not guess how to run things, either. Whether a package wants `npm run`, `yarn`, `pnpm run`,
+`bun run` or `deno task` is read off the project itself — the `packageManager` field, `engines`, or
+the lock and config files next to the package and above it — so the same list works unchanged across
+a mixed monorepo.
+
+- **All scripts, one list** — every `package.json` (`scripts`) and `deno.json`/`deno.jsonc` (`tasks`)
+  in the workspace, grouped per package, `node_modules` and build output skipped.
+- **Running tasks included** — even ones this extension did not start: tasks from `tasks.json`, other
+  extensions, or the built-in npm list. Stop or restart them from the same place.
+- **Toggle on <kbd>Enter</kbd>** — start what is stopped, stop what is running; ⟳ or
+  <kbd>Shift</kbd>+<kbd>Enter</kbd> restarts, with a cleared terminal.
+- **A live badge** — the number of running tasks, right on the toolbar icon and in the status bar.
+- **Knows your runner** — npm, yarn, pnpm, bun and deno, detected per package, overridable.
+- **Real tasks, not typed-out terminal commands** — running state, stop and restart are reliable, and
+  every script also shows up under **Run Task…**.
+
+## Where the button appears
 
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
 > VS Code 1.131 the only extension-facing toolbar menus are `editor/title`, `view/title`,
 > `scm/title`, `notebook/toolbar` and friends — `commandCenter/center` is internal. So the
 > top-of-window button lives in the editor title bar, which is the closest available spot.
-
-## Where the button appears
 
 | Place | Notes |
 | --- | --- |
