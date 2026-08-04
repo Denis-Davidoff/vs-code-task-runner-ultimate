@@ -1,0 +1,7 @@
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(-0.5 -1) scale(0.72)">
+    <path fill="#C5C5C5" fill-rule="evenodd" d="M8 0.9a7.1 7.1 0 1 0 0 14.2A7.1 7.1 0 0 0 8 0.9zM6.1 4.6 11.6 8l-5.5 3.4z"/>
+  </g>
+  <circle cx="11.4" cy="11.4" r="4.4" fill="#0078D4"/>
+  <text x="11.4" y="11.4" text-anchor="middle" dominant-baseline="central" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="8" font-weight="700">5</text>
+</svg>

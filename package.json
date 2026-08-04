@@ -1,0 +1,324 @@
+{
+  "name": "package-scripts-list",
+  "displayName": "Package Scripts List",
+  "description": "Shows all package.json scripts in one dropdown, opened from an icon in the editor title bar.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/package.json",
+    "workspaceContains:**/deno.json",
+    "workspaceContains:**/deno.jsonc",
+    "onTaskType:packageScripts"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "packageScripts.show",
+        "title": "Show Scripts",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light.svg",
+          "dark": "media/scripts-dark.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge1",
+        "title": "Show Scripts (1 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-1.svg",
+          "dark": "media/scripts-dark-1.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge2",
+        "title": "Show Scripts (2 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-2.svg",
+          "dark": "media/scripts-dark-2.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge3",
+        "title": "Show Scripts (3 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-3.svg",
+          "dark": "media/scripts-dark-3.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge4",
+        "title": "Show Scripts (4 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-4.svg",
+          "dark": "media/scripts-dark-4.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge5",
+        "title": "Show Scripts (5 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-5.svg",
+          "dark": "media/scripts-dark-5.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge6",
+        "title": "Show Scripts (6 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-6.svg",
+          "dark": "media/scripts-dark-6.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge7",
+        "title": "Show Scripts (7 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-7.svg",
+          "dark": "media/scripts-dark-7.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge8",
+        "title": "Show Scripts (8 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-8.svg",
+          "dark": "media/scripts-dark-8.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badge9",
+        "title": "Show Scripts (9 running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-9.svg",
+          "dark": "media/scripts-dark-9.svg"
+        }
+      },
+      {
+        "command": "packageScripts.show.badgeMany",
+        "title": "Show Scripts (9+ running)",
+        "category": "Package Scripts",
+        "icon": {
+          "light": "media/scripts-light-many.svg",
+          "dark": "media/scripts-dark-many.svg"
+        }
+      },
+      {
+        "command": "packageScripts.restartActive",
+        "title": "Restart Focused Script",
+        "category": "Package Scripts",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "packageScripts.refresh",
+        "title": "Refresh Scripts",
+        "category": "Package Scripts",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "packageScripts.show",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount <= 0"
+        },
+        {
+          "command": "packageScripts.show.badge1",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 1"
+        },
+        {
+          "command": "packageScripts.show.badge2",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 2"
+        },
+        {
+          "command": "packageScripts.show.badge3",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 3"
+        },
+        {
+          "command": "packageScripts.show.badge4",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 4"
+        },
+        {
+          "command": "packageScripts.show.badge5",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 5"
+        },
+        {
+          "command": "packageScripts.show.badge6",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 6"
+        },
+        {
+          "command": "packageScripts.show.badge7",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 7"
+        },
+        {
+          "command": "packageScripts.show.badge8",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 8"
+        },
+        {
+          "command": "packageScripts.show.badge9",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 9"
+        },
+        {
+          "command": "packageScripts.show.badgeMany",
+          "group": "navigation@100",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 10"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "packageScripts.show.badge1",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badge2",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badge3",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badge4",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badge5",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badge6",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badge7",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badge8",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badge9",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.show.badgeMany",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.restartActive",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "packageScripts.show",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r"
+      },
+      {
+        "command": "packageScripts.restartActive",
+        "key": "shift+enter",
+        "when": "packageScripts.pickerOpen"
+      }
+    ],
+    "configuration": {
+      "title": "Package Scripts List",
+      "properties": {
+        "packageScripts.packageManager": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "npm",
+            "yarn",
+            "pnpm",
+            "bun",
+            "deno"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "Detect from the packageManager field, the engines field, then lock and config files.",
+            "npm run <script>",
+            "yarn <script>",
+            "pnpm run <script>",
+            "bun run <script>",
+            "deno task <script>"
+          ],
+          "description": "Runner used for package.json scripts. Tasks from deno.json(c) always use 'deno task' regardless of this setting."
+        },
+        "packageScripts.showInStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also show a 'Scripts' entry in the status bar."
+        },
+        "packageScripts.showInEditorTitle": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the scripts icon (with the running-task badge) in the editor title bar."
+        },
+        "packageScripts.exclude": {
+          "type": "string",
+          "default": "**/{node_modules,.git,dist,out,build,.next,coverage}/**",
+          "description": "Glob pattern of package.json locations to ignore."
+        }
+      }
+    },
+    "taskDefinitions": [
+      {
+        "type": "packageScripts",
+        "required": [
+          "script"
+        ],
+        "properties": {
+          "script": {
+            "type": "string",
+            "description": "Name of the package.json script."
+          },
+          "manifest": {
+            "type": "string",
+            "description": "URI of the package.json the script belongs to."
+          }
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.5"
+  }
+}
