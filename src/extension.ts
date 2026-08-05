@@ -91,6 +91,10 @@ export function activate(context: vscode.ExtensionContext): void {
     // One command per badge count: the toolbar icon is static, so the visible
     // entry is swapped via the runningCount context key (see contributes.menus).
     ...badgeCommandIds().map((id) => vscode.commands.registerCommand(id, showScriptPicker)),
+    vscode.commands.registerCommand('packageScripts.runItem', (node?: TreeNode) => runNode(node)),
+    vscode.commands.registerCommand('packageScripts.stopItem', (node?: TreeNode) => stopNode(node)),
+    vscode.commands.registerCommand('packageScripts.restartItem', (node?: TreeNode) => restartNode(node)),
+    vscode.commands.registerCommand('packageScripts.toggleItem', (node?: TreeNode) => toggleNode(node)),
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
       provideTasks: async () => (await collectScripts()).map(buildTask),
       resolveTask: async (task) => {
@@ -118,9 +122,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  context.subscriptions.push(...createTree());
+
   const watcher = vscode.workspace.createFileSystemWatcher(MANIFEST_GLOB);
   const invalidate = () => {
     cache = undefined;
+    treeChanged.fire();
   };
   watcher.onDidChange(invalidate);
   watcher.onDidCreate(invalidate);
@@ -162,6 +169,11 @@ function onStateChanged(): void {
   void vscode.commands.executeCommand('setContext', CONTEXT_RUNNING_COUNT, Math.min(count, MAX_BADGE + 1));
   updateStatusBar(count);
   activePicker?.refresh();
+  treeChanged.fire();
+  if (treeView) {
+    // The activity bar badge is a real API here, unlike the editor toolbar one.
+    treeView.badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
+  }
 }
 
 function scriptKey(manifest: string, name: string): string {
@@ -188,6 +200,157 @@ function keyForTask(task: vscode.Task): string | undefined {
   }
 
   return undefined;
+}
+
+// --- activity bar tree -------------------------------------------------------
+
+type TreeNode =
+  | { kind: 'group'; label: string; children: TreeNode[] }
+  | { kind: 'script'; script: ScriptEntry }
+  | { kind: 'foreign'; execution: vscode.TaskExecution };
+
+const treeChanged = new vscode.EventEmitter<void>();
+let treeView: vscode.TreeView<TreeNode> | undefined;
+
+function createTree(): vscode.Disposable[] {
+  const provider: vscode.TreeDataProvider<TreeNode> = {
+    onDidChangeTreeData: treeChanged.event,
+    getTreeItem: treeItemFor,
+    getChildren: async (node) => {
+      if (!node) {
+        return buildTreeRoots(await collectScripts());
+      }
+      return node.kind === 'group' ? node.children : [];
+    },
+  };
+
+  const view = vscode.window.createTreeView('packageScripts.tree', { treeDataProvider: provider });
+  treeView = view;
+
+  const visibility = view.onDidChangeVisibility(({ visible }) => {
+    const opensDropdown = vscode.workspace
+      .getConfiguration('packageScripts')
+      .get<boolean>('openDropdownFromActivityBar', false);
+    if (visible && opensDropdown) {
+      void showScriptPicker();
+    }
+  });
+
+  return [treeChanged, view, visibility];
+}
+
+function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
+  const roots: TreeNode[] = [];
+  const runningScripts = scripts.filter((script) => running.has(script.key));
+  const foreign = foreignExecutions();
+
+  if (runningScripts.length > 0 || foreign.length > 0) {
+    roots.push({
+      kind: 'group',
+      label: `Running (${runningScripts.length + foreign.length})`,
+      children: [
+        ...runningScripts.map((script): TreeNode => ({ kind: 'script', script })),
+        ...foreign.map((execution): TreeNode => ({ kind: 'foreign', execution })),
+      ],
+    });
+  }
+
+  const groups = new Map<string, TreeNode>();
+  for (const script of scripts) {
+    if (running.has(script.key)) {
+      continue;
+    }
+    const key = script.manifest.toString();
+    let group = groups.get(key);
+    if (!group) {
+      group = { kind: 'group', label: packageLabel(script), children: [] };
+      groups.set(key, group);
+      roots.push(group);
+    }
+    if (group.kind === 'group') {
+      group.children.push({ kind: 'script', script });
+    }
+  }
+
+  return roots;
+}
+
+function treeItemFor(node: TreeNode): vscode.TreeItem {
+  if (node.kind === 'group') {
+    const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
+    item.contextValue = 'group';
+    return item;
+  }
+
+  if (node.kind === 'foreign') {
+    const item = new vscode.TreeItem(node.execution.task.name);
+    item.description = node.execution.task.source ? `${node.execution.task.source} task` : 'task';
+    item.iconPath = new vscode.ThemeIcon('sync~spin');
+    item.contextValue = 'foreignTask';
+    item.command = { command: 'packageScripts.toggleItem', title: 'Stop', arguments: [node] };
+    return item;
+  }
+
+  const isRunning = running.has(node.script.key);
+  const item = new vscode.TreeItem(node.script.name);
+  item.description = node.script.command;
+  item.tooltip = `${commandFor(node.script)}\n${node.script.location}`;
+  item.iconPath = new vscode.ThemeIcon(isRunning ? 'sync~spin' : 'play');
+  item.contextValue = isRunning ? 'runningScript' : 'idleScript';
+  item.command = {
+    command: 'packageScripts.toggleItem',
+    title: isRunning ? 'Stop' : 'Run',
+    arguments: [node],
+  };
+  return item;
+}
+
+function packageLabel(script: ScriptEntry): string {
+  const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
+  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
+  const where = multiRoot && folder ? `${folder.name}/${script.location}` : script.location;
+  return script.packageName ? `${script.packageName} — ${where}` : where;
+}
+
+// --- actions shared by the tree and the picker -------------------------------
+
+function executionOf(node: TreeNode | undefined): vscode.TaskExecution | undefined {
+  if (node?.kind === 'script') {
+    return running.get(node.script.key);
+  }
+  return node?.kind === 'foreign' ? node.execution : undefined;
+}
+
+async function runNode(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind === 'script') {
+    await startScript(node.script);
+  }
+}
+
+async function stopNode(node: TreeNode | undefined): Promise<void> {
+  const execution = executionOf(node);
+  if (execution) {
+    await stopExecution(execution);
+  }
+}
+
+async function restartNode(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind === 'foreign') {
+    const task = node.execution.task;
+    await stopExecution(node.execution);
+    await vscode.tasks.executeTask(task);
+    return;
+  }
+  await stopNode(node);
+  await runNode(node);
+}
+
+async function toggleNode(node: TreeNode | undefined): Promise<void> {
+  if (executionOf(node)) {
+    await stopNode(node);
+  } else {
+    await runNode(node);
+  }
 }
 
 // --- picker ------------------------------------------------------------------
@@ -254,9 +417,9 @@ async function showScriptPicker(): Promise<void> {
   picker.onDidTriggerItemButton(async ({ item, button }) => {
     const action = (button as ActionButton).action;
     if (action === 'stop') {
-      await stopItem(item);
+      await stopNode(nodeOf(item));
     } else {
-      await restartItem(item);
+      await restartNode(nodeOf(item));
     }
     render();
   });
@@ -273,7 +436,7 @@ async function showScriptPicker(): Promise<void> {
       await startScript(script);
       return;
     }
-    await stopItem(item);
+    await stopNode(nodeOf(item));
     render();
   });
 
@@ -291,13 +454,6 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
   const runningScripts = scripts.filter((script) => running.has(script.key));
   const foreign = foreignExecutions();
   const multiPackage = new Set(scripts.map((script) => script.manifest.toString())).size > 1;
-  const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
-
-  const groupLabel = (script: ScriptEntry): string => {
-    const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
-    const where = multiRoot && folder ? `${folder.name}/${script.location}` : script.location;
-    return script.packageName ? `${script.packageName} — ${where}` : where;
-  };
 
   if (runningScripts.length > 0 || foreign.length > 0) {
     items.push({ label: `Running (${runningScripts.length + foreign.length})`, kind: vscode.QuickPickItemKind.Separator });
@@ -306,7 +462,7 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
       items.push({
         label: `$(sync~spin) ${script.name}`,
         description: script.command,
-        detail: multiPackage ? groupLabel(script) : undefined,
+        detail: multiPackage ? packageLabel(script) : undefined,
         buttons: [restartButton(true), stopButton()],
         script,
       });
@@ -330,7 +486,7 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
     const group = script.manifest.toString();
     if (multiPackage && group !== currentGroup) {
       currentGroup = group;
-      items.push({ label: groupLabel(script), kind: vscode.QuickPickItemKind.Separator });
+      items.push({ label: packageLabel(script), kind: vscode.QuickPickItemKind.Separator });
     }
     items.push({
       label: `$(play) ${script.name}`,
@@ -346,33 +502,17 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
 async function restartActiveItem(): Promise<void> {
   const item = activePicker?.activeItem();
   if (item) {
-    await restartItem(item);
+    await restartNode(nodeOf(item));
     activePicker?.refresh();
   }
 }
 
-async function stopItem(item: Item): Promise<void> {
-  const execution = item.script ? running.get(item.script.key) : item.execution;
-  if (execution) {
-    await stopExecution(execution);
-  }
-}
-
-async function restartItem(item: Item): Promise<void> {
+/** Picker items and tree nodes describe the same things, so actions are shared. */
+function nodeOf(item: Item): TreeNode | undefined {
   if (item.script) {
-    const execution = running.get(item.script.key);
-    if (execution) {
-      await stopExecution(execution);
-    }
-    await startScript(item.script);
-    return;
+    return { kind: 'script', script: item.script };
   }
-
-  if (item.execution) {
-    const task = item.execution.task;
-    await stopExecution(item.execution);
-    await vscode.tasks.executeTask(task);
-  }
+  return item.execution ? { kind: 'foreign', execution: item.execution } : undefined;
 }
 
 // --- running tasks -----------------------------------------------------------

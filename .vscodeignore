@@ -1,5 +1,6 @@
 .vscode/**
 src/**
+tools/**
 out/**/*.map
 node_modules/**
 tsconfig.json

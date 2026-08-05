@@ -16,7 +16,8 @@
     "workspaceContains:**/package.json",
     "workspaceContains:**/deno.json",
     "workspaceContains:**/deno.jsonc",
-    "onTaskType:packageScripts"
+    "onTaskType:packageScripts",
+    "onView:packageScripts.tree"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -131,64 +132,173 @@
         "title": "Refresh Scripts",
         "category": "Package Scripts",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "packageScripts.runItem",
+        "title": "Run",
+        "category": "Package Scripts",
+        "icon": "$(play)"
+      },
+      {
+        "command": "packageScripts.stopItem",
+        "title": "Stop",
+        "category": "Package Scripts",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "packageScripts.restartItem",
+        "title": "Restart",
+        "category": "Package Scripts",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "packageScripts.toggleItem",
+        "title": "Run or Stop",
+        "category": "Package Scripts"
       }
     ],
     "menus": {
       "editor/title": [
         {
           "command": "packageScripts.show",
-          "group": "navigation@100",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount <= 0"
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && !packageScripts.runningCount"
         },
         {
           "command": "packageScripts.show.badge1",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 1"
         },
         {
           "command": "packageScripts.show.badge2",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 2"
         },
         {
           "command": "packageScripts.show.badge3",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 3"
         },
         {
           "command": "packageScripts.show.badge4",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 4"
         },
         {
           "command": "packageScripts.show.badge5",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 5"
         },
         {
           "command": "packageScripts.show.badge6",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 6"
         },
         {
           "command": "packageScripts.show.badge7",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 7"
         },
         {
           "command": "packageScripts.show.badge8",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 8"
         },
         {
           "command": "packageScripts.show.badge9",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 9"
         },
         {
           "command": "packageScripts.show.badgeMany",
-          "group": "navigation@100",
+          "group": "navigation@1",
           "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 10"
+        }
+      ],
+      "notebook/toolbar": [
+        {
+          "command": "packageScripts.show",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && !packageScripts.runningCount"
+        },
+        {
+          "command": "packageScripts.show.badge1",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 1"
+        },
+        {
+          "command": "packageScripts.show.badge2",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 2"
+        },
+        {
+          "command": "packageScripts.show.badge3",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 3"
+        },
+        {
+          "command": "packageScripts.show.badge4",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 4"
+        },
+        {
+          "command": "packageScripts.show.badge5",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 5"
+        },
+        {
+          "command": "packageScripts.show.badge6",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 6"
+        },
+        {
+          "command": "packageScripts.show.badge7",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 7"
+        },
+        {
+          "command": "packageScripts.show.badge8",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 8"
+        },
+        {
+          "command": "packageScripts.show.badge9",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 9"
+        },
+        {
+          "command": "packageScripts.show.badgeMany",
+          "group": "navigation@1",
+          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 10"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "packageScripts.show",
+          "group": "navigation@1",
+          "when": "view == packageScripts.tree"
+        },
+        {
+          "command": "packageScripts.refresh",
+          "group": "navigation@2",
+          "when": "view == packageScripts.tree"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "packageScripts.runItem",
+          "group": "inline@1",
+          "when": "view == packageScripts.tree && viewItem == idleScript"
+        },
+        {
+          "command": "packageScripts.restartItem",
+          "group": "inline@1",
+          "when": "view == packageScripts.tree && viewItem =~ /^(runningScript|foreignTask)$/"
+        },
+        {
+          "command": "packageScripts.stopItem",
+          "group": "inline@2",
+          "when": "view == packageScripts.tree && viewItem =~ /^(runningScript|foreignTask)$/"
         }
       ],
       "commandPalette": [
@@ -234,6 +344,22 @@
         },
         {
           "command": "packageScripts.restartActive",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.runItem",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.stopItem",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.restartItem",
+          "when": "false"
+        },
+        {
+          "command": "packageScripts.toggleItem",
           "when": "false"
         }
       ]
@@ -284,6 +410,11 @@
           "default": true,
           "description": "Show the scripts icon (with the running-task badge) in the editor title bar."
         },
+        "packageScripts.openDropdownFromActivityBar": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also open the dropdown when the Scripts view in the activity bar is revealed. Off by default: the view already shows the same list as a tree."
+        },
         "packageScripts.exclude": {
           "type": "string",
           "default": "**/{node_modules,.git,dist,out,build,.next,coverage}/**",
@@ -308,12 +439,32 @@
           }
         }
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "packageScripts",
+          "title": "Scripts",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "packageScripts": [
+        {
+          "id": "packageScripts.tree",
+          "name": "Scripts",
+          "icon": "media/activity-bar.svg",
+          "contextualTitle": "Scripts"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "gen": "node tools/generate-contributions.js",
     "package": "vsce package"
   },
   "devDependencies": {

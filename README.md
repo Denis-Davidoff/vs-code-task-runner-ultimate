@@ -31,17 +31,38 @@ a mixed monorepo.
 
 ## Where the button appears
 
+| Place | Notes |
+| --- | --- |
+| Editor title bar (top right) | The badged icon. Toggle with `packageScripts.showInEditorTitle`. |
+| Activity bar (left strip) | The **Scripts** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
+| Status bar (bottom left) | `$(play-circle) Scripts`, or `$(sync~spin) Scripts N` while tasks run. Toggle with `packageScripts.showInStatusBar`. |
+| Command palette | `Package Scripts: Show Scripts` |
+| Keybinding | `Cmd+Alt+R` / `Ctrl+Alt+R` |
+
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
 > VS Code 1.131 the only extension-facing toolbar menus are `editor/title`, `view/title`,
 > `scm/title`, `notebook/toolbar` and friends — `commandCenter/center` is internal. So the
 > top-of-window button lives in the editor title bar, which is the closest available spot.
 
-| Place | Notes |
-| --- | --- |
-| Editor title bar (top right) | Primary entry point, with the running-tasks badge. Toggle with `packageScripts.showInEditorTitle`. |
-| Status bar (bottom left) | `$(play-circle) Scripts`, or `$(sync~spin) Scripts N` while tasks run. Toggle with `packageScripts.showInStatusBar`. |
-| Command palette | `Package Scripts: Show Scripts` |
-| Keybinding | `Cmd+Alt+R` / `Ctrl+Alt+R` |
+### If the title bar icon is missing
+
+The editor title bar is not a guaranteed surface: some editors do not render extension actions
+there at all (terminal-in-an-editor, the Settings and Extensions tabs, the Welcome page), and when
+a group is narrow or another extension crowds the bar, VS Code folds actions into the `…` overflow
+menu. Notebooks are covered separately through `notebook/toolbar`, and the icon is registered at
+`navigation@1` so it is among the first to survive the overflow — but the surface that is *always*
+there is the activity bar view, plus the status bar entry and `Cmd+Alt+R`.
+
+### The Scripts view
+
+The activity bar icon opens a tree with the same content as the dropdown: a **Running** group on
+top, then one group per package. Clicking a row toggles it — run if stopped, stop if running — and
+each row has inline ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as
+a real VS Code badge. The view title has the dropdown button and a refresh button.
+
+Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
+do "what the toolbar icon does". If you would rather have the dropdown anyway, set
+`packageScripts.openDropdownFromActivityBar` to `true` and it opens as soon as the view is revealed.
 
 ## In the dropdown
 
@@ -109,11 +130,18 @@ Two details worth knowing:
 
 ### How the badge works
 
-VS Code toolbar icons are static images — there is no API to draw a badge on one. So `media/` holds
-pre-rendered icons for counts 1–9 plus `9+`, one command per variant, and the extension publishes
-the running count into the `packageScripts.runningCount` context key. The `editor/title` menu shows
-whichever variant matches. Regenerating the icons/manifest entries is a one-off script, not part of
-the build.
+The activity bar badge is a real API (`TreeView.badge`). The toolbar one is not: editor title icons
+are static images with no way to draw on them. So `media/` holds pre-rendered icons for counts 1–9
+plus `9+`, one command per variant, and the extension publishes the running count into the
+`packageScripts.runningCount` context key — the `editor/title` menu then shows whichever variant
+matches. Those icons and the menu entries that reference them are generated:
+
+```bash
+npm run gen     # tools/generate-contributions.js
+```
+
+It rewrites `media/*.svg` and the `commands`, `menus`, `views` and `keybindings` sections of
+`package.json`. Edit the generator, not those sections.
 
 ## Development
 
