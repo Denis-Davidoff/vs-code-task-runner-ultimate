@@ -1,14 +1,14 @@
-# ▶ Handy Tasks Runner
+# ▶ Handy Task Runner
 
 **Every script in your workspace, and everything currently running, in one list. Start, stop and
 restart without ever going looking for a terminal tab.**
 
 Scripts scatter. A monorepo buries them across a dozen `package.json` files, the dev server you
 started an hour ago is alive in a tab you can no longer find, and running anything by hand means
-getting the directory *and* the package manager right first. Handy Tasks Runner collapses all of
+getting the directory *and* the package manager right first. Handy Task Runner collapses all of
 that into one list, and gives you three ways to reach it.
 
-![Handy Tasks Runner in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-handy-tasks-runner/main/promo-video.gif)
+![Handy Task Runner in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-handy-task-runner/main/promo-video.gif)
 
 ### ▶ in the toolbar of every file
 
@@ -62,7 +62,7 @@ above it — so one list works unchanged across a mixed monorepo.
 | Editor title bar (top right) | The badged icon. Toggle with `handyTasksRunner.showInEditorTitle`. |
 | Activity bar (left strip) | The **Handy Tasks** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
 | Status bar (bottom left) | `$(play-circle) Handy Tasks`, or `$(sync~spin) Handy Tasks N` while tasks run. Toggle with `handyTasksRunner.showInStatusBar`. |
-| Command palette | `Handy Tasks Runner: Show Scripts` |
+| Command palette | `Handy Task Runner: Show Scripts` |
 | Keybinding | `Ctrl+Cmd+T` on macOS, `Ctrl+Alt+T` on Windows and Linux — see [Keyboard shortcuts](#keyboard-shortcuts) |
 
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
@@ -141,7 +141,7 @@ obvious candidates are not:
 
 ### Changing it
 
-Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Handy Tasks Runner: Show Scripts** and click the
+Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Handy Task Runner: Show Scripts** and click the
 pencil. Or write it out in `keybindings.json`:
 
 ```json
@@ -218,7 +218,7 @@ in the very file being edited: switching a package from npm to pnpm has to chang
 are launched, not just what the list says. The cost is a rescan plus a few stat calls per package,
 on a change you made yourself.
 
-`Handy Tasks Runner: Refresh Scripts` does exactly the same thing on demand, for the cases no
+`Handy Task Runner: Refresh Scripts` does exactly the same thing on demand, for the cases no
 watcher can see — a manifest edited outside the workspace, say.
 
 ## Runner detection
@@ -277,7 +277,7 @@ To build and install a package:
 
 ```bash
 npx @vscode/vsce package --skip-license
-code --install-extension handy-tasks-runner-0.0.1.vsix --force
+code --install-extension handy-task-runner-0.1.4.vsix --force
 ```
 
 Reload the VS Code window after installing (`Developer: Reload Window`).

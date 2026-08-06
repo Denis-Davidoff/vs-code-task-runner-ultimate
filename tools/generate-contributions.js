@@ -213,21 +213,21 @@ const badgeEntries = variants.map((variant, index) => ({
 }));
 
 manifest.contributes.commands = [
-  { command: 'handyTasksRunner.show', title: 'Show Scripts', category: 'Handy Tasks Runner', icon: icon('') },
+  { command: 'handyTasksRunner.show', title: 'Show Scripts', category: 'Handy Task Runner', icon: icon('') },
   ...badgeEntries.map((entry) => ({
     command: entry.id,
     title: `Show Scripts (${entry.label} running)`,
-    category: 'Handy Tasks Runner',
+    category: 'Handy Task Runner',
     icon: icon(entry.suffix),
   })),
-  { command: 'handyTasksRunner.restartActive', title: 'Restart Focused Script', category: 'Handy Tasks Runner', icon: '$(debug-restart)' },
-  { command: 'handyTasksRunner.refresh', title: 'Refresh Scripts', category: 'Handy Tasks Runner', icon: '$(refresh)' },
-  { command: 'handyTasksRunner.runItem', title: 'Run', category: 'Handy Tasks Runner', icon: '$(play)' },
-  { command: 'handyTasksRunner.stopItem', title: 'Stop', category: 'Handy Tasks Runner', icon: '$(debug-stop)' },
-  { command: 'handyTasksRunner.restartItem', title: 'Restart', category: 'Handy Tasks Runner', icon: '$(debug-restart)' },
-  { command: 'handyTasksRunner.toggleItem', title: 'Run or Stop', category: 'Handy Tasks Runner' },
-  { command: 'handyTasksRunner.stopAll', title: 'Stop All Running Tasks', category: 'Handy Tasks Runner', icon: '$(stop-circle)' },
-  { command: 'handyTasksRunner.restartAll', title: 'Restart All Running Tasks', category: 'Handy Tasks Runner', icon: '$(debug-restart)' },
+  { command: 'handyTasksRunner.restartActive', title: 'Restart Focused Script', category: 'Handy Task Runner', icon: '$(debug-restart)' },
+  { command: 'handyTasksRunner.refresh', title: 'Refresh Scripts', category: 'Handy Task Runner', icon: '$(refresh)' },
+  { command: 'handyTasksRunner.runItem', title: 'Run', category: 'Handy Task Runner', icon: '$(play)' },
+  { command: 'handyTasksRunner.stopItem', title: 'Stop', category: 'Handy Task Runner', icon: '$(debug-stop)' },
+  { command: 'handyTasksRunner.restartItem', title: 'Restart', category: 'Handy Task Runner', icon: '$(debug-restart)' },
+  { command: 'handyTasksRunner.toggleItem', title: 'Run or Stop', category: 'Handy Task Runner' },
+  { command: 'handyTasksRunner.stopAll', title: 'Stop All Running Tasks', category: 'Handy Task Runner', icon: '$(stop-circle)' },
+  { command: 'handyTasksRunner.restartAll', title: 'Restart All Running Tasks', category: 'Handy Task Runner', icon: '$(debug-restart)' },
 ];
 
 const inTitle = 'config.handyTasksRunner.showInEditorTitle';

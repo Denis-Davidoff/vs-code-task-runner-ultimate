@@ -169,7 +169,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('handyTasksRunner.refresh', async () => {
       invalidate();
       await collectScripts();
-      vscode.window.setStatusBarMessage('Handy Tasks Runner: reloaded', 2000);
+      vscode.window.setStatusBarMessage('Handy Task Runner: reloaded', 2000);
     }),
     // One command per badge count: the toolbar icon is static, so the visible
     // entry is swapped via the runningCount context key (see contributes.menus).
@@ -843,7 +843,7 @@ async function collectScripts(): Promise<ScriptEntry[]> {
   if (manifests.length === MAX_MANIFESTS && !warnedAboutTruncation) {
     warnedAboutTruncation = true;
     void vscode.window.showWarningMessage(
-      `Handy Tasks Runner stopped after ${MAX_MANIFESTS} manifests, so some scripts are missing. ` +
+      `Handy Task Runner stopped after ${MAX_MANIFESTS} manifests, so some scripts are missing. ` +
         'Widen "handyTasksRunner.exclude" to skip the ones you do not need.',
     );
   }

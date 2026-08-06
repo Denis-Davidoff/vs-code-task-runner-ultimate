@@ -1,6 +1,6 @@
 {
-  "name": "handy-tasks-runner",
-  "displayName": "Handy 🏆 Tasks Runner",
+  "name": "handy-task-runner",
+  "displayName": "Handy 🏆 Task Runner",
   "description": "Every script in the workspace and every running task in one dropdown: Enter starts or stops, Shift+Enter restarts, and the toolbar icon badges how many tasks are running. npm, yarn, pnpm, bun and deno.",
   "version": "0.1.4",
   "publisher": "DenysDavydov",
@@ -8,7 +8,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Denis-Davidoff/vs-code-handy-tasks-runner.git"
+    "url": "https://github.com/Denis-Davidoff/vs-code-handy-task-runner.git"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -20,6 +20,9 @@
     "npm scripts",
     "run npm script",
     "package.json scripts",
+    "node scripts",
+    "node package",
+    "node package scripts",
     "task runner",
     "tasks",
     "script runner",
@@ -46,7 +49,7 @@
       {
         "command": "handyTasksRunner.show",
         "title": "Show Scripts",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light.svg",
           "dark": "media/scripts-dark.svg"
@@ -55,7 +58,7 @@
       {
         "command": "handyTasksRunner.show.badge1",
         "title": "Show Scripts (1 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-1.svg",
           "dark": "media/scripts-dark-1.svg"
@@ -64,7 +67,7 @@
       {
         "command": "handyTasksRunner.show.badge2",
         "title": "Show Scripts (2 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-2.svg",
           "dark": "media/scripts-dark-2.svg"
@@ -73,7 +76,7 @@
       {
         "command": "handyTasksRunner.show.badge3",
         "title": "Show Scripts (3 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-3.svg",
           "dark": "media/scripts-dark-3.svg"
@@ -82,7 +85,7 @@
       {
         "command": "handyTasksRunner.show.badge4",
         "title": "Show Scripts (4 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-4.svg",
           "dark": "media/scripts-dark-4.svg"
@@ -91,7 +94,7 @@
       {
         "command": "handyTasksRunner.show.badge5",
         "title": "Show Scripts (5 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-5.svg",
           "dark": "media/scripts-dark-5.svg"
@@ -100,7 +103,7 @@
       {
         "command": "handyTasksRunner.show.badge6",
         "title": "Show Scripts (6 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-6.svg",
           "dark": "media/scripts-dark-6.svg"
@@ -109,7 +112,7 @@
       {
         "command": "handyTasksRunner.show.badge7",
         "title": "Show Scripts (7 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-7.svg",
           "dark": "media/scripts-dark-7.svg"
@@ -118,7 +121,7 @@
       {
         "command": "handyTasksRunner.show.badge8",
         "title": "Show Scripts (8 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-8.svg",
           "dark": "media/scripts-dark-8.svg"
@@ -127,7 +130,7 @@
       {
         "command": "handyTasksRunner.show.badge9",
         "title": "Show Scripts (9 running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-9.svg",
           "dark": "media/scripts-dark-9.svg"
@@ -136,7 +139,7 @@
       {
         "command": "handyTasksRunner.show.badgeMany",
         "title": "Show Scripts (9+ running)",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": {
           "light": "media/scripts-light-many.svg",
           "dark": "media/scripts-dark-many.svg"
@@ -145,48 +148,48 @@
       {
         "command": "handyTasksRunner.restartActive",
         "title": "Restart Focused Script",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": "$(debug-restart)"
       },
       {
         "command": "handyTasksRunner.refresh",
         "title": "Refresh Scripts",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": "$(refresh)"
       },
       {
         "command": "handyTasksRunner.runItem",
         "title": "Run",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": "$(play)"
       },
       {
         "command": "handyTasksRunner.stopItem",
         "title": "Stop",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": "$(debug-stop)"
       },
       {
         "command": "handyTasksRunner.restartItem",
         "title": "Restart",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": "$(debug-restart)"
       },
       {
         "command": "handyTasksRunner.toggleItem",
         "title": "Run or Stop",
-        "category": "Handy Tasks Runner"
+        "category": "Handy Task Runner"
       },
       {
         "command": "handyTasksRunner.stopAll",
         "title": "Stop All Running Tasks",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": "$(stop-circle)"
       },
       {
         "command": "handyTasksRunner.restartAll",
         "title": "Restart All Running Tasks",
-        "category": "Handy Tasks Runner",
+        "category": "Handy Task Runner",
         "icon": "$(debug-restart)"
       }
     ],
@@ -420,7 +423,7 @@
       }
     ],
     "configuration": {
-      "title": "Handy Tasks Runner",
+      "title": "Handy Task Runner",
       "properties": {
         "handyTasksRunner.packageManager": {
           "type": "string",
