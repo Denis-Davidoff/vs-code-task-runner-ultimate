@@ -16,21 +16,19 @@ const THEMES = {
   dark: { fg: '#C5C5C5', badge: '#0078D4', text: '#FFFFFF' },
 };
 
-/**
- * Filled disc with the play triangle knocked out of it (evenodd fill rule),
- * optionally scaled down to leave room for the badge.
- */
-function glyph(fg, scaled) {
-  const body = `  <path fill="${fg}" fill-rule="evenodd" d="M8 0.9a7.1 7.1 0 1 0 0 14.2A7.1 7.1 0 0 0 8 0.9zM6.1 4.6 11.6 8l-5.5 3.4z"/>`;
-  if (!scaled) return body;
-  // Shrink around the top-left so the badge sits in the bottom-right corner.
-  return `  <g transform="translate(-0.5 -1) scale(0.72)">\n  ${body}\n  </g>`;
+/** Filled disc with the play triangle knocked out of it (evenodd fill rule). */
+function glyph(fg) {
+  return `  <path fill="${fg}" fill-rule="evenodd" d="M8 0.9a7.1 7.1 0 1 0 0 14.2A7.1 7.1 0 0 0 8 0.9zM6.1 4.6 11.6 8l-5.5 3.4z"/>`;
 }
 
+/**
+ * Count badge, drawn over the bottom-right of a full-size glyph — the way the
+ * activity bar badges its icon. The glyph is never shrunk to make room.
+ */
 function badge(theme, label) {
-  const fontSize = label.length > 1 ? 6.4 : 8;
-  return `  <circle cx="11.4" cy="11.4" r="4.4" fill="${theme.badge}"/>
-  <text x="11.4" y="11.4" text-anchor="middle" dominant-baseline="central" fill="${theme.text}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="${fontSize}" font-weight="700">${label}</text>`;
+  const fontSize = label.length > 1 ? 5.2 : 6.4;
+  return `  <circle cx="11.7" cy="11.7" r="4.3" fill="${theme.badge}"/>
+  <text x="11.7" y="11.7" text-anchor="middle" dominant-baseline="central" fill="${theme.text}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="${fontSize}" font-weight="700">${label}</text>`;
 }
 
 const svg = (inner, size = 16) =>
@@ -42,11 +40,11 @@ variants.push({ suffix: '-many', label: `${MAX_BADGE}+` });
 
 fs.mkdirSync(media, { recursive: true });
 for (const [name, theme] of Object.entries(THEMES)) {
-  fs.writeFileSync(path.join(media, `scripts-${name}.svg`), svg(glyph(theme.fg, false)));
+  fs.writeFileSync(path.join(media, `scripts-${name}.svg`), svg(glyph(theme.fg)));
   for (const variant of variants) {
     fs.writeFileSync(
       path.join(media, `scripts-${name}${variant.suffix}.svg`),
-      svg(`${glyph(theme.fg, true)}\n${badge(theme, variant.label)}`),
+      svg(`${glyph(theme.fg)}\n${badge(theme, variant.label)}`),
     );
   }
 }
