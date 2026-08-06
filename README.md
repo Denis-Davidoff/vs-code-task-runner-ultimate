@@ -8,6 +8,8 @@ started an hour ago is alive in a tab you can no longer find, and running anythi
 getting the directory *and* the package manager right first. Handy Tasks Runner collapses all of
 that into one list, and gives you three ways to reach it.
 
+![Handy Tasks Runner in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-handy-tasks-runner/main/promo-video.gif)
+
 ### ▶ in the toolbar of every file
 
 The play icon sits in the editor title bar, so the whole workspace is one click away from wherever

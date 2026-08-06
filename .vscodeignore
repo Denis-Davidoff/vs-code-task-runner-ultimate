@@ -5,3 +5,4 @@ out/**/*.map
 node_modules/**
 tsconfig.json
 .gitignore
+promo-video.gif
