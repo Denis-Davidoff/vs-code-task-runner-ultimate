@@ -205,7 +205,7 @@ function keyForTask(task: vscode.Task): string | undefined {
 // --- activity bar tree -------------------------------------------------------
 
 type TreeNode =
-  | { kind: 'group'; label: string; children: TreeNode[] }
+  | { kind: 'group'; label: string; detail?: string; children: TreeNode[] }
   | { kind: 'script'; script: ScriptEntry }
   | { kind: 'foreign'; execution: vscode.TaskExecution };
 
@@ -247,7 +247,8 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   if (runningScripts.length > 0 || foreign.length > 0) {
     roots.push({
       kind: 'group',
-      label: `Running (${runningScripts.length + foreign.length})`,
+      label: 'Running',
+      detail: String(runningScripts.length + foreign.length),
       children: [
         ...runningScripts.map((script): TreeNode => ({ kind: 'script', script })),
         ...foreign.map((execution): TreeNode => ({ kind: 'foreign', execution })),
@@ -263,7 +264,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     const key = script.manifest.toString();
     let group = groups.get(key);
     if (!group) {
-      group = { kind: 'group', label: packageLabel(script), children: [] };
+      group = { kind: 'group', label: packageTitle(script), detail: packagePath(script), children: [] };
       groups.set(key, group);
       roots.push(group);
     }
@@ -277,7 +278,12 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
 
 function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
-    const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
+    // Highlights are the only way to get bold text in a tree label; VS Code
+    // renders them at font-weight 700 in the list highlight colour.
+    const label: vscode.TreeItemLabel = { label: node.label, highlights: [[0, node.label.length]] };
+    const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Expanded);
+    item.description = node.detail;
+    item.tooltip = node.detail ? `${node.label} — ${node.detail}` : node.label;
     item.contextValue = 'group';
     return item;
   }
@@ -305,10 +311,21 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   return item;
 }
 
-function packageLabel(script: ScriptEntry): string {
+/** Bold part of a group row: the package's own name, or where it lives if it has none. */
+function packageTitle(script: ScriptEntry): string {
+  return script.packageName ?? (script.directory || path.posix.basename(script.manifest.path));
+}
+
+/** Dimmed part of a group row: the manifest path relative to its workspace folder. */
+function packagePath(script: ScriptEntry): string {
   const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
   const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
-  const where = multiRoot && folder ? `${folder.name}/${script.location}` : script.location;
+  return multiRoot && folder ? `${folder.name}/${script.location}` : script.location;
+}
+
+/** Single-line form used by the quick pick, which has no rich labels. */
+function packageLabel(script: ScriptEntry): string {
+  const where = packagePath(script);
   return script.packageName ? `${script.packageName} — ${where}` : where;
 }
 
