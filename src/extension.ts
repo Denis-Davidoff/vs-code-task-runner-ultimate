@@ -143,6 +143,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('packageScripts.stopItem', (node?: TreeNode) => stopNode(node)),
     vscode.commands.registerCommand('packageScripts.restartItem', (node?: TreeNode) => restartNode(node)),
     vscode.commands.registerCommand('packageScripts.toggleItem', (node?: TreeNode) => toggleNode(node)),
+    vscode.commands.registerCommand('packageScripts.stopAll', stopAllTasks),
+    vscode.commands.registerCommand('packageScripts.restartAll', restartAllTasks),
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
       provideTasks: async () => (await collectScripts()).map(buildTask),
       resolveTask: async (task) => {
@@ -296,37 +298,53 @@ function createTree(): vscode.Disposable[] {
   return [treeChanged, view, visibility, decorations];
 }
 
+/**
+ * One group per manifest. Running scripts stay in the group they belong to but
+ * float to the top of it, and groups that have something running float to the
+ * top of the tree — so whatever is alive is always the first thing on screen.
+ */
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
-  const roots: TreeNode[] = [];
-  const runningScripts = scripts.filter((script) => running.has(script.key));
-  const foreign = foreignExecutions();
+  const groups: Array<{ node: TreeNode & { kind: 'group' }; hasRunning: boolean }> = [];
+  const byManifest = new Map<string, (typeof groups)[number]>();
 
-  if (runningScripts.length > 0 || foreign.length > 0) {
-    roots.push({
-      kind: 'group',
-      label: `Running (${runningScripts.length + foreign.length})`,
-      children: [
-        ...runningScripts.map((script): TreeNode => ({ kind: 'script', script })),
-        ...foreign.map((execution): TreeNode => ({ kind: 'foreign', execution })),
-      ],
-    });
+  for (const script of scripts) {
+    const key = script.manifest.toString();
+    let group = byManifest.get(key);
+    if (!group) {
+      group = {
+        node: { kind: 'group', label: packageTitle(script), detail: packagePath(script), children: [] },
+        hasRunning: false,
+      };
+      byManifest.set(key, group);
+      groups.push(group);
+    }
+
+    const node: TreeNode = { kind: 'script', script };
+    if (running.has(script.key)) {
+      // Running first, in the order they were declared.
+      const insertAt = group.node.children.filter(
+        (child) => child.kind === 'script' && running.has(child.script.key),
+      ).length;
+      group.node.children.splice(insertAt, 0, node);
+      group.hasRunning = true;
+    } else {
+      group.node.children.push(node);
+    }
   }
 
-  const groups = new Map<string, TreeNode>();
-  for (const script of scripts) {
-    if (running.has(script.key)) {
-      continue;
-    }
-    const key = script.manifest.toString();
-    let group = groups.get(key);
-    if (!group) {
-      group = { kind: 'group', label: packageTitle(script), detail: packagePath(script), children: [] };
-      groups.set(key, group);
-      roots.push(group);
-    }
-    if (group.kind === 'group') {
-      group.children.push({ kind: 'script', script });
-    }
+  const roots: TreeNode[] = [
+    ...groups.filter((group) => group.hasRunning).map((group) => group.node),
+    ...groups.filter((group) => !group.hasRunning).map((group) => group.node),
+  ];
+
+  // Tasks that are not backed by a manifest have no group of their own.
+  const foreign = foreignExecutions();
+  if (foreign.length > 0) {
+    roots.unshift({
+      kind: 'group',
+      label: `Other tasks (${foreign.length})`,
+      children: foreign.map((execution): TreeNode => ({ kind: 'foreign', execution })),
+    });
   }
 
   return roots;
@@ -469,6 +487,21 @@ async function restartNode(node: TreeNode | undefined): Promise<void> {
   }
   await stopNode(node);
   await runNode(node);
+}
+
+/** Stops everything the task system currently runs, ours and foreign alike. */
+async function stopAllTasks(): Promise<void> {
+  await Promise.all([...vscode.tasks.taskExecutions].map((execution) => stopExecution(execution)));
+}
+
+/** Restarts every running task. Unlike Refresh, this touches processes, not the script list. */
+async function restartAllTasks(): Promise<void> {
+  // Snapshot the tasks first: the executions are gone once they are terminated.
+  const tasks = [...vscode.tasks.taskExecutions].map((execution) => execution.task);
+  await stopAllTasks();
+  for (const task of tasks) {
+    await vscode.tasks.executeTask(task);
+  }
 }
 
 async function toggleNode(node: TreeNode | undefined): Promise<void> {

@@ -90,6 +90,8 @@ manifest.contributes.commands = [
   { command: 'packageScripts.stopItem', title: 'Stop', category: 'Package Scripts', icon: '$(debug-stop)' },
   { command: 'packageScripts.restartItem', title: 'Restart', category: 'Package Scripts', icon: '$(debug-restart)' },
   { command: 'packageScripts.toggleItem', title: 'Run or Stop', category: 'Package Scripts' },
+  { command: 'packageScripts.stopAll', title: 'Stop All Running Tasks', category: 'Package Scripts', icon: '$(stop-circle)' },
+  { command: 'packageScripts.restartAll', title: 'Restart All Running Tasks', category: 'Package Scripts', icon: '$(debug-restart)' },
 ];
 
 const inTitle = 'config.packageScripts.showInEditorTitle';
@@ -109,8 +111,18 @@ manifest.contributes.menus = {
   // Notebooks render their own toolbar instead of the editor title actions.
   'notebook/toolbar': toolbarEntries(`${inTitle} && `),
   'view/title': [
-    { command: 'packageScripts.show', group: 'navigation@1', when: 'view == packageScripts.tree' },
-    { command: 'packageScripts.refresh', group: 'navigation@2', when: 'view == packageScripts.tree' },
+    {
+      command: 'packageScripts.restartAll',
+      group: 'navigation@1',
+      when: 'view == packageScripts.tree && packageScripts.runningCount > 0',
+    },
+    {
+      command: 'packageScripts.stopAll',
+      group: 'navigation@2',
+      when: 'view == packageScripts.tree && packageScripts.runningCount > 0',
+    },
+    { command: 'packageScripts.show', group: 'navigation@3', when: 'view == packageScripts.tree' },
+    { command: 'packageScripts.refresh', group: 'navigation@4', when: 'view == packageScripts.tree' },
   ],
   'view/item/context': [
     { command: 'packageScripts.runItem', group: 'inline@1', when: 'view == packageScripts.tree && viewItem == idleScript' },
