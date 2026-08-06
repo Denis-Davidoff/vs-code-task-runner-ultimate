@@ -334,7 +334,10 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
 
 function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
-    const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
+    // Group rows are upper-cased with separators opened up; the tooltip keeps
+    // the name exactly as written in the manifest.
+    const heading = node.label.toUpperCase().replace(/[-_]+/g, ' ');
+    const item = new vscode.TreeItem(heading, vscode.TreeItemCollapsibleState.Expanded);
     item.tooltip = node.detail ? `${node.label} — ${node.detail}` : node.label;
     // A resourceUri makes the row eligible for a file decoration, the only API
     // that can colour a tree label. The scheme is ours, so the decoration never
