@@ -22,6 +22,15 @@ const CONTEXT_PICKER_OPEN = 'handyTasksRunner.pickerOpen';
 const CONTEXT_RUNNING_COUNT = 'handyTasksRunner.runningCount';
 /** Highest count with a dedicated badge icon; above this the "9+" icon is used. */
 const MAX_BADGE = 9;
+/**
+ * Ceiling on manifests read in one scan. Every hit is opened and parsed, and
+ * its directory is stat-walked for lock files, so this bounds the work a
+ * pathological workspace can ask for. Reaching it is reported rather than
+ * silently truncating the list.
+ */
+const MAX_MANIFESTS = 2000;
+/** The truncation warning is shown once per window, not once per scan. */
+let warnedAboutTruncation = false;
 
 interface ScriptEntry {
   /** Stable identity of a script: its manifest plus the script name. */
@@ -66,6 +75,16 @@ const DETECTION_FILES: ReadonlyArray<[string, PackageManager]> = [
 
 /** Order in which the `engines` field is consulted; npm last, as it is the fallback anyway. */
 const ENGINE_KEYS: ReadonlyArray<PackageManager> = ['deno', 'bun', 'pnpm', 'yarn', 'npm'];
+
+/**
+ * Everything a scan depends on: the manifests it reads scripts from, plus the
+ * lock and config files runner detection consults. Watching only the manifests
+ * would leave a package running under the wrong runner after a lock file
+ * appears, so both go through the same watcher.
+ */
+const WATCH_GLOB = `**/{${[
+  ...new Set(['package.json', 'deno.json', 'deno.jsonc', ...DETECTION_FILES.map(([file]) => file)]),
+].join(',')}}`;
 
 interface CategoryRule {
   /** Tokens the script name (or, as a last resort, its command) is matched against. */
@@ -119,6 +138,23 @@ let cache: ScriptEntry[] | undefined;
 /** Script key -> its running task execution. */
 const running = new Map<string, vscode.TaskExecution>();
 
+/**
+ * Drops everything derived from the manifests and repaints both surfaces.
+ *
+ * The detected runners go too: a package.json carries `packageManager` and
+ * `engines`, so a change to it can move a package to a different runner, and a
+ * stale entry would keep launching scripts with the old one. Re-detecting costs
+ * a handful of stat calls per package on top of the rescan the cleared cache
+ * already forces, which is the same work the Refresh command has always done.
+ */
+function invalidate(): void {
+  cache = undefined;
+  detected.clear();
+  treeChanged.fire();
+  // The picker holds its own copy of the list, so it has to be told as well.
+  void activePicker?.reload();
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   for (const exec of vscode.tasks.taskExecutions) {
     const key = keyForTask(exec.task);
@@ -131,8 +167,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('handyTasksRunner.show', showScriptPicker),
     vscode.commands.registerCommand('handyTasksRunner.restartActive', restartActiveItem),
     vscode.commands.registerCommand('handyTasksRunner.refresh', async () => {
-      cache = undefined;
-      detected.clear();
+      invalidate();
       await collectScripts();
       vscode.window.setStatusBarMessage('Handy Tasks Runner: reloaded', 2000);
     }),
@@ -174,17 +209,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(...createTree());
 
-  const watcher = vscode.workspace.createFileSystemWatcher(MANIFEST_GLOB);
-  const invalidate = () => {
-    cache = undefined;
-    treeChanged.fire();
-  };
-  watcher.onDidChange(invalidate);
-  watcher.onDidCreate(invalidate);
-  watcher.onDidDelete(invalidate);
+  const watcher = vscode.workspace.createFileSystemWatcher(WATCH_GLOB);
+  // The events carry the changed URI, which `invalidate` has no use for.
+  watcher.onDidChange(() => invalidate());
+  watcher.onDidCreate(() => invalidate());
+  watcher.onDidDelete(() => invalidate());
   context.subscriptions.push(
     watcher,
-    vscode.workspace.onDidChangeWorkspaceFolders(invalidate),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => invalidate()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('handyTasksRunner.exclude')) {
         invalidate();
@@ -537,14 +569,18 @@ const restartButton = (running: boolean): ActionButton => ({
 });
 
 interface ActivePicker {
+  /** Repaints from the list already in hand — for a change of running state. */
   refresh(): void;
+  /** Re-reads the manifests first — for a change to the manifests themselves. */
+  reload(): Promise<void>;
   activeItem(): Item | undefined;
 }
 
 let activePicker: ActivePicker | undefined;
 
 async function showScriptPicker(): Promise<void> {
-  const scripts = await collectScripts();
+  // Reassigned by `reload` when a manifest changes while the picker is open.
+  let scripts = await collectScripts();
 
   if (scripts.length === 0 && runningCount() === 0) {
     vscode.window.showInformationMessage('No scripts found in any package.json of this workspace.');
@@ -569,8 +605,13 @@ async function showScriptPicker(): Promise<void> {
     }
   };
 
+  const reload = async () => {
+    scripts = await collectScripts();
+    render();
+  };
+
   render();
-  activePicker = { refresh: render, activeItem: () => picker.activeItems[0] };
+  activePicker = { refresh: render, reload, activeItem: () => picker.activeItems[0] };
   void vscode.commands.executeCommand('setContext', CONTEXT_PICKER_OPEN, true);
 
   picker.onDidTriggerItemButton(async ({ item, button }) => {
@@ -795,7 +836,17 @@ async function collectScripts(): Promise<ScriptEntry[]> {
 
   const config = vscode.workspace.getConfiguration('handyTasksRunner');
   const exclude = config.get<string>('exclude') || '**/node_modules/**';
-  const manifests = await vscode.workspace.findFiles(MANIFEST_GLOB, exclude, 400);
+  const manifests = await vscode.workspace.findFiles(MANIFEST_GLOB, exclude, MAX_MANIFESTS);
+
+  // Hitting the cap means the list on screen is incomplete, which is worth
+  // saying out loud — once per window, not on every rescan.
+  if (manifests.length === MAX_MANIFESTS && !warnedAboutTruncation) {
+    warnedAboutTruncation = true;
+    void vscode.window.showWarningMessage(
+      `Handy Tasks Runner stopped after ${MAX_MANIFESTS} manifests, so some scripts are missing. ` +
+        'Widen "handyTasksRunner.exclude" to skip the ones you do not need.',
+    );
+  }
 
   manifests.sort((a, b) => a.fsPath.length - b.fsPath.length || a.fsPath.localeCompare(b.fsPath));
 

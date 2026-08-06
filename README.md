@@ -1,30 +1,54 @@
 # ▶ Handy Tasks Runner
 
-**Every script in the workspace, and every task that is running, in one dropdown at the top of the
-window.**
+**Every script in your workspace, and everything currently running, in one list. Start, stop and
+restart without ever going looking for a terminal tab.**
 
-One click on the play icon and the whole workspace is in front of you: the `scripts` of every
-`package.json`, the `tasks` of every `deno.json`, grouped per package, searchable by name *or* by the
-command behind it. Anything currently running floats to the top of the list, spinner and all — so the
-list is not just a launcher, it is where you see what is alive and put a stop to it.
+Scripts scatter. A monorepo buries them across a dozen `package.json` files, the dev server you
+started an hour ago is alive in a tab you can no longer find, and running anything by hand means
+getting the directory *and* the package manager right first. Handy Tasks Runner collapses all of
+that into one list, and gives you three ways to reach it.
 
-There is no mode switch and nothing to learn: <kbd>Enter</kbd> starts a script, <kbd>Enter</kbd> on a
-running one stops it, <kbd>Shift</kbd>+<kbd>Enter</kbd> restarts it. The badge on the toolbar icon
-keeps the count of running tasks in your peripheral vision, so a forgotten `dev` server or a watcher
-left over from yesterday no longer hides in a stack of terminal tabs.
+### ▶ in the toolbar of every file
 
-It does not guess how to run things, either. Whether a package wants `npm run`, `yarn`, `pnpm run`,
-`bun run` or `deno task` is read off the project itself — the `packageManager` field, `engines`, or
-the lock and config files next to the package and above it — so the same list works unchanged across
-a mixed monorepo.
+The play icon sits in the editor title bar, so the whole workspace is one click away from wherever
+you happen to be. It wears a **live badge with the number of running tasks** — the watcher you forgot
+about stays in the corner of your eye instead of hiding in a stack of terminals.
+
+### A hotkey, from anywhere
+
+<kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>T</kbd> on macOS, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> on
+Windows and Linux. Every script of every `package.json` in the workspace, without touching the mouse
+— from the editor, the terminal, anywhere. Both defaults were picked because VS Code leaves them
+free, and [changing them](#keyboard-shortcuts) takes one line.
+
+### A panel in the left bar
+
+Always there, whatever the active editor is: every script of every `package.json` and `deno.json`,
+**grouped by package**, each row carrying **its own icon and colour** for what it actually does — ▶
+for dev servers, a beaker for tests, a rocket for releases, a database for migrations. Running
+scripts spin at the top of their group, and the count rides on the activity bar icon as a real VS
+Code badge.
+
+Two buttons appear in the panel header the moment anything is running: **stop everything** and
+**restart everything**. Killing five watchers before a rebase, or bringing the whole stack back up
+after switching branches, is one click rather than five terminal tabs. Every row also has inline
+▶ / ⟳ / ■ buttons of its own.
+
+### And it knows how to run things
+
+Whether a package wants `npm run`, `yarn`, `pnpm run`, `bun run` or `deno task` is read off the
+project itself — the `packageManager` field, `engines`, or the lock files beside the package and
+above it — so one list works unchanged across a mixed monorepo.
 
 - **All scripts, one list** — every `package.json` (`scripts`) and `deno.json`/`deno.jsonc` (`tasks`)
   in the workspace, grouped per package, `node_modules` and build output skipped.
+- **Searchable by command, not just by name** — type `vitest` and find the script that runs it.
 - **Running tasks included** — even ones this extension did not start: tasks from `tasks.json`, other
   extensions, or the built-in npm list. Stop or restart them from the same place.
 - **Toggle on <kbd>Enter</kbd>** — start what is stopped, stop what is running; ⟳ or
   <kbd>Shift</kbd>+<kbd>Enter</kbd> restarts, with a cleared terminal.
-- **A live badge** — the number of running tasks, right on the toolbar icon and in the status bar.
+- **Stop all / restart all** — for when the whole stack needs to go down or come back.
+- **A live badge** — the number of running tasks, on the toolbar icon, the panel and the status bar.
 - **Knows your runner** — npm, yarn, pnpm, bun and deno, detected per package, overridable.
 - **Real tasks, not typed-out terminal commands** — running state, stop and restart are reliable, and
   every script also shows up under **Run Task…**.
@@ -58,7 +82,12 @@ there is the activity bar view, plus the status bar entry and the keyboard short
 The activity bar icon opens a tree with the same content as the dropdown: a **Running** group on
 top, then one group per package. Clicking a row toggles it — run if stopped, stop if running — and
 each row has inline ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as
-a real VS Code badge. The view title has the dropdown button and a refresh button.
+a real VS Code badge.
+
+The view header holds four actions. **Restart all** (⟳) and **stop all** (◼) appear only while
+something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
+**refresh** (↻) are always there. Stop-all and restart-all reach every running task, including ones
+this extension did not start.
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
 do "what the toolbar icon does". If you would rather have the dropdown anyway, set
@@ -171,8 +200,24 @@ each has a `handyTasksRunner.category.<name>` colour you can override in
 - Scripts run through the VS Code **task** system (not a raw terminal), which is what makes running
   state, stop and restart reliable. Each script gets a dedicated task terminal that is cleared on
   restart. The scripts also show up under **Run Task…** as `scripts: <name>`.
-- The script list is cached and invalidated when any manifest changes;
-  `Handy Tasks Runner: Refresh Scripts` forces a rescan.
+- A scan is capped at 2000 manifests. Reaching the cap is reported once, rather than quietly
+  handing you a short list.
+
+### Staying up to date
+
+The list is cached, and the cache is dropped whenever anything a scan depends on changes: a
+`package.json` or `deno.json(c)`, and equally a lock or config file — `pnpm-lock.yaml`, `yarn.lock`,
+`bun.lockb`, `package-lock.json`, `deno.lock` and the rest of the [detection
+signals](#runner-detection). Adding or removing a script shows up on its own, in both the tree and
+an open dropdown.
+
+Detected runners are dropped along with it. That matters because `packageManager` and `engines` live
+in the very file being edited: switching a package from npm to pnpm has to change how its scripts
+are launched, not just what the list says. The cost is a rescan plus a few stat calls per package,
+on a change you made yourself.
+
+`Handy Tasks Runner: Refresh Scripts` does exactly the same thing on demand, for the cases no
+watcher can see — a manifest edited outside the workspace, say.
 
 ## Runner detection
 
