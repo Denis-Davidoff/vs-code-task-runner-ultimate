@@ -67,6 +67,54 @@ const DETECTION_FILES: ReadonlyArray<[string, PackageManager]> = [
 /** Order in which the `engines` field is consulted; npm last, as it is the fallback anyway. */
 const ENGINE_KEYS: ReadonlyArray<PackageManager> = ['deno', 'bun', 'pnpm', 'yarn', 'npm'];
 
+interface CategoryRule {
+  /** Tokens the script name (or, as a last resort, its command) is matched against. */
+  match: string[];
+  /** Codicon id shown for scripts in this category. */
+  icon: string;
+  /** Theme colour id the icon is tinted with. */
+  color: string;
+}
+
+/** Built-in categories, checked in this order after any user-defined ones. */
+const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
+  {
+    match: ['dev', 'start', 'serve', 'server', 'watch', 'preview', 'storybook'],
+    icon: 'play',
+    color: 'packageScripts.category.run',
+  },
+  {
+    match: ['test', 'tests', 'spec', 'e2e', 'jest', 'vitest', 'cypress', 'playwright', 'coverage'],
+    icon: 'beaker',
+    color: 'packageScripts.category.test',
+  },
+  {
+    match: ['lint', 'format', 'fmt', 'prettier', 'eslint', 'stylelint', 'typecheck', 'tsc', 'check'],
+    icon: 'law',
+    color: 'packageScripts.category.quality',
+  },
+  {
+    match: ['build', 'compile', 'bundle', 'dist', 'prepack', 'prepare'],
+    icon: 'package',
+    color: 'packageScripts.category.build',
+  },
+  {
+    match: ['release', 'publish', 'deploy', 'version', 'changeset'],
+    icon: 'rocket',
+    color: 'packageScripts.category.release',
+  },
+  {
+    match: ['migrate', 'migration', 'seed', 'db', 'prisma', 'generate', 'codegen'],
+    icon: 'database',
+    color: 'packageScripts.category.data',
+  },
+  {
+    match: ['clean', 'clear', 'reset', 'rimraf', 'purge'],
+    icon: 'trash',
+    color: 'packageScripts.category.clean',
+  },
+];
+
 let cache: ScriptEntry[] | undefined;
 /** Script key -> its running task execution. */
 const running = new Map<string, vscode.TaskExecution>();
@@ -212,6 +260,10 @@ type TreeNode =
 const treeChanged = new vscode.EventEmitter<void>();
 let treeView: vscode.TreeView<TreeNode> | undefined;
 
+/** Private URI scheme for group rows, so decorations cannot hit real files. */
+const DECORATION_SCHEME = 'packagescripts';
+const TITLE_COLOR = 'packageScripts.sourceTitleForeground';
+
 function createTree(): vscode.Disposable[] {
   const provider: vscode.TreeDataProvider<TreeNode> = {
     onDidChangeTreeData: treeChanged.event,
@@ -227,6 +279,11 @@ function createTree(): vscode.Disposable[] {
   const view = vscode.window.createTreeView('packageScripts.tree', { treeDataProvider: provider });
   treeView = view;
 
+  const decorations = vscode.window.registerFileDecorationProvider({
+    provideFileDecoration: (uri) =>
+      uri.scheme === DECORATION_SCHEME ? { color: new vscode.ThemeColor(TITLE_COLOR) } : undefined,
+  });
+
   const visibility = view.onDidChangeVisibility(({ visible }) => {
     const opensDropdown = vscode.workspace
       .getConfiguration('packageScripts')
@@ -236,7 +293,7 @@ function createTree(): vscode.Disposable[] {
     }
   });
 
-  return [treeChanged, view, visibility];
+  return [treeChanged, view, visibility, decorations];
 }
 
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
@@ -247,8 +304,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   if (runningScripts.length > 0 || foreign.length > 0) {
     roots.push({
       kind: 'group',
-      label: 'Running',
-      detail: String(runningScripts.length + foreign.length),
+      label: `Running (${runningScripts.length + foreign.length})`,
       children: [
         ...runningScripts.map((script): TreeNode => ({ kind: 'script', script })),
         ...foreign.map((execution): TreeNode => ({ kind: 'foreign', execution })),
@@ -278,12 +334,17 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
 
 function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
-    // Highlights are the only way to get bold text in a tree label; VS Code
-    // renders them at font-weight 700 in the list highlight colour.
-    const label: vscode.TreeItemLabel = { label: node.label, highlights: [[0, node.label.length]] };
-    const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Expanded);
-    item.description = node.detail;
+    const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
     item.tooltip = node.detail ? `${node.label} — ${node.detail}` : node.label;
+    // A resourceUri makes the row eligible for a file decoration, the only API
+    // that can colour a tree label. The scheme is ours, so the decoration never
+    // leaks onto the real file in the explorer.
+    //
+    // The colour lands on the whole resource label, and `.label-description`
+    // has no colour of its own (only opacity), so a visible description would
+    // be tinted too. The path therefore lives in the tooltip and the row shows
+    // the title alone — that keeps the colour on the title and nothing else.
+    item.resourceUri = vscode.Uri.from({ scheme: DECORATION_SCHEME, path: `/${node.detail ?? node.label}` });
     item.contextValue = 'group';
     return item;
   }
@@ -301,7 +362,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   const item = new vscode.TreeItem(node.script.name);
   item.description = node.script.command;
   item.tooltip = `${commandFor(node.script)}\n${node.script.location}`;
-  item.iconPath = new vscode.ThemeIcon(isRunning ? 'sync~spin' : 'play');
+  item.iconPath = iconFor(node.script, isRunning);
   item.contextValue = isRunning ? 'runningScript' : 'idleScript';
   item.command = {
     command: 'packageScripts.toggleItem',
@@ -311,7 +372,52 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   return item;
 }
 
-/** Bold part of a group row: the package's own name, or where it lives if it has none. */
+// --- script categories -------------------------------------------------------
+
+/**
+ * Classifies a script by name: first token first (`test:e2e` is a test, `build:prod`
+ * is a build), then any token, then the command it runs — which catches scripts
+ * named `ci` that in fact call `vitest`.
+ */
+function categoryFor(script: ScriptEntry): CategoryRule | undefined {
+  const rules = [...userCategories(), ...DEFAULT_CATEGORIES];
+  const tokens = script.name.toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
+
+  const first = tokens[0];
+  const byFirstToken = first && rules.find((rule) => rule.match.includes(first));
+  if (byFirstToken) {
+    return byFirstToken;
+  }
+
+  const byAnyToken = rules.find((rule) => tokens.some((token) => rule.match.includes(token)));
+  if (byAnyToken) {
+    return byAnyToken;
+  }
+
+  const command = script.command.toLowerCase();
+  return rules.find((rule) => rule.match.some((token) => command.includes(token)));
+}
+
+/** User rules take precedence, so a single entry can override a built-in category. */
+function userCategories(): CategoryRule[] {
+  const configured = vscode.workspace
+    .getConfiguration('packageScripts')
+    .get<CategoryRule[]>('categories', []);
+
+  return (Array.isArray(configured) ? configured : []).filter(
+    (rule): rule is CategoryRule =>
+      Array.isArray(rule?.match) && typeof rule.icon === 'string' && typeof rule.color === 'string',
+  );
+}
+
+function iconFor(script: ScriptEntry, isRunning: boolean): vscode.ThemeIcon {
+  const category = categoryFor(script);
+  const colored = vscode.workspace.getConfiguration('packageScripts').get<boolean>('colorIcons', true);
+  const color = category && colored ? new vscode.ThemeColor(category.color) : undefined;
+  return new vscode.ThemeIcon(isRunning ? 'sync~spin' : category?.icon ?? 'play', color);
+}
+
+/** Highlighted part of a group row: the package's own name, or where it lives if it has none. */
 function packageTitle(script: ScriptEntry): string {
   return script.packageName ?? (script.directory || path.posix.basename(script.manifest.path));
 }
@@ -506,7 +612,9 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
       items.push({ label: packageLabel(script), kind: vscode.QuickPickItemKind.Separator });
     }
     items.push({
-      label: `$(play) ${script.name}`,
+      // Quick pick labels take a codicon but no colour, so the category shows
+      // through the glyph alone here.
+      label: `$(${categoryFor(script)?.icon ?? 'play'}) ${script.name}`,
       description: script.command,
       buttons: [restartButton(false)],
       script,

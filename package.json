@@ -419,9 +419,127 @@
           "type": "string",
           "default": "**/{node_modules,.git,dist,out,build,.next,coverage}/**",
           "description": "Glob pattern of package.json locations to ignore."
+        },
+        "packageScripts.colorIcons": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tint script icons in the Scripts view with their category colour. Turn off to keep every icon in the default foreground colour."
+        },
+        "packageScripts.categories": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `packageScripts.category.*` or any built-in such as `charts.green`.",
+          "items": {
+            "type": "object",
+            "required": [
+              "match",
+              "icon",
+              "color"
+            ],
+            "properties": {
+              "match": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Lower-case tokens matched against the script name, then against its command."
+              },
+              "icon": {
+                "type": "string",
+                "description": "Codicon id, e.g. \"beaker\"."
+              },
+              "color": {
+                "type": "string",
+                "description": "Theme colour id used to tint the icon."
+              }
+            },
+            "additionalProperties": false
+          }
         }
       }
     },
+    "colors": [
+      {
+        "id": "packageScripts.sourceTitleForeground",
+        "description": "Colour of the source titles (package / manifest names) in the Scripts view.",
+        "defaults": {
+          "dark": "#D7BA7D",
+          "light": "#B58900",
+          "highContrast": "#F0C674",
+          "highContrastLight": "#8F6A00"
+        }
+      },
+      {
+        "id": "packageScripts.category.run",
+        "description": "Icon colour in the Scripts view: Running a dev server or watcher.",
+        "defaults": {
+          "dark": "#73C991",
+          "light": "#388A34",
+          "highContrast": "#89D185",
+          "highContrastLight": "#0B6A0B"
+        }
+      },
+      {
+        "id": "packageScripts.category.test",
+        "description": "Icon colour in the Scripts view: Tests and coverage.",
+        "defaults": {
+          "dark": "#F14C4C",
+          "light": "#E51400",
+          "highContrast": "#FF8A8A",
+          "highContrastLight": "#B5000F"
+        }
+      },
+      {
+        "id": "packageScripts.category.quality",
+        "description": "Icon colour in the Scripts view: Linting, formatting and type checking.",
+        "defaults": {
+          "dark": "#75BEFF",
+          "light": "#0066BF",
+          "highContrast": "#9CDCFE",
+          "highContrastLight": "#004E8C"
+        }
+      },
+      {
+        "id": "packageScripts.category.build",
+        "description": "Icon colour in the Scripts view: Building, bundling and packaging.",
+        "defaults": {
+          "dark": "#D18616",
+          "light": "#BF8803",
+          "highContrast": "#E8A33D",
+          "highContrastLight": "#8A5A00"
+        }
+      },
+      {
+        "id": "packageScripts.category.release",
+        "description": "Icon colour in the Scripts view: Releasing, publishing and deploying.",
+        "defaults": {
+          "dark": "#B180D7",
+          "light": "#652D90",
+          "highContrast": "#C8A2E0",
+          "highContrastLight": "#4B1D6E"
+        }
+      },
+      {
+        "id": "packageScripts.category.data",
+        "description": "Icon colour in the Scripts view: Migrations, seeds and code generation.",
+        "defaults": {
+          "dark": "#4EC9B0",
+          "light": "#0F8A82",
+          "highContrast": "#7EE0CC",
+          "highContrastLight": "#0A5E58"
+        }
+      },
+      {
+        "id": "packageScripts.category.clean",
+        "description": "Icon colour in the Scripts view: Cleaning and resetting.",
+        "defaults": {
+          "dark": "#9D9D9D",
+          "light": "#767676",
+          "highContrast": "#B0B0B0",
+          "highContrastLight": "#5A5A5A"
+        }
+      }
+    ],
     "taskDefinitions": [
       {
         "type": "packageScripts",
