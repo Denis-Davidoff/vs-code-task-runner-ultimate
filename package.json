@@ -609,7 +609,8 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "gen": "node tools/generate-contributions.js",
-    "package": "vsce package"
+    "package": "vsce package",
+    "publish": "npx @vscode/vsce publish"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
