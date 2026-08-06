@@ -6,6 +6,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 const root = path.join(__dirname, '..');
 const media = path.join(root, 'media');
@@ -59,10 +60,145 @@ fs.writeFileSync(
   ),
 );
 
+// --- marketplace icon --------------------------------------------------------
+
+/*
+ * The Marketplace rejects SVG icons and wants at least 128x128, so the same
+ * disc-and-triangle glyph is rasterised here into a PNG. Unlike the toolbar
+ * icons the triangle is painted opaque white instead of knocked out, so the
+ * icon reads identically on the light Marketplace page and in the dark
+ * extensions sidebar.
+ */
+const ICON_SIZE = 256;
+/** Subsamples per axis; the edges are antialiased by coverage alone. */
+const ICON_SS = 4;
+// The 16x16 glyph scaled by 16, so the proportions match the toolbar icons.
+const DISC = { cx: 128, cy: 128, r: 113.6 };
+const TRIANGLE = [
+  [97.6, 73.6],
+  [185.6, 128],
+  [97.6, 182.4],
+];
+const DISC_FILL = [0x00, 0x78, 0xd4];
+const TRIANGLE_FILL = [0xff, 0xff, 0xff];
+
+const edge = (px, py, ax, ay, bx, by) => (px - bx) * (ay - by) - (ax - bx) * (py - by);
+
+function insideTriangle(px, py, [a, b, c]) {
+  const d1 = edge(px, py, a[0], a[1], b[0], b[1]);
+  const d2 = edge(px, py, b[0], b[1], c[0], c[1]);
+  const d3 = edge(px, py, c[0], c[1], a[0], a[1]);
+  // Inside when every edge test agrees on a sign, whatever the winding is.
+  return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+}
+
+/** Straight (non-premultiplied) RGBA, alpha carrying the subsample coverage. */
+function renderIcon() {
+  const pixels = Buffer.alloc(ICON_SIZE * ICON_SIZE * 4);
+  const samples = ICON_SS * ICON_SS;
+  const step = 1 / ICON_SS;
+  const radiusSquared = DISC.r * DISC.r;
+
+  for (let y = 0; y < ICON_SIZE; y++) {
+    for (let x = 0; x < ICON_SIZE; x++) {
+      let covered = 0;
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+
+      for (let sy = 0; sy < ICON_SS; sy++) {
+        for (let sx = 0; sx < ICON_SS; sx++) {
+          const px = x + (sx + 0.5) * step;
+          const py = y + (sy + 0.5) * step;
+          const dx = px - DISC.cx;
+          const dy = py - DISC.cy;
+          if (dx * dx + dy * dy > radiusSquared) {
+            continue;
+          }
+          const fill = insideTriangle(px, py, TRIANGLE) ? TRIANGLE_FILL : DISC_FILL;
+          covered++;
+          red += fill[0];
+          green += fill[1];
+          blue += fill[2];
+        }
+      }
+
+      if (covered === 0) {
+        continue;
+      }
+      const offset = (y * ICON_SIZE + x) * 4;
+      pixels[offset] = Math.round(red / covered);
+      pixels[offset + 1] = Math.round(green / covered);
+      pixels[offset + 2] = Math.round(blue / covered);
+      pixels[offset + 3] = Math.round((covered / samples) * 255);
+    }
+  }
+
+  return pixels;
+}
+
+const CRC_TABLE = (() => {
+  const table = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c;
+  }
+  return table;
+})();
+
+function crc32(buffer) {
+  let c = ~0;
+  for (const byte of buffer) {
+    c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  }
+  return ~c >>> 0;
+}
+
+/** length + type + data + CRC, the PNG chunk layout. */
+function chunk(type, data) {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([length, body, crc]);
+}
+
+function encodePng(pixels, size) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // colour type: truecolour with alpha
+  // Bytes 10-12 stay zero: deflate, adaptive filtering, no interlacing.
+
+  // Every scanline is prefixed with its filter byte; 0 means "no filtering",
+  // which costs a little size and saves the filter heuristics entirely.
+  const stride = size * 4;
+  const raw = Buffer.alloc((stride + 1) * size);
+  for (let y = 0; y < size; y++) {
+    pixels.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
+  }
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(raw, { level: 9 })),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+fs.writeFileSync(path.join(media, 'icon.png'), encodePng(renderIcon(), ICON_SIZE));
+
 // --- manifest ---------------------------------------------------------------
 
 const manifestPath = path.join(root, 'package.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+manifest.icon = 'media/icon.png';
 
 const icon = (suffix) => ({
   light: `media/scripts-light${suffix}.svg`,
@@ -70,39 +206,39 @@ const icon = (suffix) => ({
 });
 
 const badgeEntries = variants.map((variant, index) => ({
-  id: index < MAX_BADGE ? `packageScripts.show.badge${index + 1}` : 'packageScripts.show.badgeMany',
+  id: index < MAX_BADGE ? `handyTasksRunner.show.badge${index + 1}` : 'handyTasksRunner.show.badgeMany',
   count: index + 1,
   suffix: variant.suffix,
   label: variant.label,
 }));
 
 manifest.contributes.commands = [
-  { command: 'packageScripts.show', title: 'Show Scripts', category: 'Package Scripts', icon: icon('') },
+  { command: 'handyTasksRunner.show', title: 'Show Scripts', category: 'Handy Tasks Runner', icon: icon('') },
   ...badgeEntries.map((entry) => ({
     command: entry.id,
     title: `Show Scripts (${entry.label} running)`,
-    category: 'Package Scripts',
+    category: 'Handy Tasks Runner',
     icon: icon(entry.suffix),
   })),
-  { command: 'packageScripts.restartActive', title: 'Restart Focused Script', category: 'Package Scripts', icon: '$(debug-restart)' },
-  { command: 'packageScripts.refresh', title: 'Refresh Scripts', category: 'Package Scripts', icon: '$(refresh)' },
-  { command: 'packageScripts.runItem', title: 'Run', category: 'Package Scripts', icon: '$(play)' },
-  { command: 'packageScripts.stopItem', title: 'Stop', category: 'Package Scripts', icon: '$(debug-stop)' },
-  { command: 'packageScripts.restartItem', title: 'Restart', category: 'Package Scripts', icon: '$(debug-restart)' },
-  { command: 'packageScripts.toggleItem', title: 'Run or Stop', category: 'Package Scripts' },
-  { command: 'packageScripts.stopAll', title: 'Stop All Running Tasks', category: 'Package Scripts', icon: '$(stop-circle)' },
-  { command: 'packageScripts.restartAll', title: 'Restart All Running Tasks', category: 'Package Scripts', icon: '$(debug-restart)' },
+  { command: 'handyTasksRunner.restartActive', title: 'Restart Focused Script', category: 'Handy Tasks Runner', icon: '$(debug-restart)' },
+  { command: 'handyTasksRunner.refresh', title: 'Refresh Scripts', category: 'Handy Tasks Runner', icon: '$(refresh)' },
+  { command: 'handyTasksRunner.runItem', title: 'Run', category: 'Handy Tasks Runner', icon: '$(play)' },
+  { command: 'handyTasksRunner.stopItem', title: 'Stop', category: 'Handy Tasks Runner', icon: '$(debug-stop)' },
+  { command: 'handyTasksRunner.restartItem', title: 'Restart', category: 'Handy Tasks Runner', icon: '$(debug-restart)' },
+  { command: 'handyTasksRunner.toggleItem', title: 'Run or Stop', category: 'Handy Tasks Runner' },
+  { command: 'handyTasksRunner.stopAll', title: 'Stop All Running Tasks', category: 'Handy Tasks Runner', icon: '$(stop-circle)' },
+  { command: 'handyTasksRunner.restartAll', title: 'Restart All Running Tasks', category: 'Handy Tasks Runner', icon: '$(debug-restart)' },
 ];
 
-const inTitle = 'config.packageScripts.showInEditorTitle';
-// `!packageScripts.runningCount` also covers the moment before the extension has
+const inTitle = 'config.handyTasksRunner.showInEditorTitle';
+// `!handyTasksRunner.runningCount` also covers the moment before the extension has
 // activated, when the context key does not exist yet.
 const toolbarEntries = (whenPrefix) => [
-  { command: 'packageScripts.show', group: 'navigation@1', when: `${whenPrefix}!packageScripts.runningCount` },
+  { command: 'handyTasksRunner.show', group: 'navigation@1', when: `${whenPrefix}!handyTasksRunner.runningCount` },
   ...badgeEntries.map((entry) => ({
     command: entry.id,
     group: 'navigation@1',
-    when: `${whenPrefix}packageScripts.runningCount == ${entry.count}`,
+    when: `${whenPrefix}handyTasksRunner.runningCount == ${entry.count}`,
   })),
 ];
 
@@ -112,62 +248,62 @@ manifest.contributes.menus = {
   'notebook/toolbar': toolbarEntries(`${inTitle} && `),
   'view/title': [
     {
-      command: 'packageScripts.restartAll',
+      command: 'handyTasksRunner.restartAll',
       group: 'navigation@1',
-      when: 'view == packageScripts.tree && packageScripts.runningCount > 0',
+      when: 'view == handyTasksRunner.tree && handyTasksRunner.runningCount > 0',
     },
     {
-      command: 'packageScripts.stopAll',
+      command: 'handyTasksRunner.stopAll',
       group: 'navigation@2',
-      when: 'view == packageScripts.tree && packageScripts.runningCount > 0',
+      when: 'view == handyTasksRunner.tree && handyTasksRunner.runningCount > 0',
     },
-    { command: 'packageScripts.show', group: 'navigation@3', when: 'view == packageScripts.tree' },
-    { command: 'packageScripts.refresh', group: 'navigation@4', when: 'view == packageScripts.tree' },
+    { command: 'handyTasksRunner.show', group: 'navigation@3', when: 'view == handyTasksRunner.tree' },
+    { command: 'handyTasksRunner.refresh', group: 'navigation@4', when: 'view == handyTasksRunner.tree' },
   ],
   'view/item/context': [
-    { command: 'packageScripts.runItem', group: 'inline@1', when: 'view == packageScripts.tree && viewItem == idleScript' },
-    { command: 'packageScripts.restartItem', group: 'inline@1', when: 'view == packageScripts.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
-    { command: 'packageScripts.stopItem', group: 'inline@2', when: 'view == packageScripts.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
+    { command: 'handyTasksRunner.runItem', group: 'inline@1', when: 'view == handyTasksRunner.tree && viewItem == idleScript' },
+    { command: 'handyTasksRunner.restartItem', group: 'inline@1', when: 'view == handyTasksRunner.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
+    { command: 'handyTasksRunner.stopItem', group: 'inline@2', when: 'view == handyTasksRunner.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
   ],
   commandPalette: [
     ...badgeEntries.map((entry) => ({ command: entry.id, when: 'false' })),
-    { command: 'packageScripts.restartActive', when: 'false' },
-    { command: 'packageScripts.runItem', when: 'false' },
-    { command: 'packageScripts.stopItem', when: 'false' },
-    { command: 'packageScripts.restartItem', when: 'false' },
-    { command: 'packageScripts.toggleItem', when: 'false' },
+    { command: 'handyTasksRunner.restartActive', when: 'false' },
+    { command: 'handyTasksRunner.runItem', when: 'false' },
+    { command: 'handyTasksRunner.stopItem', when: 'false' },
+    { command: 'handyTasksRunner.restartItem', when: 'false' },
+    { command: 'handyTasksRunner.toggleItem', when: 'false' },
   ],
 };
 
 manifest.contributes.viewsContainers = {
   activitybar: [
     {
-      id: 'packageScripts',
-      title: 'Scripts',
+      id: 'handyTasksRunner',
+      title: 'Handy Tasks',
       icon: 'media/activity-bar.svg',
     },
   ],
 };
 
 manifest.contributes.views = {
-  packageScripts: [
+  handyTasksRunner: [
     {
-      id: 'packageScripts.tree',
-      name: 'Scripts',
+      id: 'handyTasksRunner.tree',
+      name: 'Handy Tasks',
       icon: 'media/activity-bar.svg',
-      contextualTitle: 'Scripts',
+      contextualTitle: 'Handy Tasks',
     },
   ],
 };
 
 manifest.contributes.keybindings = [
-  { command: 'packageScripts.show', key: 'ctrl+alt+r', mac: 'cmd+alt+r' },
-  { command: 'packageScripts.restartActive', key: 'shift+enter', when: 'packageScripts.pickerOpen' },
+  { command: 'handyTasksRunner.show', key: 'ctrl+alt+r', mac: 'cmd+alt+r' },
+  { command: 'handyTasksRunner.restartActive', key: 'shift+enter', when: 'handyTasksRunner.pickerOpen' },
 ];
 
 manifest.contributes.taskDefinitions = [
   {
-    type: 'packageScripts',
+    type: 'handyTasksRunner',
     required: ['script'],
     properties: {
       script: { type: 'string', description: 'Name of the package.json script.' },
@@ -180,9 +316,9 @@ manifest.activationEvents = [
   'workspaceContains:**/package.json',
   'workspaceContains:**/deno.json',
   'workspaceContains:**/deno.jsonc',
-  'onTaskType:packageScripts',
-  'onView:packageScripts.tree',
+  'onTaskType:handyTasksRunner',
+  'onView:handyTasksRunner.tree',
 ];
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-console.log(`wrote ${variants.length * 2 + 3} svg files and patched package.json`);
+console.log(`wrote ${variants.length * 2 + 3} svg files, icon.png and patched package.json`);

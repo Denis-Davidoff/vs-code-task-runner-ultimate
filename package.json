@@ -1,11 +1,15 @@
 {
-  "name": "package-scripts-list",
-  "displayName": "Package Scripts List",
+  "name": "handy-tasks-runner",
+  "displayName": "Handy Tasks Runner",
   "description": "Every script in the workspace and every running task in one dropdown: Enter starts or stops, Shift+Enter restarts, and the toolbar icon badges how many tasks are running. npm, yarn, pnpm, bun and deno.",
   "version": "0.0.1",
-  "publisher": "local",
+  "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Denis-Davidoff/vs-code-handy-tasks-runner.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -16,392 +20,392 @@
     "workspaceContains:**/package.json",
     "workspaceContains:**/deno.json",
     "workspaceContains:**/deno.jsonc",
-    "onTaskType:packageScripts",
-    "onView:packageScripts.tree"
+    "onTaskType:handyTasksRunner",
+    "onView:handyTasksRunner.tree"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "packageScripts.show",
+        "command": "handyTasksRunner.show",
         "title": "Show Scripts",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light.svg",
           "dark": "media/scripts-dark.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge1",
+        "command": "handyTasksRunner.show.badge1",
         "title": "Show Scripts (1 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-1.svg",
           "dark": "media/scripts-dark-1.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge2",
+        "command": "handyTasksRunner.show.badge2",
         "title": "Show Scripts (2 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-2.svg",
           "dark": "media/scripts-dark-2.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge3",
+        "command": "handyTasksRunner.show.badge3",
         "title": "Show Scripts (3 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-3.svg",
           "dark": "media/scripts-dark-3.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge4",
+        "command": "handyTasksRunner.show.badge4",
         "title": "Show Scripts (4 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-4.svg",
           "dark": "media/scripts-dark-4.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge5",
+        "command": "handyTasksRunner.show.badge5",
         "title": "Show Scripts (5 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-5.svg",
           "dark": "media/scripts-dark-5.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge6",
+        "command": "handyTasksRunner.show.badge6",
         "title": "Show Scripts (6 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-6.svg",
           "dark": "media/scripts-dark-6.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge7",
+        "command": "handyTasksRunner.show.badge7",
         "title": "Show Scripts (7 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-7.svg",
           "dark": "media/scripts-dark-7.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge8",
+        "command": "handyTasksRunner.show.badge8",
         "title": "Show Scripts (8 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-8.svg",
           "dark": "media/scripts-dark-8.svg"
         }
       },
       {
-        "command": "packageScripts.show.badge9",
+        "command": "handyTasksRunner.show.badge9",
         "title": "Show Scripts (9 running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-9.svg",
           "dark": "media/scripts-dark-9.svg"
         }
       },
       {
-        "command": "packageScripts.show.badgeMany",
+        "command": "handyTasksRunner.show.badgeMany",
         "title": "Show Scripts (9+ running)",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": {
           "light": "media/scripts-light-many.svg",
           "dark": "media/scripts-dark-many.svg"
         }
       },
       {
-        "command": "packageScripts.restartActive",
+        "command": "handyTasksRunner.restartActive",
         "title": "Restart Focused Script",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": "$(debug-restart)"
       },
       {
-        "command": "packageScripts.refresh",
+        "command": "handyTasksRunner.refresh",
         "title": "Refresh Scripts",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": "$(refresh)"
       },
       {
-        "command": "packageScripts.runItem",
+        "command": "handyTasksRunner.runItem",
         "title": "Run",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": "$(play)"
       },
       {
-        "command": "packageScripts.stopItem",
+        "command": "handyTasksRunner.stopItem",
         "title": "Stop",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": "$(debug-stop)"
       },
       {
-        "command": "packageScripts.restartItem",
+        "command": "handyTasksRunner.restartItem",
         "title": "Restart",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": "$(debug-restart)"
       },
       {
-        "command": "packageScripts.toggleItem",
+        "command": "handyTasksRunner.toggleItem",
         "title": "Run or Stop",
-        "category": "Package Scripts"
+        "category": "Handy Tasks Runner"
       },
       {
-        "command": "packageScripts.stopAll",
+        "command": "handyTasksRunner.stopAll",
         "title": "Stop All Running Tasks",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": "$(stop-circle)"
       },
       {
-        "command": "packageScripts.restartAll",
+        "command": "handyTasksRunner.restartAll",
         "title": "Restart All Running Tasks",
-        "category": "Package Scripts",
+        "category": "Handy Tasks Runner",
         "icon": "$(debug-restart)"
       }
     ],
     "menus": {
       "editor/title": [
         {
-          "command": "packageScripts.show",
+          "command": "handyTasksRunner.show",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && !packageScripts.runningCount"
+          "when": "config.handyTasksRunner.showInEditorTitle && !handyTasksRunner.runningCount"
         },
         {
-          "command": "packageScripts.show.badge1",
+          "command": "handyTasksRunner.show.badge1",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 1"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 1"
         },
         {
-          "command": "packageScripts.show.badge2",
+          "command": "handyTasksRunner.show.badge2",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 2"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 2"
         },
         {
-          "command": "packageScripts.show.badge3",
+          "command": "handyTasksRunner.show.badge3",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 3"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 3"
         },
         {
-          "command": "packageScripts.show.badge4",
+          "command": "handyTasksRunner.show.badge4",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 4"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 4"
         },
         {
-          "command": "packageScripts.show.badge5",
+          "command": "handyTasksRunner.show.badge5",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 5"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 5"
         },
         {
-          "command": "packageScripts.show.badge6",
+          "command": "handyTasksRunner.show.badge6",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 6"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 6"
         },
         {
-          "command": "packageScripts.show.badge7",
+          "command": "handyTasksRunner.show.badge7",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 7"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 7"
         },
         {
-          "command": "packageScripts.show.badge8",
+          "command": "handyTasksRunner.show.badge8",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 8"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 8"
         },
         {
-          "command": "packageScripts.show.badge9",
+          "command": "handyTasksRunner.show.badge9",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 9"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 9"
         },
         {
-          "command": "packageScripts.show.badgeMany",
+          "command": "handyTasksRunner.show.badgeMany",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 10"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 10"
         }
       ],
       "notebook/toolbar": [
         {
-          "command": "packageScripts.show",
+          "command": "handyTasksRunner.show",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && !packageScripts.runningCount"
+          "when": "config.handyTasksRunner.showInEditorTitle && !handyTasksRunner.runningCount"
         },
         {
-          "command": "packageScripts.show.badge1",
+          "command": "handyTasksRunner.show.badge1",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 1"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 1"
         },
         {
-          "command": "packageScripts.show.badge2",
+          "command": "handyTasksRunner.show.badge2",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 2"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 2"
         },
         {
-          "command": "packageScripts.show.badge3",
+          "command": "handyTasksRunner.show.badge3",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 3"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 3"
         },
         {
-          "command": "packageScripts.show.badge4",
+          "command": "handyTasksRunner.show.badge4",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 4"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 4"
         },
         {
-          "command": "packageScripts.show.badge5",
+          "command": "handyTasksRunner.show.badge5",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 5"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 5"
         },
         {
-          "command": "packageScripts.show.badge6",
+          "command": "handyTasksRunner.show.badge6",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 6"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 6"
         },
         {
-          "command": "packageScripts.show.badge7",
+          "command": "handyTasksRunner.show.badge7",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 7"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 7"
         },
         {
-          "command": "packageScripts.show.badge8",
+          "command": "handyTasksRunner.show.badge8",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 8"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 8"
         },
         {
-          "command": "packageScripts.show.badge9",
+          "command": "handyTasksRunner.show.badge9",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 9"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 9"
         },
         {
-          "command": "packageScripts.show.badgeMany",
+          "command": "handyTasksRunner.show.badgeMany",
           "group": "navigation@1",
-          "when": "config.packageScripts.showInEditorTitle && packageScripts.runningCount == 10"
+          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 10"
         }
       ],
       "view/title": [
         {
-          "command": "packageScripts.restartAll",
+          "command": "handyTasksRunner.restartAll",
           "group": "navigation@1",
-          "when": "view == packageScripts.tree && packageScripts.runningCount > 0"
+          "when": "view == handyTasksRunner.tree && handyTasksRunner.runningCount > 0"
         },
         {
-          "command": "packageScripts.stopAll",
+          "command": "handyTasksRunner.stopAll",
           "group": "navigation@2",
-          "when": "view == packageScripts.tree && packageScripts.runningCount > 0"
+          "when": "view == handyTasksRunner.tree && handyTasksRunner.runningCount > 0"
         },
         {
-          "command": "packageScripts.show",
+          "command": "handyTasksRunner.show",
           "group": "navigation@3",
-          "when": "view == packageScripts.tree"
+          "when": "view == handyTasksRunner.tree"
         },
         {
-          "command": "packageScripts.refresh",
+          "command": "handyTasksRunner.refresh",
           "group": "navigation@4",
-          "when": "view == packageScripts.tree"
+          "when": "view == handyTasksRunner.tree"
         }
       ],
       "view/item/context": [
         {
-          "command": "packageScripts.runItem",
+          "command": "handyTasksRunner.runItem",
           "group": "inline@1",
-          "when": "view == packageScripts.tree && viewItem == idleScript"
+          "when": "view == handyTasksRunner.tree && viewItem == idleScript"
         },
         {
-          "command": "packageScripts.restartItem",
+          "command": "handyTasksRunner.restartItem",
           "group": "inline@1",
-          "when": "view == packageScripts.tree && viewItem =~ /^(runningScript|foreignTask)$/"
+          "when": "view == handyTasksRunner.tree && viewItem =~ /^(runningScript|foreignTask)$/"
         },
         {
-          "command": "packageScripts.stopItem",
+          "command": "handyTasksRunner.stopItem",
           "group": "inline@2",
-          "when": "view == packageScripts.tree && viewItem =~ /^(runningScript|foreignTask)$/"
+          "when": "view == handyTasksRunner.tree && viewItem =~ /^(runningScript|foreignTask)$/"
         }
       ],
       "commandPalette": [
         {
-          "command": "packageScripts.show.badge1",
+          "command": "handyTasksRunner.show.badge1",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badge2",
+          "command": "handyTasksRunner.show.badge2",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badge3",
+          "command": "handyTasksRunner.show.badge3",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badge4",
+          "command": "handyTasksRunner.show.badge4",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badge5",
+          "command": "handyTasksRunner.show.badge5",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badge6",
+          "command": "handyTasksRunner.show.badge6",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badge7",
+          "command": "handyTasksRunner.show.badge7",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badge8",
+          "command": "handyTasksRunner.show.badge8",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badge9",
+          "command": "handyTasksRunner.show.badge9",
           "when": "false"
         },
         {
-          "command": "packageScripts.show.badgeMany",
+          "command": "handyTasksRunner.show.badgeMany",
           "when": "false"
         },
         {
-          "command": "packageScripts.restartActive",
+          "command": "handyTasksRunner.restartActive",
           "when": "false"
         },
         {
-          "command": "packageScripts.runItem",
+          "command": "handyTasksRunner.runItem",
           "when": "false"
         },
         {
-          "command": "packageScripts.stopItem",
+          "command": "handyTasksRunner.stopItem",
           "when": "false"
         },
         {
-          "command": "packageScripts.restartItem",
+          "command": "handyTasksRunner.restartItem",
           "when": "false"
         },
         {
-          "command": "packageScripts.toggleItem",
+          "command": "handyTasksRunner.toggleItem",
           "when": "false"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "packageScripts.show",
+        "command": "handyTasksRunner.show",
         "key": "ctrl+alt+r",
         "mac": "cmd+alt+r"
       },
       {
-        "command": "packageScripts.restartActive",
+        "command": "handyTasksRunner.restartActive",
         "key": "shift+enter",
-        "when": "packageScripts.pickerOpen"
+        "when": "handyTasksRunner.pickerOpen"
       }
     ],
     "configuration": {
-      "title": "Package Scripts List",
+      "title": "Handy Tasks Runner",
       "properties": {
-        "packageScripts.packageManager": {
+        "handyTasksRunner.packageManager": {
           "type": "string",
           "enum": [
             "auto",
@@ -422,35 +426,35 @@
           ],
           "description": "Runner used for package.json scripts. Tasks from deno.json(c) always use 'deno task' regardless of this setting."
         },
-        "packageScripts.showInStatusBar": {
+        "handyTasksRunner.showInStatusBar": {
           "type": "boolean",
           "default": true,
-          "description": "Also show a 'Scripts' entry in the status bar."
+          "description": "Also show a 'Handy Tasks' entry in the status bar."
         },
-        "packageScripts.showInEditorTitle": {
+        "handyTasksRunner.showInEditorTitle": {
           "type": "boolean",
           "default": true,
           "description": "Show the scripts icon (with the running-task badge) in the editor title bar."
         },
-        "packageScripts.openDropdownFromActivityBar": {
+        "handyTasksRunner.openDropdownFromActivityBar": {
           "type": "boolean",
           "default": false,
-          "description": "Also open the dropdown when the Scripts view in the activity bar is revealed. Off by default: the view already shows the same list as a tree."
+          "description": "Also open the dropdown when the Handy Tasks view in the activity bar is revealed. Off by default: the view already shows the same list as a tree."
         },
-        "packageScripts.exclude": {
+        "handyTasksRunner.exclude": {
           "type": "string",
           "default": "**/{node_modules,.git,dist,out,build,.next,coverage}/**",
           "description": "Glob pattern of package.json locations to ignore."
         },
-        "packageScripts.colorIcons": {
+        "handyTasksRunner.colorIcons": {
           "type": "boolean",
           "default": true,
-          "description": "Tint script icons in the Scripts view with their category colour. Turn off to keep every icon in the default foreground colour."
+          "description": "Tint script icons in the Handy Tasks view with their category colour. Turn off to keep every icon in the default foreground colour."
         },
-        "packageScripts.categories": {
+        "handyTasksRunner.categories": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `packageScripts.category.*` or any built-in such as `charts.green`.",
+          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `handyTasksRunner.category.*` or any built-in such as `charts.green`.",
           "items": {
             "type": "object",
             "required": [
@@ -482,8 +486,8 @@
     },
     "colors": [
       {
-        "id": "packageScripts.sourceTitleForeground",
-        "description": "Colour of the source titles (package / manifest names) in the Scripts view.",
+        "id": "handyTasksRunner.sourceTitleForeground",
+        "description": "Colour of the source titles (package / manifest names) in the Handy Tasks view.",
         "defaults": {
           "dark": "#D7BA7D",
           "light": "#B58900",
@@ -492,8 +496,8 @@
         }
       },
       {
-        "id": "packageScripts.category.run",
-        "description": "Icon colour in the Scripts view: Running a dev server or watcher.",
+        "id": "handyTasksRunner.category.run",
+        "description": "Icon colour in the Handy Tasks view: Running a dev server or watcher.",
         "defaults": {
           "dark": "#73C991",
           "light": "#388A34",
@@ -502,8 +506,8 @@
         }
       },
       {
-        "id": "packageScripts.category.test",
-        "description": "Icon colour in the Scripts view: Tests and coverage.",
+        "id": "handyTasksRunner.category.test",
+        "description": "Icon colour in the Handy Tasks view: Tests and coverage.",
         "defaults": {
           "dark": "#F14C4C",
           "light": "#E51400",
@@ -512,8 +516,8 @@
         }
       },
       {
-        "id": "packageScripts.category.quality",
-        "description": "Icon colour in the Scripts view: Linting, formatting and type checking.",
+        "id": "handyTasksRunner.category.quality",
+        "description": "Icon colour in the Handy Tasks view: Linting, formatting and type checking.",
         "defaults": {
           "dark": "#75BEFF",
           "light": "#0066BF",
@@ -522,8 +526,8 @@
         }
       },
       {
-        "id": "packageScripts.category.build",
-        "description": "Icon colour in the Scripts view: Building, bundling and packaging.",
+        "id": "handyTasksRunner.category.build",
+        "description": "Icon colour in the Handy Tasks view: Building, bundling and packaging.",
         "defaults": {
           "dark": "#D18616",
           "light": "#BF8803",
@@ -532,8 +536,8 @@
         }
       },
       {
-        "id": "packageScripts.category.release",
-        "description": "Icon colour in the Scripts view: Releasing, publishing and deploying.",
+        "id": "handyTasksRunner.category.release",
+        "description": "Icon colour in the Handy Tasks view: Releasing, publishing and deploying.",
         "defaults": {
           "dark": "#B180D7",
           "light": "#652D90",
@@ -542,8 +546,8 @@
         }
       },
       {
-        "id": "packageScripts.category.data",
-        "description": "Icon colour in the Scripts view: Migrations, seeds and code generation.",
+        "id": "handyTasksRunner.category.data",
+        "description": "Icon colour in the Handy Tasks view: Migrations, seeds and code generation.",
         "defaults": {
           "dark": "#4EC9B0",
           "light": "#0F8A82",
@@ -552,8 +556,8 @@
         }
       },
       {
-        "id": "packageScripts.category.clean",
-        "description": "Icon colour in the Scripts view: Cleaning and resetting.",
+        "id": "handyTasksRunner.category.clean",
+        "description": "Icon colour in the Handy Tasks view: Cleaning and resetting.",
         "defaults": {
           "dark": "#9D9D9D",
           "light": "#767676",
@@ -564,7 +568,7 @@
     ],
     "taskDefinitions": [
       {
-        "type": "packageScripts",
+        "type": "handyTasksRunner",
         "required": [
           "script"
         ],
@@ -583,19 +587,19 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "packageScripts",
-          "title": "Scripts",
+          "id": "handyTasksRunner",
+          "title": "Handy Tasks",
           "icon": "media/activity-bar.svg"
         }
       ]
     },
     "views": {
-      "packageScripts": [
+      "handyTasksRunner": [
         {
-          "id": "packageScripts.tree",
-          "name": "Scripts",
+          "id": "handyTasksRunner.tree",
+          "name": "Handy Tasks",
           "icon": "media/activity-bar.svg",
-          "contextualTitle": "Scripts"
+          "contextualTitle": "Handy Tasks"
         }
       ]
     }
@@ -611,5 +615,6 @@
     "@types/node": "^20.11.30",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.4.5"
-  }
+  },
+  "icon": "media/icon.png"
 }

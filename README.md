@@ -1,4 +1,4 @@
-# ▶ Package Scripts List
+# ▶ Handy Tasks Runner
 
 **Every script in the workspace, and every task that is running, in one dropdown at the top of the
 window.**
@@ -33,10 +33,10 @@ a mixed monorepo.
 
 | Place | Notes |
 | --- | --- |
-| Editor title bar (top right) | The badged icon. Toggle with `packageScripts.showInEditorTitle`. |
-| Activity bar (left strip) | The **Scripts** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
-| Status bar (bottom left) | `$(play-circle) Scripts`, or `$(sync~spin) Scripts N` while tasks run. Toggle with `packageScripts.showInStatusBar`. |
-| Command palette | `Package Scripts: Show Scripts` |
+| Editor title bar (top right) | The badged icon. Toggle with `handyTasksRunner.showInEditorTitle`. |
+| Activity bar (left strip) | The **Handy Tasks** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
+| Status bar (bottom left) | `$(play-circle) Handy Tasks`, or `$(sync~spin) Handy Tasks N` while tasks run. Toggle with `handyTasksRunner.showInStatusBar`. |
+| Command palette | `Handy Tasks Runner: Show Scripts` |
 | Keybinding | `Cmd+Alt+R` / `Ctrl+Alt+R` |
 
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
@@ -53,7 +53,7 @@ menu. Notebooks are covered separately through `notebook/toolbar`, and the icon 
 `navigation@1` so it is among the first to survive the overflow — but the surface that is *always*
 there is the activity bar view, plus the status bar entry and `Cmd+Alt+R`.
 
-### The Scripts view
+### The Handy Tasks view
 
 The activity bar icon opens a tree with the same content as the dropdown: a **Running** group on
 top, then one group per package. Clicking a row toggles it — run if stopped, stop if running — and
@@ -62,7 +62,7 @@ a real VS Code badge. The view title has the dropdown button and a refresh butto
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
 do "what the toolbar icon does". If you would rather have the dropdown anyway, set
-`packageScripts.openDropdownFromActivityBar` to `true` and it opens as soon as the view is revealed.
+`handyTasksRunner.openDropdownFromActivityBar` to `true` and it opens as soon as the view is revealed.
 
 ## In the dropdown
 
@@ -92,20 +92,20 @@ script started from the built-in npm list can be stopped from here too.
 
 - Scans `**/package.json` (the `scripts` field) and `**/deno.json` / `**/deno.jsonc` (the `tasks`
   field), skipping `node_modules`, `dist`, `out`, `build`, `.next`, `coverage` (configurable via
-  `packageScripts.exclude`). `deno.jsonc` comments and trailing commas are tolerated, and both the
+  `handyTasksRunner.exclude`). `deno.jsonc` comments and trailing commas are tolerated, and both the
   string and the Deno 2 object task form (`{ "command": …, "description": … }`) are read.
 - In a monorepo the idle list is grouped per package, showing the package name and relative path.
 - Scripts run through the VS Code **task** system (not a raw terminal), which is what makes running
   state, stop and restart reliable. Each script gets a dedicated task terminal that is cleared on
   restart. The scripts also show up under **Run Task…** as `scripts: <name>`.
 - The script list is cached and invalidated when any manifest changes;
-  `Package Scripts: Refresh Scripts` forces a rescan.
+  `Handy Tasks Runner: Refresh Scripts` forces a rescan.
 
 ## Runner detection
 
 Checked in this order, per package, first match wins:
 
-1. `packageScripts.packageManager`, if set to something other than `auto`.
+1. `handyTasksRunner.packageManager`, if set to something other than `auto`.
 2. The `packageManager` field — `"packageManager": "pnpm@9.1.0"`.
 3. The `engines` field — `deno`, `bun`, `pnpm`, `yarn`, then `npm` (so the usual
    `{ "node": …, "npm": … }` still resolves to npm).
@@ -126,22 +126,23 @@ Two details worth knowing:
 - Deno signals are checked **last** within a directory, so a package.json project that also carries
   a `deno.lock` still runs its scripts with the npm-family runner its own lock file names.
 - A task that came from a `deno.json(c)` always runs as `deno task <name>`, including when
-  `packageScripts.packageManager` is pinned to something else — no other runner can execute it.
+  `handyTasksRunner.packageManager` is pinned to something else — no other runner can execute it.
 
 ### How the badge works
 
 The activity bar badge is a real API (`TreeView.badge`). The toolbar one is not: editor title icons
 are static images with no way to draw on them. So `media/` holds pre-rendered icons for counts 1–9
 plus `9+`, one command per variant, and the extension publishes the running count into the
-`packageScripts.runningCount` context key — the `editor/title` menu then shows whichever variant
+`handyTasksRunner.runningCount` context key — the `editor/title` menu then shows whichever variant
 matches. Those icons and the menu entries that reference them are generated:
 
 ```bash
 npm run gen     # tools/generate-contributions.js
 ```
 
-It rewrites `media/*.svg` and the `commands`, `menus`, `views` and `keybindings` sections of
-`package.json`. Edit the generator, not those sections.
+It rewrites `media/*.svg`, the 256×256 `media/icon.png` used on the Marketplace (rasterised from the
+same glyph, since SVG icons are rejected there) and the `commands`, `menus`, `views` and
+`keybindings` sections of `package.json`. Edit the generator, not those files.
 
 ## Development
 
@@ -155,8 +156,8 @@ Then press <kbd>F5</kbd> ("Run Extension") to open a second VS Code window with 
 To build and install a package:
 
 ```bash
-npx @vscode/vsce package --allow-missing-repository --skip-license
-code --install-extension package-scripts-list-0.0.1.vsix --force
+npx @vscode/vsce package --skip-license
+code --install-extension handy-tasks-runner-0.0.1.vsix --force
 ```
 
 Reload the VS Code window after installing (`Developer: Reload Window`).
