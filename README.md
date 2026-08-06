@@ -37,7 +37,7 @@ a mixed monorepo.
 | Activity bar (left strip) | The **Handy Tasks** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
 | Status bar (bottom left) | `$(play-circle) Handy Tasks`, or `$(sync~spin) Handy Tasks N` while tasks run. Toggle with `handyTasksRunner.showInStatusBar`. |
 | Command palette | `Handy Tasks Runner: Show Scripts` |
-| Keybinding | `Cmd+Alt+R` / `Ctrl+Alt+R` |
+| Keybinding | `Ctrl+Cmd+T` on macOS, `Ctrl+Alt+T` on Windows and Linux — see [Keyboard shortcuts](#keyboard-shortcuts) |
 
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
 > VS Code 1.131 the only extension-facing toolbar menus are `editor/title`, `view/title`,
@@ -51,7 +51,7 @@ there at all (terminal-in-an-editor, the Settings and Extensions tabs, the Welco
 a group is narrow or another extension crowds the bar, VS Code folds actions into the `…` overflow
 menu. Notebooks are covered separately through `notebook/toolbar`, and the icon is registered at
 `navigation@1` so it is among the first to survive the overflow — but the surface that is *always*
-there is the activity bar view, plus the status bar entry and `Cmd+Alt+R`.
+there is the activity bar view, plus the status bar entry and the keyboard shortcut.
 
 ### The Handy Tasks view
 
@@ -87,6 +87,79 @@ The **Running** group lists *all* running tasks, including ones this extension d
 tasks from `tasks.json`, other extensions, or the built-in npm task provider. Tasks that map onto a
 package.json script (our own and `npm:` ones) are shown as that script rather than duplicated, so a
 script started from the built-in npm list can be stopped from here too.
+
+## Keyboard shortcuts
+
+| Shortcut | Platform | Action |
+| --- | --- | --- |
+| `Ctrl+Cmd+T` | macOS | Opens the list, exactly like the ▶ icon in the editor title bar. |
+| `Ctrl+Alt+T` | Windows, Linux | The same. |
+| `Shift+Enter` | all | Restarts the focused entry — only while the list is open. |
+
+The opening shortcut has no `when` clause, so it works from the editor, the terminal, the settings
+tab, anywhere. The list opens as a normal VS Code quick pick, centred at the top of the window;
+that position is fixed by VS Code and no extension can move it.
+
+Both defaults were picked because VS Code leaves them free, which is worth spelling out — the
+obvious candidates are not:
+
+- `Cmd+Alt+R` toggles **regex** in the find widget on macOS (`Alt+R` on Windows and Linux).
+- `Cmd+Alt+T` is **Close Other Editors** on macOS. That binding is mac-only, which is why plain
+  `Ctrl+Alt+T` is still free on Windows and Linux.
+- `Ctrl+Cmd+T` is bound to nothing at all on macOS, by VS Code or by the system.
+
+### Changing it
+
+Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Handy Tasks Runner: Show Scripts** and click the
+pencil. Or write it out in `keybindings.json`:
+
+```json
+{ "key": "cmd+alt+j", "command": "handyTasksRunner.show" }
+```
+
+That *adds* a shortcut. To retire the default as well, disable it with a leading `-`:
+
+```json
+{ "key": "ctrl+cmd+t", "command": "-handyTasksRunner.show" }
+```
+
+> On Ubuntu and most GNOME desktops `Ctrl+Alt+T` opens a system terminal, and the desktop takes the
+> key before VS Code ever sees it. Rebind it there — the shortcut above is the way.
+
+## Settings
+
+Everything lives under `handyTasksRunner.*` and works in user settings as well as in a workspace's
+`.vscode/settings.json`, so a repository can pin its own runner for everyone who opens it.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `packageManager` | `auto` | Forces `npm`, `yarn`, `pnpm`, `bun` or `deno` instead of [detecting it](#runner-detection). Tasks from `deno.json(c)` ignore this — only Deno can run them. |
+| `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
+| `showInEditorTitle` | `true` | The badged ▶ icon in the editor title bar. |
+| `showInStatusBar` | `true` | The `Handy Tasks` entry in the status bar. |
+| `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
+| `colorIcons` | `true` | Tints script icons by category. Turn off for plain foreground-coloured icons. |
+| `categories` | `[]` | Extra category rules, checked *before* the built-in ones. |
+
+The two worth knowing about in a real project are `packageManager` and `exclude`. A monorepo that
+keeps packages outside the default skip list scans faster once `exclude` covers them, and pinning
+`packageManager` removes any doubt about which runner a script goes through.
+
+`categories` decides the icon and colour of a script. Each rule matches the script name token by
+token first, then the command behind it, so a script called `ci` that in fact runs `vitest` still
+gets the test icon. A rule that repeats a built-in token overrides the built-in:
+
+```json
+"handyTasksRunner.categories": [
+  { "match": ["bench", "perf"], "icon": "dashboard", "color": "charts.purple" }
+]
+```
+
+`icon` is a [codicon](https://microsoft.github.io/vscode-codicons/dist/codicon.html) id and `color`
+a theme colour id — either one of `handyTasksRunner.category.*` or any built-in such as
+`charts.green`. The built-in categories are run, test, quality, build, release, data and clean, and
+each has a `handyTasksRunner.category.<name>` colour you can override in
+`workbench.colorCustomizations`.
 
 ## Behaviour
 

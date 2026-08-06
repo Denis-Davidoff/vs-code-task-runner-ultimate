@@ -393,8 +393,8 @@
     "keybindings": [
       {
         "command": "handyTasksRunner.show",
-        "key": "ctrl+alt+r",
-        "mac": "cmd+alt+r"
+        "key": "ctrl+alt+t",
+        "mac": "ctrl+cmd+t"
       },
       {
         "command": "handyTasksRunner.restartActive",

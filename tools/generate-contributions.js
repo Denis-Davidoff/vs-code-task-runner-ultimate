@@ -296,8 +296,12 @@ manifest.contributes.views = {
   ],
 };
 
+// `cmd+alt+r` is taken on macOS — it toggles regex in the find widget — and
+// `cmd+alt+t` closes other editors there, so the mac binding uses ctrl+cmd,
+// which VS Code leaves entirely free. On Windows and Linux ctrl+alt+t is
+// unbound (the mac-only "close others" rule does not apply there).
 manifest.contributes.keybindings = [
-  { command: 'handyTasksRunner.show', key: 'ctrl+alt+r', mac: 'cmd+alt+r' },
+  { command: 'handyTasksRunner.show', key: 'ctrl+alt+t', mac: 'ctrl+cmd+t' },
   { command: 'handyTasksRunner.restartActive', key: 'shift+enter', when: 'handyTasksRunner.pickerOpen' },
 ];
 
