@@ -287,7 +287,7 @@ function keyForTask(task: vscode.Task): string | undefined {
 // --- activity bar tree -------------------------------------------------------
 
 type TreeNode =
-  | { kind: 'group'; label: string; detail?: string; children: TreeNode[] }
+  | { kind: 'group'; label: string; detail?: string; folder?: string; children: TreeNode[] }
   | { kind: 'script'; script: ScriptEntry }
   | { kind: 'foreign'; execution: vscode.TaskExecution };
 
@@ -344,7 +344,13 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     let group = byManifest.get(key);
     if (!group) {
       group = {
-        node: { kind: 'group', label: packageTitle(script), detail: packagePath(script), children: [] },
+        node: {
+          kind: 'group',
+          label: packageTitle(script),
+          detail: packagePath(script),
+          folder: packageFolder(script),
+          children: [],
+        },
         hasRunning: false,
       };
       byManifest.set(key, group);
@@ -386,7 +392,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
     // Group rows are upper-cased with separators opened up; the tooltip keeps
     // the name exactly as written in the manifest.
-    const heading = node.label.toUpperCase().replace(/[-_]+/g, ' ');
+    const title = node.label.toUpperCase().replace(/[-_]+/g, ' ');
+    // The folder is part of the label rather than a description on purpose: the
+    // decoration below tints the whole label, so an arrow-joined title keeps one
+    // colour across the row instead of a tinted title beside a dimmed path.
+    const heading = node.folder ? `${title} → ${node.folder.toUpperCase()}` : title;
     const item = new vscode.TreeItem(heading, vscode.TreeItemCollapsibleState.Expanded);
     item.tooltip = node.detail ? `${node.label} — ${node.detail}` : node.label;
     // A resourceUri makes the row eligible for a file decoration, the only API
@@ -473,6 +483,21 @@ function iconFor(script: ScriptEntry, isRunning: boolean): vscode.ThemeIcon {
 /** Highlighted part of a group row: the package's own name, or where it lives if it has none. */
 function packageTitle(script: ScriptEntry): string {
   return script.packageName ?? (script.directory || path.posix.basename(script.manifest.path));
+}
+
+/**
+ * Folder shown after the arrow on a group row: the directory the manifest lives
+ * in, prefixed with the workspace folder when there is more than one. Empty when
+ * there is nothing to add — a manifest in the root of a single-root workspace, or
+ * a package with no `name`, whose title is already its location.
+ */
+function packageFolder(script: ScriptEntry): string {
+  if (!script.packageName) {
+    return '';
+  }
+  const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
+  const folder = multiRoot ? vscode.workspace.getWorkspaceFolder(script.manifest) : undefined;
+  return [folder?.name, script.directory].filter(Boolean).join('/');
 }
 
 /** Dimmed part of a group row: the manifest path relative to its workspace folder. */
