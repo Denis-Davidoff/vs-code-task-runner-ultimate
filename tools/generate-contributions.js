@@ -22,6 +22,11 @@ function glyph(fg) {
   return `  <path fill="${fg}" fill-rule="evenodd" d="M8 0.9a7.1 7.1 0 1 0 0 14.2A7.1 7.1 0 0 0 8 0.9zM6.1 4.6 11.6 8l-5.5 3.4z"/>`;
 }
 
+/** The same disc with a square knocked out instead of the triangle. */
+function stopGlyph(fill) {
+  return `  <path fill="${fill}" fill-rule="evenodd" d="M8 0.9a7.1 7.1 0 1 0 0 14.2A7.1 7.1 0 0 0 8 0.9zM5.6 5.6h4.8v4.8h-4.8z"/>`;
+}
+
 /**
  * Count badge, drawn over the bottom-right of a full-size glyph — the way the
  * activity bar badges its icon. The glyph is never shrunk to make room.
@@ -48,6 +53,18 @@ for (const [name, theme] of Object.entries(THEMES)) {
       svg(`${glyph(theme.fg)}\n${badge(theme, variant.label)}`),
     );
   }
+}
+
+/*
+ * Stop-all is the one destructive action in the view header, so it is orange
+ * rather than the theme foreground every other action uses. Menu icons declared
+ * in package.json cannot carry a ThemeColor — only `$(id)` codicons or image
+ * files are accepted, and the header draws those files as-is — so the colour is
+ * baked in per theme: darker on light backgrounds, lighter on dark ones.
+ */
+const STOP_ORANGE = { light: '#B35C00', dark: '#E8952F' };
+for (const [name, fill] of Object.entries(STOP_ORANGE)) {
+  fs.writeFileSync(path.join(media, `stop-all-${name}.svg`), svg(stopGlyph(fill)));
 }
 
 // The activity bar uses the icon as a mask, so its colour does not matter and a
@@ -226,7 +243,12 @@ manifest.contributes.commands = [
   { command: 'handyTasksRunner.stopItem', title: 'Stop', category: 'Handy Task Runner', icon: '$(debug-stop)' },
   { command: 'handyTasksRunner.restartItem', title: 'Restart', category: 'Handy Task Runner', icon: '$(debug-restart)' },
   { command: 'handyTasksRunner.toggleItem', title: 'Run or Stop', category: 'Handy Task Runner' },
-  { command: 'handyTasksRunner.stopAll', title: 'Stop All Running Tasks', category: 'Handy Task Runner', icon: '$(stop-circle)' },
+  {
+    command: 'handyTasksRunner.stopAll',
+    title: 'Stop All Running Tasks',
+    category: 'Handy Task Runner',
+    icon: { light: 'media/stop-all-light.svg', dark: 'media/stop-all-dark.svg' },
+  },
   { command: 'handyTasksRunner.restartAll', title: 'Restart All Running Tasks', category: 'Handy Task Runner', icon: '$(debug-restart)' },
 ];
 

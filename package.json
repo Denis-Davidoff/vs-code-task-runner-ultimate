@@ -2,7 +2,7 @@
   "name": "handy-task-runner",
   "displayName": "Handy 🏆 Task Runner",
   "description": "Every script in the workspace and every running task in one dropdown: Enter starts or stops, Shift+Enter restarts, and the toolbar icon badges how many tasks are running. npm, yarn, pnpm, bun and deno.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -184,7 +184,10 @@
         "command": "handyTasksRunner.stopAll",
         "title": "Stop All Running Tasks",
         "category": "Handy Task Runner",
-        "icon": "$(stop-circle)"
+        "icon": {
+          "light": "media/stop-all-light.svg",
+          "dark": "media/stop-all-dark.svg"
+        }
       },
       {
         "command": "handyTasksRunner.restartAll",
