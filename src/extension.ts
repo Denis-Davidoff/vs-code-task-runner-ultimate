@@ -220,6 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   running.clear();
+  clearHint();
 }
 
 // --- running state -----------------------------------------------------------
@@ -638,10 +639,35 @@ function dragScope(node: TreeNode): string | undefined {
 }
 
 /**
- * Reordering by hand, within one list. A drag never leaves the group it started
- * in: the tree's groups are the manifests on disk, and a script cannot be moved
- * out of the file that declares it. Dropping across groups is therefore ignored
- * rather than translated into something we cannot honour.
+ * What a drag says about itself while it is in the air, and why a drop did
+ * nothing when it lands somewhere it cannot go.
+ *
+ * The tree owns the drop cursor and the row highlight, and the API hands an
+ * extension no say in either — `handleDrop` is only called once the drop has
+ * already happened, so a forbidden target cannot be greyed out or refused under
+ * the mouse. The status bar is what is left: it says where the row can go on the
+ * way out, and why nothing moved on the way down.
+ */
+let dragHint: vscode.Disposable | undefined;
+
+function hint(message: string): void {
+  dragHint?.dispose();
+  dragHint = vscode.window.setStatusBarMessage(message, 5000);
+}
+
+function clearHint(): void {
+  dragHint?.dispose();
+  dragHint = undefined;
+}
+
+/**
+ * Dragging, in two gestures. Inside one list a drag reorders it. Onto FAVORITES
+ * a drag stars the row, which is an addition rather than a move — the script
+ * keeps the place it has in its own package, exactly as clicking ☆ leaves it.
+ *
+ * What is left over is a script dropped on a package that does not declare it,
+ * and that one cannot be honoured at all: the groups are the manifests on disk,
+ * and no gesture in a sidebar moves a script from one `package.json` to another.
  */
 const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
   dragMimeTypes: [DRAG_MIME],
@@ -650,19 +676,28 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
   handleDrag(source, transfer) {
     const dragged = source.filter((node): node is TreeNode & { kind: 'script' } => node.kind === 'script');
     const scope = dragged.length > 0 ? dragScope(dragged[0]) : undefined;
-    if (!scope) {
+    if (!scope || !dragged[0]) {
       return;
     }
     // One drag carries one scope, so a multi-select spanning two packages moves
     // only the rows that belong to the list it started in.
     const refs = dragged.filter((node) => dragScope(node) === scope).map((node) => scriptRef(node.script));
     transfer.set(DRAG_MIME, new vscode.DataTransferItem(JSON.stringify({ scope, refs })));
+
+    const what = refs.length > 1 ? `${refs.length} tasks` : `"${displayName(dragged[0].script)}"`;
+    const where = scope === FAVORITES_SCOPE ? 'FAVORITES' : packageTitle(dragged[0].script);
+    hint(
+      scope === FAVORITES_SCOPE
+        ? `$(move) Moving ${what} — drop inside FAVORITES to reorder it`
+        : `$(move) Moving ${what} — drop inside ${where} to reorder, or on FAVORITES to star it`,
+    );
   },
 
   async handleDrop(target, transfer) {
     const raw = await transfer.get(DRAG_MIME)?.asString();
     // No target means the empty space below the tree, which names no position.
     if (!raw || !target) {
+      clearHint();
       return;
     }
 
@@ -674,7 +709,21 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     }
     const scope = typeof payload.scope === 'string' ? payload.scope : undefined;
     const dragged = Array.isArray(payload.refs) ? payload.refs.filter((ref): ref is string => typeof ref === 'string') : [];
-    if (!scope || dragged.length === 0 || dragScope(target) !== scope) {
+    if (!scope || dragged.length === 0) {
+      clearHint();
+      return;
+    }
+
+    const destination = dragScope(target);
+    if (destination !== scope) {
+      // Onto FAVORITES from anywhere: star it, and leave its own row where it is.
+      if (destination === FAVORITES_SCOPE) {
+        await starDropped(dragged, target.kind === 'script' ? scriptRef(target.script) : undefined);
+      } else if (scope === FAVORITES_SCOPE) {
+        hint('$(circle-slash) Not a drop target — a favorite only moves inside FAVORITES. Click ★ to unstar it');
+      } else {
+        hint(`$(circle-slash) Not a drop target — a task only moves inside ${scopeName(scope)}, or onto FAVORITES`);
+      }
       return;
     }
 
@@ -683,6 +732,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     const anchor = target.kind === 'script' ? scriptRef(target.script) : undefined;
     // Dropped on itself, or on a row travelling with it: nothing to work out.
     if (moved.length === 0 || (anchor && moved.includes(anchor))) {
+      clearHint();
       return;
     }
 
@@ -693,9 +743,37 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     // on the group heading has no row to take, so it means the end of the list.
     const at = anchor ? Math.min(current.indexOf(anchor), rest.length) : rest.length;
     await saveOrder(scope, [...rest.slice(0, at), ...moved, ...rest.slice(at)]);
+    clearHint();
     repaint();
   },
 };
+
+/** The name a scope goes by on screen, for a message that has to name one. */
+function scopeName(scope: string): string {
+  return scope === FAVORITES_SCOPE ? 'FAVORITES' : scope;
+}
+
+/**
+ * Stars what was dropped on FAVORITES, at the row it was dropped on. Starring is
+ * an addition, not a move: the script keeps its place in its own package, which
+ * is the same thing clicking ☆ does.
+ */
+async function starDropped(refs: string[], anchor: string | undefined): Promise<void> {
+  const stored = favoriteRefs();
+  const added = refs.filter((ref) => !stored.includes(ref));
+  if (added.length === 0) {
+    hint('$(star-full) Already in FAVORITES');
+    return;
+  }
+
+  // Inserting at the anchor's index pushes the anchor down, so the new row ends
+  // up in the slot it was dropped on — the same rule a reorder follows.
+  const at = anchor ? stored.indexOf(anchor) : -1;
+  const next = at < 0 ? [...stored, ...added] : [...stored.slice(0, at), ...added, ...stored.slice(at)];
+  await storage?.update(FAVORITES_KEY, next);
+  clearHint();
+  repaint();
+}
 
 function createTree(): vscode.Disposable[] {
   const provider: vscode.TreeDataProvider<TreeNode> = {

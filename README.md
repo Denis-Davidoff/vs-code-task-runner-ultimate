@@ -230,10 +230,10 @@ do "what the toolbar icon does". If you would rather have the dropdown anyway, s
 
 ### Favorites
 
-The ☆ on a row — hover it, or right-click → **Add to Favorites** — pins that script to a
-**FAVORITES** group at the very top of the tree, above even the packages that have something
-running. In a monorepo the two or three scripts you actually use stop being buried under twenty you
-never touch.
+The ☆ on a row — hover it, right-click → **Add to Favorites**, or [drag the row onto
+FAVORITES](#reordering-rows) — pins that script to a **FAVORITES** group at the very top of the tree,
+above even the packages that have something running. In a monorepo the two or three scripts you
+actually use stop being buried under twenty you never touch.
 
 A favorite is a second way in, not a move: the script stays in its own package group as well. Since
 it is listed away from that group heading, the FAVORITES row says where it came from — the package's
@@ -261,10 +261,18 @@ Drag a row in the tree to put it where you want it. A manifest lists its tasks i
 were written in, which is rarely the order you use them in — so `dev` can sit at the top of its
 package even if it is the eleventh script in the `package.json`.
 
-A drag stays inside the list it started in. The tree's groups are the manifests on disk, and no
-gesture in a sidebar can move a script from one `package.json` to another, so a row dropped on
-another group is ignored rather than half-honoured. Dropping on a group heading sends the row to the
-end of that group. FAVORITES is a list of its own and reorders the same way.
+Dropping on a group heading sends the row to the end of that group. FAVORITES is a list of its own
+and reorders the same way.
+
+**Dropping a task on FAVORITES stars it**, at the row it lands on — the same thing clicking ☆ does,
+so the task keeps the place it has in its own package. It is an addition, not a move.
+
+Every other cross-group drop does nothing: the tree's groups are the manifests on disk, and no
+gesture in a sidebar moves a script from one `package.json` to another. VS Code owns the drop cursor
+and the row highlight and gives an extension no say in either — `handleDrop` is only called once the
+drop has already happened, so a forbidden row cannot be greyed out under the mouse. Instead the
+status bar says where the row can go while it is in the air, and why nothing moved when it lands
+somewhere it cannot go.
 
 The order lives in the workspace's own storage, next to the stars and the renames — the manifests
 themselves are never rewritten, so nothing shows up in `git status` and nobody else on the team
