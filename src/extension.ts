@@ -1,19 +1,14 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-
-type PackageManager = 'npm' | 'yarn' | 'pnpm' | 'bun' | 'deno';
-
-/** How each runner invokes a named script. */
-const RUNNERS: Record<PackageManager, (script: string) => string> = {
-  npm: (script) => `npm run ${script}`,
-  yarn: (script) => `yarn ${script}`,
-  pnpm: (script) => `pnpm run ${script}`,
-  bun: (script) => `bun run ${script}`,
-  deno: (script) => `deno task ${script}`,
-};
-
-/** Manifests that hold runnable scripts, and the field they live in. */
-const MANIFEST_GLOB = '**/{package.json,deno.json,deno.jsonc}';
+import {
+  collectScripts,
+  commandFor,
+  groupIcon,
+  resetSources,
+  scriptKey,
+  ScriptEntry,
+  WATCH_GLOB,
+} from './sources';
 
 /** Task type used for the tasks this extension executes. Must match contributes.taskDefinitions. */
 const TASK_TYPE = 'taskRunnerUltimate';
@@ -22,69 +17,6 @@ const CONTEXT_PICKER_OPEN = 'taskRunnerUltimate.pickerOpen';
 const CONTEXT_RUNNING_COUNT = 'taskRunnerUltimate.runningCount';
 /** Highest count with a dedicated badge icon; above this the "9+" icon is used. */
 const MAX_BADGE = 9;
-/**
- * Ceiling on manifests read in one scan. Every hit is opened and parsed, and
- * its directory is stat-walked for lock files, so this bounds the work a
- * pathological workspace can ask for. Reaching it is reported rather than
- * silently truncating the list.
- */
-const MAX_MANIFESTS = 2000;
-/** The truncation warning is shown once per window, not once per scan. */
-let warnedAboutTruncation = false;
-
-interface ScriptEntry {
-  /** Stable identity of a script: its manifest plus the script name. */
-  key: string;
-  /** Script name as written in the manifest. */
-  name: string;
-  /** Raw command the script runs. */
-  command: string;
-  /** package.json / deno.json(c) the script came from. */
-  manifest: vscode.Uri;
-  /** A deno.json(c) task always runs through `deno task`, whatever else is detected. */
-  isDenoTask: boolean;
-  /** Directory the script must run in. */
-  cwd: vscode.Uri;
-  /** Manifest path relative to its workspace folder. */
-  location: string;
-  /** Directory part of `location`, empty for a manifest at the workspace root. */
-  directory: string;
-  /** "name" field of the manifest, if any. */
-  packageName?: string;
-}
-
-/**
- * Lock and config files that identify a runner, checked in this order within a
- * directory. Deno comes last: in a project that also has a package.json, an
- * npm-family lock file is the better signal for how to run its scripts.
- */
-const DETECTION_FILES: ReadonlyArray<[string, PackageManager]> = [
-  ['bun.lockb', 'bun'],
-  ['bun.lock', 'bun'],
-  ['bunfig.toml', 'bun'],
-  ['pnpm-lock.yaml', 'pnpm'],
-  ['pnpm-workspace.yaml', 'pnpm'],
-  ['yarn.lock', 'yarn'],
-  ['.yarnrc.yml', 'yarn'],
-  ['package-lock.json', 'npm'],
-  ['npm-shrinkwrap.json', 'npm'],
-  ['deno.lock', 'deno'],
-  ['deno.json', 'deno'],
-  ['deno.jsonc', 'deno'],
-];
-
-/** Order in which the `engines` field is consulted; npm last, as it is the fallback anyway. */
-const ENGINE_KEYS: ReadonlyArray<PackageManager> = ['deno', 'bun', 'pnpm', 'yarn', 'npm'];
-
-/**
- * Everything a scan depends on: the manifests it reads scripts from, plus the
- * lock and config files runner detection consults. Watching only the manifests
- * would leave a package running under the wrong runner after a lock file
- * appears, so both go through the same watcher.
- */
-const WATCH_GLOB = `**/{${[
-  ...new Set(['package.json', 'deno.json', 'deno.jsonc', ...DETECTION_FILES.map(([file]) => file)]),
-].join(',')}}`;
 
 interface CategoryRule {
   /** Tokens the script name (or, as a last resort, its command) is matched against. */
@@ -95,46 +27,93 @@ interface CategoryRule {
   color: string;
 }
 
-/** Built-in categories, checked in this order after any user-defined ones. */
+/**
+ * Built-in categories, checked in this order after any user-defined ones. The
+ * tokens deliberately mix names and tools across every ecosystem the scan
+ * covers: `run` is a cargo subcommand and a mise task, `pytest` and `vitest`
+ * both mean "this is a test", and matching either the name or the command means
+ * one rule covers both ways of saying it.
+ */
 const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
   {
-    match: ['dev', 'start', 'serve', 'server', 'watch', 'preview', 'storybook'],
+    match: ['dev', 'run', 'start', 'serve', 'server', 'watch', 'preview', 'storybook', 'up', 'example'],
     icon: 'play',
     color: 'taskRunnerUltimate.category.run',
   },
   {
-    match: ['test', 'tests', 'spec', 'e2e', 'jest', 'vitest', 'cypress', 'playwright', 'coverage'],
+    match: [
+      'test',
+      'tests',
+      'spec',
+      'e2e',
+      'jest',
+      'vitest',
+      'cypress',
+      'playwright',
+      'coverage',
+      'pytest',
+      'tox',
+      'nox',
+      'phpunit',
+      'pest',
+      'bench',
+    ],
     icon: 'beaker',
     color: 'taskRunnerUltimate.category.test',
   },
   {
-    match: ['lint', 'format', 'fmt', 'prettier', 'eslint', 'stylelint', 'typecheck', 'tsc', 'check'],
+    match: [
+      'lint',
+      'format',
+      'fmt',
+      'prettier',
+      'eslint',
+      'stylelint',
+      'typecheck',
+      'tsc',
+      'check',
+      'clippy',
+      'ruff',
+      'black',
+      'isort',
+      'mypy',
+      'flake8',
+      'vet',
+      'audit',
+      'phpstan',
+      'psalm',
+      'pint',
+    ],
     icon: 'law',
     color: 'taskRunnerUltimate.category.quality',
   },
   {
-    match: ['build', 'compile', 'bundle', 'dist', 'prepack', 'prepare'],
+    match: ['build', 'compile', 'bundle', 'dist', 'prepack', 'prepare', 'install', 'wheel', 'sdist', 'doc', 'docs'],
     icon: 'package',
     color: 'taskRunnerUltimate.category.build',
   },
   {
-    match: ['release', 'publish', 'deploy', 'version', 'changeset'],
+    match: ['release', 'publish', 'deploy', 'version', 'changeset', 'twine', 'upload'],
     icon: 'rocket',
     color: 'taskRunnerUltimate.category.release',
   },
   {
-    match: ['migrate', 'migration', 'seed', 'db', 'prisma', 'generate', 'codegen'],
+    match: ['migrate', 'migration', 'migrations', 'seed', 'db', 'prisma', 'generate', 'codegen', 'alembic', 'sqlx'],
     icon: 'database',
     color: 'taskRunnerUltimate.category.data',
   },
   {
-    match: ['clean', 'clear', 'reset', 'rimraf', 'purge'],
+    match: ['clean', 'clear', 'reset', 'rimraf', 'purge', 'tidy', 'update'],
     icon: 'trash',
     color: 'taskRunnerUltimate.category.clean',
   },
 ];
 
-let cache: ScriptEntry[] | undefined;
+/** Settings a scan reads, so a change to one has to throw the cached list away. */
+const SCAN_SETTINGS = ['exclude', 'sources', 'cargoCommands', 'goCommands', 'pythonRunner'];
+/** Settings that only change how the list is drawn — no rescan, just a repaint. */
+const DISPLAY_SETTINGS = ['packageManager', 'categories', 'colorIcons'];
+
 /** Script key -> its running task execution. */
 const running = new Map<string, vscode.TaskExecution>();
 
@@ -148,8 +127,7 @@ const running = new Map<string, vscode.TaskExecution>();
  * already forces, which is the same work the Refresh command has always done.
  */
 function invalidate(): void {
-  cache = undefined;
-  detected.clear();
+  resetSources();
   treeChanged.fire();
   // The picker holds its own copy of the list, so it has to be told as well.
   void activePicker?.reload();
@@ -181,7 +159,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.refresh', async () => {
       invalidate();
       await collectScripts();
-      vscode.window.setStatusBarMessage('Task Runner Ultimate: reloaded', 2000);
+      vscode.window.setStatusBarMessage('Task Runner Manager: reloaded', 2000);
     }),
     // One command per badge count: the toolbar icon is static, so the visible
     // entry is swapped via the runningCount context key (see contributes.menus).
@@ -233,8 +211,13 @@ export function activate(context: vscode.ExtensionContext): void {
     watcher,
     vscode.workspace.onDidChangeWorkspaceFolders(() => invalidate()),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('taskRunnerUltimate.exclude')) {
+      // Anything that decides which manifests are read, or what is read out of
+      // them, needs the scan done again; the rest only changes how what we
+      // already have is drawn.
+      if (SCAN_SETTINGS.some((key) => event.affectsConfiguration(`taskRunnerUltimate.${key}`))) {
         invalidate();
+      } else if (DISPLAY_SETTINGS.some((key) => event.affectsConfiguration(`taskRunnerUltimate.${key}`))) {
+        repaint();
       }
       if (event.affectsConfiguration('taskRunnerUltimate.showInStatusBar')) {
         syncStatusBar(context);
@@ -271,10 +254,6 @@ function onStateChanged(): void {
     // The activity bar badge is a real API here, unlike the editor toolbar one.
     treeView.badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
   }
-}
-
-function scriptKey(manifest: string, name: string): string {
-  return `${manifest}::${name}`;
 }
 
 /** Maps a task back to a script key, for both our tasks and built-in npm tasks. */
@@ -671,47 +650,25 @@ function iconFor(script: ScriptEntry, isRunning: boolean): vscode.ThemeIcon {
 }
 
 /**
- * Codicon per runner, shown at the head of a group row so a package says how its
- * scripts will be launched before any of them is read — the same job the star
- * does for FAVORITES.
+ * Highlighted part of a group row: the package's own name, or the manifest's
+ * file name when it does not name one.
  *
- * Each is a property of the runner rather than its logo, since codicons carry no
- * brand marks: npm's registry package, yarn's zipped caches, pnpm's layered
- * content store, bun's speed, deno's web-standard runtime. They are meant to be
- * told apart at a glance, not recognised.
+ * The file name rather than the directory, because a directory can hold several
+ * manifests — a Cargo.toml beside a Makefile beside a justfile is an ordinary
+ * Rust repository — and three groups all titled after the same folder would say
+ * nothing about which is which.
  */
-const MANAGER_ICONS: Record<PackageManager, string> = {
-  npm: 'package',
-  yarn: 'archive',
-  pnpm: 'layers',
-  bun: 'zap',
-  deno: 'globe',
-};
-
-/**
- * Icon for a group row. Every script in a group shares a manifest, so any one of
- * them resolves to the runner the whole group goes through — including a
- * `packageManager` override, which is what will really be executed.
- */
-function groupIcon(script: ScriptEntry): string {
-  return MANAGER_ICONS[resolvePackageManager(script)];
-}
-
-/** Highlighted part of a group row: the package's own name, or where it lives if it has none. */
 function packageTitle(script: ScriptEntry): string {
-  return script.packageName ?? (script.directory || path.posix.basename(script.manifest.path));
+  return script.packageName ?? path.posix.basename(script.manifest.path);
 }
 
 /**
  * Folder shown after the arrow on a group row: the directory the manifest lives
- * in, prefixed with the workspace folder when there is more than one. Empty when
- * there is nothing to add — a manifest in the root of a single-root workspace, or
- * a package with no `name`, whose title is already its location.
+ * in, prefixed with the workspace folder when there is more than one. Empty for
+ * a manifest in the root of a single-root workspace, where there is nothing to
+ * add that the title has not already said.
  */
 function packageFolder(script: ScriptEntry): string {
-  if (!script.packageName) {
-    return '';
-  }
   const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
   const folder = multiRoot ? vscode.workspace.getWorkspaceFolder(script.manifest) : undefined;
   return [folder?.name, script.directory].filter(Boolean).join('/');
@@ -825,12 +782,12 @@ async function showScriptPicker(): Promise<void> {
   let scripts = await collectScripts();
 
   if (scripts.length === 0 && runningCount() === 0) {
-    vscode.window.showInformationMessage('No scripts found in any package.json of this workspace.');
+    vscode.window.showInformationMessage('No tasks found in any manifest of this workspace.');
     return;
   }
 
   const picker = vscode.window.createQuickPick<Item>();
-  picker.title = 'package.json scripts';
+  picker.title = 'Workspace tasks';
   picker.placeholder = 'Enter — run / stop · Shift+Enter or ⟳ — restart';
   picker.matchOnDescription = true;
 
@@ -1057,11 +1014,15 @@ function sameTask(a: vscode.Task, b: vscode.Task): boolean {
 
 function buildTask(script: ScriptEntry): vscode.Task {
   const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
-  const dir = script.directory;
+  // A directory can hold a package.json, a Makefile and a justfile, each with a
+  // `test`, so what disambiguates the terminal's name is the manifest and not
+  // just the directory — except for a Node package, where the file name is
+  // always package.json and would only be noise.
+  const where = script.kind === 'npm' || script.kind === 'deno' ? script.directory : script.location;
   const task = new vscode.Task(
     { type: TASK_TYPE, script: script.name, manifest: script.manifest.toString() },
     folder ?? vscode.TaskScope.Workspace,
-    dir ? `${script.name} (${dir})` : script.name,
+    where ? `${script.name} (${where})` : script.name,
     TASK_SOURCE,
     new vscode.ShellExecution(commandFor(script), { cwd: script.cwd.fsPath }),
   );
@@ -1074,10 +1035,6 @@ function buildTask(script: ScriptEntry): vscode.Task {
     showReuseMessage: false,
   };
   return task;
-}
-
-function commandFor(script: ScriptEntry): string {
-  return RUNNERS[resolvePackageManager(script)](quote(script.name));
 }
 
 // --- status bar & badge ------------------------------------------------------
@@ -1110,7 +1067,7 @@ function updateStatusBar(count: number): void {
     return;
   }
   statusBarItem.text = count > 0 ? `$(sync~spin) Task Runner ${count}` : '$(play-circle) Task Runner';
-  statusBarItem.tooltip = count > 0 ? `${count} running task(s) — click to manage` : 'Show package.json scripts';
+  statusBarItem.tooltip = count > 0 ? `${count} running task(s) — click to manage` : 'Show workspace tasks';
 }
 
 /** Command ids of the badge variants, index 0 being a count of 1. */
@@ -1121,242 +1078,4 @@ function badgeCommandIds(): string[] {
   }
   ids.push('taskRunnerUltimate.show.badgeMany');
   return ids;
-}
-
-// --- scanning ----------------------------------------------------------------
-
-async function collectScripts(): Promise<ScriptEntry[]> {
-  if (cache) {
-    return cache;
-  }
-
-  const config = vscode.workspace.getConfiguration('taskRunnerUltimate');
-  const exclude = config.get<string>('exclude') || '**/node_modules/**';
-  const manifests = await vscode.workspace.findFiles(MANIFEST_GLOB, exclude, MAX_MANIFESTS);
-
-  // Hitting the cap means the list on screen is incomplete, which is worth
-  // saying out loud — once per window, not on every rescan.
-  if (manifests.length === MAX_MANIFESTS && !warnedAboutTruncation) {
-    warnedAboutTruncation = true;
-    void vscode.window.showWarningMessage(
-      `Task Runner Ultimate stopped after ${MAX_MANIFESTS} manifests, so some scripts are missing. ` +
-        'Widen "taskRunnerUltimate.exclude" to skip the ones you do not need.',
-    );
-  }
-
-  manifests.sort((a, b) => a.fsPath.length - b.fsPath.length || a.fsPath.localeCompare(b.fsPath));
-
-  const entries: ScriptEntry[] = [];
-
-  for (const manifest of manifests) {
-    const isDenoTask = path.posix.basename(manifest.path) !== 'package.json';
-    const manifestJson = await readManifest(manifest);
-    // package.json keeps its scripts in "scripts", deno.json(c) in "tasks".
-    const scripts = isDenoTask ? manifestJson?.tasks : manifestJson?.scripts;
-    if (!scripts || typeof scripts !== 'object') {
-      continue;
-    }
-
-    const cwd = manifest.with({ path: path.posix.dirname(manifest.path) });
-    const folder = vscode.workspace.getWorkspaceFolder(manifest);
-    const relative = folder ? path.relative(folder.uri.fsPath, manifest.fsPath) : manifest.fsPath;
-    const location = relative.split(path.sep).join('/') || path.posix.basename(manifest.path);
-    const directory = location.includes('/') ? location.slice(0, location.lastIndexOf('/')) : '';
-
-    for (const [name, value] of Object.entries(scripts)) {
-      const command = commandOf(value);
-      if (command === undefined) {
-        continue;
-      }
-      entries.push({
-        key: scriptKey(manifest.toString(), name),
-        name,
-        command,
-        manifest,
-        isDenoTask,
-        cwd,
-        location,
-        directory,
-        packageName: typeof manifestJson.name === 'string' ? manifestJson.name : undefined,
-      });
-    }
-  }
-
-  cache = entries;
-  await detectPackageManagers(entries);
-  return entries;
-}
-
-/**
- * A script value is a plain command string, or — for Deno ≥ 2.x tasks — an
- * object carrying the command plus metadata.
- */
-function commandOf(value: unknown): string | undefined {
-  if (typeof value === 'string') {
-    return value;
-  }
-  const command = (value as { command?: unknown } | null)?.command;
-  return typeof command === 'string' ? command : undefined;
-}
-
-async function readManifest(uri: vscode.Uri): Promise<any | undefined> {
-  try {
-    const bytes = await vscode.workspace.fs.readFile(uri);
-    return parseJsonc(Buffer.from(bytes).toString('utf8'));
-  } catch {
-    return undefined;
-  }
-}
-
-/** JSON.parse that tolerates comments and trailing commas, as deno.jsonc allows both. */
-function parseJsonc(text: string): unknown {
-  let out = '';
-  let inString = false;
-  let escaped = false;
-  let inLineComment = false;
-  let inBlockComment = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    const next = text[i + 1];
-
-    if (inLineComment) {
-      if (char === '\n') {
-        inLineComment = false;
-        out += char;
-      }
-      continue;
-    }
-    if (inBlockComment) {
-      if (char === '*' && next === '/') {
-        inBlockComment = false;
-        i++;
-      }
-      continue;
-    }
-    if (inString) {
-      out += char;
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      out += char;
-      continue;
-    }
-    if (char === '/' && next === '/') {
-      inLineComment = true;
-      i++;
-      continue;
-    }
-    if (char === '/' && next === '*') {
-      inBlockComment = true;
-      i++;
-      continue;
-    }
-    out += char;
-  }
-
-  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
-}
-
-// --- package manager detection ----------------------------------------------
-
-/** Package manager per package directory, detected while scanning. */
-const detected = new Map<string, PackageManager>();
-
-function resolvePackageManager(script: ScriptEntry): PackageManager {
-  // A deno.json(c) task can only be run by Deno, so it ignores any override.
-  if (script.isDenoTask) {
-    return 'deno';
-  }
-
-  const configured = vscode.workspace
-    .getConfiguration('taskRunnerUltimate', script.manifest)
-    .get<string>('packageManager', 'auto');
-
-  if (configured && configured !== 'auto') {
-    return configured as PackageManager;
-  }
-  return detected.get(script.cwd.toString()) ?? 'npm';
-}
-
-async function detectPackageManagers(entries: ScriptEntry[]): Promise<void> {
-  for (const entry of entries) {
-    const dir = entry.cwd.toString();
-    if (entry.isDenoTask || detected.has(dir)) {
-      continue;
-    }
-    const found = await detectPackageManager(entry);
-    if (found) {
-      detected.set(dir, found);
-    }
-  }
-}
-
-async function detectPackageManager(entry: ScriptEntry): Promise<PackageManager | undefined> {
-  const manifest = await readManifest(entry.manifest);
-
-  // 1. An explicit "packageManager": "<name>@<version>" field wins.
-  const field = typeof manifest?.packageManager === 'string' ? manifest.packageManager : '';
-  const fromField = ENGINE_KEYS.find((manager) => field.startsWith(`${manager}@`));
-  if (fromField) {
-    return fromField;
-  }
-
-  // 2. Then the "engines" field, e.g. { "engines": { "pnpm": ">=9" } }.
-  const engines = manifest?.engines;
-  if (engines && typeof engines === 'object') {
-    const fromEngines = ENGINE_KEYS.find((manager) => typeof engines[manager] === 'string');
-    if (fromEngines) {
-      return fromEngines;
-    }
-  }
-
-  // 3. Finally lock and config files, nearest-first: the package itself, then
-  //    each parent up to the workspace folder, where monorepo lock files live.
-  const root = vscode.workspace.getWorkspaceFolder(entry.manifest)?.uri.path;
-  let current = entry.cwd;
-  while (true) {
-    const found = await detectionFileManager(current);
-    if (found) {
-      return found;
-    }
-    if (root === undefined || current.path === root) {
-      return undefined;
-    }
-    const parent = current.with({ path: path.posix.dirname(current.path) });
-    if (parent.path === current.path || !parent.path.startsWith(root)) {
-      return undefined;
-    }
-    current = parent;
-  }
-}
-
-async function detectionFileManager(dir: vscode.Uri): Promise<PackageManager | undefined> {
-  for (const [file, manager] of DETECTION_FILES) {
-    if (await exists(vscode.Uri.joinPath(dir, file))) {
-      return manager;
-    }
-  }
-  return undefined;
-}
-
-async function exists(uri: vscode.Uri): Promise<boolean> {
-  try {
-    await vscode.workspace.fs.stat(uri);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function quote(name: string): string {
-  return /^[\w.:@/-]+$/.test(name) ? name : JSON.stringify(name);
 }

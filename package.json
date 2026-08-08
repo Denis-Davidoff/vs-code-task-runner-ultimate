@@ -1,8 +1,8 @@
 {
   "name": "task-runner-ultimate",
-  "displayName": "Task Runner 🏆 Ultimate",
-  "description": "Every script in the workspace and every running task in one dropdown: Enter starts or stops, Shift+Enter restarts, and the toolbar icon badges how many tasks are running. npm, yarn, pnpm, bun and deno.",
-  "version": "0.2.1",
+  "displayName": "Task Runner 🏆 Manager",
+  "description": "Every task in your workspace in one list: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Run, stop, restart, favorite, edit titles.",
+  "version": "0.3.0",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -20,16 +20,29 @@
     "npm scripts",
     "run npm script",
     "package.json scripts",
-    "node scripts",
-    "node package",
-    "node package scripts",
     "task runner",
     "tasks",
+    "task manager",
+    "package manager",
+    "script manager",
     "script runner",
     "yarn",
     "pnpm",
     "bun",
     "deno task",
+    "cargo",
+    "rust",
+    "python",
+    "poetry",
+    "uv",
+    "make",
+    "makefile",
+    "just",
+    "justfile",
+    "taskfile",
+    "go",
+    "composer",
+    "mise",
     "monorepo",
     "workspace scripts",
     "terminal",
@@ -40,6 +53,28 @@
     "workspaceContains:**/package.json",
     "workspaceContains:**/deno.json",
     "workspaceContains:**/deno.jsonc",
+    "workspaceContains:**/composer.json",
+    "workspaceContains:**/Cargo.toml",
+    "workspaceContains:**/Makefile.toml",
+    "workspaceContains:**/pyproject.toml",
+    "workspaceContains:**/Pipfile",
+    "workspaceContains:**/tox.ini",
+    "workspaceContains:**/noxfile.py",
+    "workspaceContains:**/Makefile",
+    "workspaceContains:**/makefile",
+    "workspaceContains:**/GNUmakefile",
+    "workspaceContains:**/justfile",
+    "workspaceContains:**/Justfile",
+    "workspaceContains:**/.justfile",
+    "workspaceContains:**/Taskfile.yml",
+    "workspaceContains:**/Taskfile.yaml",
+    "workspaceContains:**/Taskfile.dist.yml",
+    "workspaceContains:**/Taskfile.dist.yaml",
+    "workspaceContains:**/taskfile.yml",
+    "workspaceContains:**/taskfile.yaml",
+    "workspaceContains:**/go.mod",
+    "workspaceContains:**/mise.toml",
+    "workspaceContains:**/.mise.toml",
     "onTaskType:taskRunnerUltimate",
     "onView:taskRunnerUltimate.tree"
   ],
@@ -49,7 +84,7 @@
       {
         "command": "taskRunnerUltimate.show",
         "title": "Show Scripts",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light.svg",
           "dark": "media/scripts-dark.svg"
@@ -58,7 +93,7 @@
       {
         "command": "taskRunnerUltimate.show.badge1",
         "title": "Show Scripts (1 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-1.svg",
           "dark": "media/scripts-dark-1.svg"
@@ -67,7 +102,7 @@
       {
         "command": "taskRunnerUltimate.show.badge2",
         "title": "Show Scripts (2 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-2.svg",
           "dark": "media/scripts-dark-2.svg"
@@ -76,7 +111,7 @@
       {
         "command": "taskRunnerUltimate.show.badge3",
         "title": "Show Scripts (3 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-3.svg",
           "dark": "media/scripts-dark-3.svg"
@@ -85,7 +120,7 @@
       {
         "command": "taskRunnerUltimate.show.badge4",
         "title": "Show Scripts (4 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-4.svg",
           "dark": "media/scripts-dark-4.svg"
@@ -94,7 +129,7 @@
       {
         "command": "taskRunnerUltimate.show.badge5",
         "title": "Show Scripts (5 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-5.svg",
           "dark": "media/scripts-dark-5.svg"
@@ -103,7 +138,7 @@
       {
         "command": "taskRunnerUltimate.show.badge6",
         "title": "Show Scripts (6 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-6.svg",
           "dark": "media/scripts-dark-6.svg"
@@ -112,7 +147,7 @@
       {
         "command": "taskRunnerUltimate.show.badge7",
         "title": "Show Scripts (7 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-7.svg",
           "dark": "media/scripts-dark-7.svg"
@@ -121,7 +156,7 @@
       {
         "command": "taskRunnerUltimate.show.badge8",
         "title": "Show Scripts (8 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-8.svg",
           "dark": "media/scripts-dark-8.svg"
@@ -130,7 +165,7 @@
       {
         "command": "taskRunnerUltimate.show.badge9",
         "title": "Show Scripts (9 running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-9.svg",
           "dark": "media/scripts-dark-9.svg"
@@ -139,7 +174,7 @@
       {
         "command": "taskRunnerUltimate.show.badgeMany",
         "title": "Show Scripts (9+ running)",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/scripts-light-many.svg",
           "dark": "media/scripts-dark-many.svg"
@@ -148,60 +183,60 @@
       {
         "command": "taskRunnerUltimate.restartActive",
         "title": "Restart Focused Script",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(debug-restart)"
       },
       {
         "command": "taskRunnerUltimate.refresh",
         "title": "Refresh Scripts",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(refresh)"
       },
       {
         "command": "taskRunnerUltimate.runItem",
         "title": "Run",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(play)"
       },
       {
         "command": "taskRunnerUltimate.stopItem",
         "title": "Stop",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(debug-stop)"
       },
       {
         "command": "taskRunnerUltimate.restartItem",
         "title": "Restart",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(debug-restart)"
       },
       {
         "command": "taskRunnerUltimate.toggleItem",
         "title": "Run or Stop",
-        "category": "Task Runner Ultimate"
+        "category": "Task Runner Manager"
       },
       {
         "command": "taskRunnerUltimate.addFavorite",
         "title": "Add to Favorites",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(star-empty)"
       },
       {
         "command": "taskRunnerUltimate.removeFavorite",
         "title": "Remove from Favorites",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(star-full)"
       },
       {
         "command": "taskRunnerUltimate.editTitle",
         "title": "Edit Title…",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(edit)"
       },
       {
         "command": "taskRunnerUltimate.stopAll",
         "title": "Stop All Running Tasks",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": {
           "light": "media/stop-all-light.svg",
           "dark": "media/stop-all-dark.svg"
@@ -210,7 +245,7 @@
       {
         "command": "taskRunnerUltimate.restartAll",
         "title": "Restart All Running Tasks",
-        "category": "Task Runner Ultimate",
+        "category": "Task Runner Manager",
         "icon": "$(debug-restart)"
       }
     ],
@@ -481,7 +516,7 @@
       }
     ],
     "configuration": {
-      "title": "Task Runner Ultimate",
+      "title": "Task Runner Manager",
       "properties": {
         "taskRunnerUltimate.packageManager": {
           "type": "string",
@@ -502,7 +537,7 @@
             "bun run <script>",
             "deno task <script>"
           ],
-          "description": "Runner used for package.json scripts. Tasks from deno.json(c) always use 'deno task' regardless of this setting."
+          "description": "Runner used for package.json scripts. Tasks from deno.json(c) always use 'deno task' regardless of this setting, and no other ecosystem is affected."
         },
         "taskRunnerUltimate.showInStatusBar": {
           "type": "boolean",
@@ -521,8 +556,103 @@
         },
         "taskRunnerUltimate.exclude": {
           "type": "string",
-          "default": "**/{node_modules,.git,dist,out,build,.next,coverage}/**",
-          "description": "Glob pattern of package.json locations to ignore."
+          "default": "**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**",
+          "description": "Glob pattern of manifest locations to ignore while scanning."
+        },
+        "taskRunnerUltimate.sources": {
+          "type": "array",
+          "default": [
+            "node",
+            "rust",
+            "python",
+            "make",
+            "just",
+            "task",
+            "go",
+            "php",
+            "mise"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "node",
+              "rust",
+              "python",
+              "make",
+              "just",
+              "task",
+              "go",
+              "php",
+              "mise"
+            ],
+            "enumDescriptions": [
+              "package.json (scripts) and deno.json(c) (tasks).",
+              "Cargo.toml and Makefile.toml (cargo-make).",
+              "pyproject.toml (poetry, pdm, hatch, rye, poe), Pipfile, tox.ini and noxfile.py.",
+              "Makefile, makefile and GNUmakefile.",
+              "justfile, Justfile and .justfile.",
+              "Taskfile.yml and friends (go-task).",
+              "go.mod — the standard go subcommands.",
+              "composer.json (scripts).",
+              "mise.toml and .mise.toml ([tasks])."
+            ]
+          },
+          "markdownDescription": "Which kinds of manifest are scanned. Remove an entry to stop reading that ecosystem entirely — the files are then never opened, which is also the fastest way to quieten a repository that carries a `Makefile` nobody runs."
+        },
+        "taskRunnerUltimate.cargoCommands": {
+          "type": "array",
+          "default": [
+            "run",
+            "build",
+            "test",
+            "clippy",
+            "fmt"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Cargo subcommands listed for every `Cargo.toml`, since a crate declares no scripts of its own. Known names (`build`, `test`, `check`, `clippy`, `fmt`, `bench`, `doc`, `clean`, `update`) get their usual flags; anything else runs as `cargo <name>`.\n\n`run` is special: it expands to what the crate can actually run — nothing for a library, one row per `[[bin]]` for a crate with several, plus a row per example."
+        },
+        "taskRunnerUltimate.goCommands": {
+          "type": "array",
+          "default": [
+            "run",
+            "build",
+            "test",
+            "vet"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Go subcommands listed for every `go.mod`. Known names are `run`, `build`, `test`, `vet`, `fmt`, `tidy`, `generate` and `bench`; anything else runs as `go <name>`. `run` is dropped for a module whose root is not itself a program."
+        },
+        "taskRunnerUltimate.pythonRunner": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "uv",
+            "poetry",
+            "pdm",
+            "rye",
+            "pipenv",
+            "hatch",
+            "none"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "Detect from the lock file beside pyproject.toml, then from the [tool.*] table it configures.",
+            "uv run <name>",
+            "poetry run <name>",
+            "pdm run <name>",
+            "rye run <name>",
+            "pipenv run <name>",
+            "hatch run <name>",
+            "Do not list [project.scripts] at all."
+          ],
+          "markdownDescription": "How `[project.scripts]` entry points are entered. Tasks that name their own runner — `[tool.pdm.scripts]`, `[tool.poetry.scripts]` and the rest — ignore this."
         },
         "taskRunnerUltimate.colorIcons": {
           "type": "boolean",
@@ -653,11 +783,11 @@
         "properties": {
           "script": {
             "type": "string",
-            "description": "Name of the package.json script."
+            "description": "Name of the task in its manifest."
           },
           "manifest": {
             "type": "string",
-            "description": "URI of the package.json the script belongs to."
+            "description": "URI of the manifest the task belongs to."
           }
         }
       }
@@ -666,7 +796,7 @@
       "activitybar": [
         {
           "id": "taskRunnerUltimate",
-          "title": "Task Runner",
+          "title": "Task Runner Manager",
           "icon": "media/activity-bar.svg"
         }
       ]
@@ -675,9 +805,9 @@
       "taskRunnerUltimate": [
         {
           "id": "taskRunnerUltimate.tree",
-          "name": "Task Runner",
+          "name": "Task Runner Manager",
           "icon": "media/activity-bar.svg",
-          "contextualTitle": "Task Runner"
+          "contextualTitle": "Task Runner Manager"
         }
       ]
     }

@@ -1,14 +1,16 @@
-# ▶ Task Runner Ultimate
+# ▶ Task Runner Manager
 
 **Every script in your workspace, and everything currently running, in one list. Start, stop and
 restart without ever going looking for a terminal tab.**
 
-Scripts scatter. A monorepo buries them across a dozen `package.json` files, the dev server you
-started an hour ago is alive in a tab you can no longer find, and running anything by hand means
-getting the directory *and* the package manager right first. Task Runner Ultimate collapses all of
-that into one list, and gives you three ways to reach it.
+Tasks scatter. A monorepo buries them across a dozen `package.json` files, the Rust service next to
+them keeps its own in a `Makefile.toml`, the Python one in `pyproject.toml`, and there is a
+`justfile` at the root that half the team forgets exists. The dev server you started an hour ago is
+alive in a tab you can no longer find, and running anything by hand means getting the directory
+*and* the tool right first. Task Runner Manager collapses all of that into one list, and gives you
+three ways to reach it.
 
-![Task Runner Ultimate in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
+![Task Runner Manager in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
 ### ▶ in the toolbar of every file
 
@@ -19,17 +21,16 @@ about stays in the corner of your eye instead of hiding in a stack of terminals.
 ### A hotkey, from anywhere
 
 <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>T</kbd> on macOS, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> on
-Windows and Linux. Every script of every `package.json` in the workspace, without touching the mouse
-— from the editor, the terminal, anywhere. Both defaults were picked because VS Code leaves them
-free, and [changing them](#keyboard-shortcuts) takes one line.
+Windows and Linux. Every task of every manifest in the workspace, without touching the mouse — from
+the editor, the terminal, anywhere. Both defaults were picked because VS Code leaves them free, and
+[changing them](#keyboard-shortcuts) takes one line.
 
 ### A panel in the left bar
 
-Always there, whatever the active editor is: every script of every `package.json` and `deno.json`,
-**grouped by package**, each row carrying **its own icon and colour** for what it actually does — ▶
-for dev servers, a beaker for tests, a rocket for releases, a database for migrations. Running
-scripts spin at the top of their group, and the count rides on the activity bar icon as a real VS
-Code badge.
+Always there, whatever the active editor is: every task of every manifest, **grouped by the file it
+came from**, each row carrying **its own icon and colour** for what it actually does — ▶ for dev
+servers, a beaker for tests, a rocket for releases, a database for migrations. Running tasks spin at
+the top of their group, and the count rides on the activity bar icon as a real VS Code badge.
 
 Two buttons appear in the panel header the moment anything is running: **stop everything** and
 **restart everything**. Killing five watchers before a rebase, or bringing the whole stack back up
@@ -40,33 +41,99 @@ after switching branches, is one click rather than five terminal tabs. Every row
 
 Whether a package wants `npm run`, `yarn`, `pnpm run`, `bun run` or `deno task` is read off the
 project itself — the `packageManager` field, `engines`, or the lock files beside the package and
-above it — so one list works unchanged across a mixed monorepo.
+above it. Everything else names its own runner by the table it is declared in: a task under
+`[tool.pdm.scripts]` is a pdm task wherever it lives. So one list works unchanged across a mixed
+monorepo.
 
-- **All scripts, one list** — every `package.json` (`scripts`) and `deno.json`/`deno.jsonc` (`tasks`)
-  in the workspace, grouped per package, `node_modules` and build output skipped.
+- **Every task, one list** — [nine ecosystems](#what-gets-scanned): Node, Rust, Python, Make, just,
+  go-task, Go, Composer and mise, grouped per manifest, `node_modules`, `target`, `.venv` and build
+  output skipped.
 - **Searchable by command, not just by name** — type `vitest` and find the script that runs it.
 - **Running tasks included** — even ones this extension did not start: tasks from `tasks.json`, other
   extensions, or the built-in npm list. Stop or restart them from the same place.
 - **Toggle on <kbd>Enter</kbd>** — start what is stopped, stop what is running; ⟳ or
   <kbd>Shift</kbd>+<kbd>Enter</kbd> restarts, with a cleared terminal.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
-- **Favorites** — star the two or three scripts you actually run and they pin to a group at the top
-  of the tree, above everything, without leaving the package they belong to.
+- **Favorites** — star the two or three tasks you actually run and they pin to a group at the top
+  of the tree, above everything, without leaving the manifest they belong to.
 - **Rename any row** — `dev` becomes `API server`. Display only: the manifest is never edited, and
   the real name stays visible beside it and searchable.
 - **A live badge** — the number of running tasks, on the toolbar icon, the panel and the status bar.
 - **Knows your runner** — npm, yarn, pnpm, bun and deno, detected per package, overridable.
 - **Real tasks, not typed-out terminal commands** — running state, stop and restart are reliable, and
-  every script also shows up under **Run Task…**.
+  every task also shows up under **Run Task…**.
+
+## What gets scanned
+
+| Ecosystem | File | Tasks read from | Runs as |
+| --- | --- | --- | --- |
+| **Node** | `package.json` | `scripts` | `npm run` / `yarn` / `pnpm run` / `bun run` — [detected](#runner-detection) |
+| | `deno.json`, `deno.jsonc` | `tasks` | `deno task <name>` |
+| **Rust** | `Cargo.toml` | the crate itself — see [below](#rust) | `cargo run --bin …`, `cargo test`, … |
+| | `Makefile.toml` | `[tasks.*]` (cargo-make) | `cargo make <name>` |
+| **Python** | `pyproject.toml` | `[tool.poetry.scripts]` | `poetry run <name>` |
+| | | `[tool.pdm.scripts]` | `pdm run <name>` |
+| | | `[tool.rye.scripts]` | `rye run <name>` |
+| | | `[tool.poe.tasks]` | `poe <name>`, through poetry when the project uses it |
+| | | `[tool.hatch.envs.<env>.scripts]` | `hatch run <env>:<name>` |
+| | | `[project.scripts]` | `<uv\|poetry\|pdm\|rye\|pipenv\|hatch> run <name>` — see [below](#python) |
+| | `Pipfile` | `[scripts]` | `pipenv run <name>` |
+| | `tox.ini` | `envlist` and `[testenv:*]` | `tox -e <env>` |
+| | `noxfile.py` | `@nox.session` functions | `nox -s <session>` |
+| **Make** | `Makefile`, `makefile`, `GNUmakefile` | the targets | `make <target>` |
+| **just** | `justfile`, `Justfile`, `.justfile` | the recipes | `just <recipe>` |
+| **go-task** | `Taskfile.yml` and friends | `tasks:` | `task <name>` |
+| **Go** | `go.mod` | the standard subcommands | `go test ./...`, … |
+| **PHP** | `composer.json` | `scripts` | `composer run-script <name>` |
+| **mise** | `mise.toml`, `.mise.toml` | `[tasks.*]` | `mise run <name>` |
+
+Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's files are never
+opened at all, which is also the fastest way to quieten a repository carrying a `Makefile` nobody
+runs.
+
+Descriptions are used where a format has them (`desc:` in a Taskfile, `description` in cargo-make
+and tox, `help` in a pdm script, `## text` on a Make target, the comment above a `just` recipe), and
+the command itself is shown when it does not.
+
+### Rust
+
+A crate declares no scripts, so its rows are derived from what the crate actually *is* rather than
+from a fixed list — a library gets no `run` row, because `cargo run` in a library is an error:
+
+| The crate has | You get |
+| --- | --- |
+| `src/main.rs`, or one `[[bin]]` | `run` |
+| several binaries | one row per binary — `cargo run --bin <name>` |
+| no binary at all | no `run` row |
+| `examples/*.rs` or `[[example]]` | one row per example — `cargo run --example <name>` |
+| `[workspace]` and no `[package]` | the plain subcommands only, run at the workspace root |
+
+Alongside that, `taskRunnerUltimate.cargoCommands` lists the subcommands every crate gets — `run`,
+`build`, `test`, `clippy` and `fmt` by default. Add `check`, `bench`, `doc`, `clean` or `update`, or
+anything else, which runs as `cargo <name>`. Binaries are found the way cargo finds them: `[[bin]]`
+entries, `src/main.rs` named after the package, and every `src/bin/*.rs`.
+
+`go.mod` works the same way through `taskRunnerUltimate.goCommands`, and drops `run` for a module
+whose root is not itself a program.
+
+### Python
+
+Most Python tasks say which tool runs them by the table they sit in, so nothing has to be guessed.
+`[project.scripts]` is the exception — those are console entry points that only exist inside the
+project's environment — so the tool that can enter it is detected: the lock file beside
+`pyproject.toml` first (`uv.lock`, `poetry.lock`, `pdm.lock`, `requirements.lock`, `Pipfile.lock`),
+then whichever `[tool.*]` table the project configures. If neither answers, the entry points are
+left out rather than listed with a command that would not work. `taskRunnerUltimate.pythonRunner`
+pins it, and `none` hides them entirely.
 
 ## Where the button appears
 
 | Place | Notes |
 | --- | --- |
 | Editor title bar (top right) | The badged icon. Toggle with `taskRunnerUltimate.showInEditorTitle`. |
-| Activity bar (left strip) | The **Task Runner** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
+| Activity bar (left strip) | The **Task Runner Manager** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
 | Status bar (bottom left) | `$(play-circle) Task Runner`, or `$(sync~spin) Task Runner N` while tasks run. Toggle with `taskRunnerUltimate.showInStatusBar`. |
-| Command palette | `Task Runner Ultimate: Show Scripts` |
+| Command palette | `Task Runner Manager: Show Scripts` |
 | Keybinding | `Ctrl+Cmd+T` on macOS, `Ctrl+Alt+T` on Windows and Linux — see [Keyboard shortcuts](#keyboard-shortcuts) |
 
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
@@ -83,19 +150,24 @@ menu. Notebooks are covered separately through `notebook/toolbar`, and the icon 
 `navigation@1` so it is among the first to survive the overflow — but the surface that is *always*
 there is the activity bar view, plus the status bar entry and the keyboard shortcut.
 
-### The Task Runner view
+### The Task Runner Manager view
 
 The activity bar icon opens a tree with the same content as the dropdown, in this order: **FAVORITES**
 first, then **Other tasks** — anything running that this extension did not start — then one group per
-package. Packages with something running float above the idle ones, and inside a group the running
-scripts float to the top, so whatever is alive is always the first thing on screen. Clicking a row
+manifest. Groups with something running float above the idle ones, and inside a group the running
+tasks float to the top, so whatever is alive is always the first thing on screen. Clicking a row
 toggles it — run if stopped, stop if running — and hovering one reveals inline ☆ / ▶ / ⟳ / ■ buttons.
 The count of running tasks rides on the activity bar icon as a real VS Code badge.
 
-Every group heading carries an icon for what it holds. ★ is FAVORITES, ∿ is the tasks this extension
-did not start, and a package group shows the runner its scripts will actually go through — so a
-monorepo mixing pnpm workspaces with a Deno service says so on the headings, before any script is
-read:
+A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
+`justfile` side by side gets three, each headed by its file name and the folder it sits in. A
+manifest that names its package — `name` in a `package.json`, `[package] name` in a `Cargo.toml`,
+`module` in a `go.mod` — is headed by that name instead.
+
+Every group heading also carries an icon for what it holds. ★ is FAVORITES, ∿ is the tasks this
+extension did not start, and everything else says which tool its rows will actually go through — so
+a monorepo mixing pnpm workspaces with a Deno service and a cargo crate says so on the headings,
+before any row is read:
 
 | Icon | Group |
 | --- | --- |
@@ -105,10 +177,19 @@ read:
 | ≣ | pnpm |
 | ⚡ | bun |
 | 🌐 | deno |
+| ⚙ | cargo, cargo-make |
+| 🛠 | poetry, pdm, hatch, rye, poe, pipenv |
+| 🧪 | tox, nox |
+| ▤ | make |
+| ☑ | just |
+| ≡ | go-task |
+| ⌗ | go |
+| ⟨⟩ | composer |
+| ⧉ | mise |
 | ∿ | Other tasks — running, but not from a manifest |
 
-The runner shown is the one that will be used, so a `taskRunnerUltimate.packageManager` override
-moves the icon with it.
+For a Node package the runner shown is the one that will be used, so a
+`taskRunnerUltimate.packageManager` override moves the icon with it.
 
 The view header holds four actions. **Restart all** (⟳) and **stop all** (◼) appear only while
 something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
@@ -206,21 +287,25 @@ The dropdown is the tree flattened — the same blocks in the same order, so the
 thing to learn rather than two:
 
 ```
-Favorites (2) ───────────────────
-⟳ dev            api · vite dev      ⟳ ■
-🧪 test          api · vitest run     ⟳
-Other tasks (1) ─────────────────
-⟳ tsc: watch     Workspace task      ⟳ ■
-api — packages/api/package.json ──
-▶ build          tsc -p .             ⟳
-web — packages/web/package.json ──
-▶ dev            next dev             ⟳
-▶ test:e2e       playwright test      ⟳
+Favorites (2) ────────────────────────
+⟳ dev              web · vite dev        ⟳ ■
+🧪 test            engine · cargo test    ⟳
+Other tasks (1) ──────────────────────
+⟳ tsc: watch       Workspace task        ⟳ ■
+web — packages/web/package.json ──────
+▶ build            next build             ⟳
+🧪 test:e2e        playwright test        ⟳
+engine — crates/engine/Cargo.toml ────
+▶ run              cargo run              ⟳
+⚖ clippy           cargo clippy           ⟳
+Makefile ─────────────────────────────
+▶ up               Start the stack        ⟳
+🗑 clean           make clean             ⟳
 ```
 
 Favorites first, then anything running that did not come from a manifest, then one block per
-package — packages with something running above the idle ones, and running scripts at the top of
-their block. On a workspace with a single package and nothing starred the headings are dropped
+manifest — manifests with something running above the idle ones, and running tasks at the top of
+their block. On a workspace with a single manifest and nothing starred the headings are dropped
 entirely, since the only one there would be repeating the picker's own title.
 
 | Action | Effect |
@@ -264,7 +349,7 @@ obvious candidates are not:
 
 ### Changing it
 
-Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Task Runner Ultimate: Show Scripts** and click the
+Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Task Runner Manager: Show Scripts** and click the
 pencil. Or write it out in `keybindings.json`:
 
 ```json
@@ -287,21 +372,26 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `packageManager` | `auto` | Forces `npm`, `yarn`, `pnpm`, `bun` or `deno` instead of [detecting it](#runner-detection). Tasks from `deno.json(c)` ignore this — only Deno can run them. |
-| `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
+| `sources` | all nine | Which ecosystems are scanned: `node`, `rust`, `python`, `make`, `just`, `task`, `go`, `php`, `mise`. A removed one is never read. |
+| `packageManager` | `auto` | Forces `npm`, `yarn`, `pnpm`, `bun` or `deno` instead of [detecting it](#runner-detection). Node only: `deno.json(c)` ignores it, and no other ecosystem is affected. |
+| `cargoCommands` | `run`, `build`, `test`, `clippy`, `fmt` | The cargo subcommands every crate gets — see [Rust](#rust). |
+| `goCommands` | `run`, `build`, `test`, `vet` | The go subcommands every module gets. |
+| `pythonRunner` | `auto` | How `[project.scripts]` entry points are entered — see [Python](#python). `none` hides them. |
+| `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `showInEditorTitle` | `true` | The badged ▶ icon in the editor title bar. |
 | `showInStatusBar` | `true` | The `Task Runner` entry in the status bar. |
 | `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
-| `colorIcons` | `true` | Tints script icons by category. Turn off for plain foreground-coloured icons. |
+| `colorIcons` | `true` | Tints task icons by category. Turn off for plain foreground-coloured icons. |
 | `categories` | `[]` | Extra category rules, checked *before* the built-in ones. |
 
-The two worth knowing about in a real project are `packageManager` and `exclude`. A monorepo that
-keeps packages outside the default skip list scans faster once `exclude` covers them, and pinning
-`packageManager` removes any doubt about which runner a script goes through.
+The ones worth knowing about in a real project are `sources`, `exclude` and `packageManager`. A
+monorepo that keeps packages outside the default skip list scans faster once `exclude` covers them,
+dropping an ecosystem from `sources` stops those files being opened at all, and pinning
+`packageManager` removes any doubt about which runner a Node script goes through.
 
-`categories` decides the icon and colour of a script. Each rule matches the script name token by
-token first, then the command behind it, so a script called `ci` that in fact runs `vitest` still
-gets the test icon. A rule that repeats a built-in token overrides the built-in:
+`categories` decides the icon and colour of a row. Each rule matches the task name token by token
+first, then the command behind it, so a task called `ci` that in fact runs `vitest` still gets the
+test icon. A rule that repeats a built-in token overrides the built-in:
 
 ```json
 "taskRunnerUltimate.categories": [
@@ -317,36 +407,45 @@ each has a `taskRunnerUltimate.category.<name>` colour you can override in
 
 ## Behaviour
 
-- Scans `**/package.json` (the `scripts` field) and `**/deno.json` / `**/deno.jsonc` (the `tasks`
-  field), skipping `node_modules`, `dist`, `out`, `build`, `.next`, `coverage` (configurable via
+- Scans every manifest in [the table above](#what-gets-scanned), skipping `node_modules`, `target`,
+  `.venv`, `vendor`, `dist`, `out`, `build`, `.next`, `coverage` and the rest (configurable via
   `taskRunnerUltimate.exclude`). `deno.jsonc` comments and trailing commas are tolerated, and both the
   string and the Deno 2 object task form (`{ "command": …, "description": … }`) are read.
-- In a monorepo the idle list is grouped per package, showing the package name and relative path.
-- Scripts run through the VS Code **task** system (not a raw terminal), which is what makes running
-  state, stop and restart reliable. Each script gets a dedicated task terminal that is cleared on
-  restart. The scripts also show up under **Run Task…** as `scripts: <name>`.
+- TOML, INI, Makefile, justfile and Taskfile parsing is done in-extension: the extension ships with
+  no runtime dependencies, and a manifest that cannot be parsed is skipped rather than reported —
+  the file belongs to the project, and a scan that threw would take the whole list down with it.
+- Make skips pattern rules (`%.o:`), targets built out of a variable (`$(BIN):`) and the special
+  ones (`.PHONY`); `just` skips `_`-prefixed and `[private]` recipes; go-task skips `internal: true`;
+  cargo-make skips `private` and `disabled`; Composer skips its event hooks.
+- In a monorepo the idle list is grouped per manifest, showing the package name and relative path.
+- Tasks run through the VS Code **task** system (not a raw terminal), which is what makes running
+  state, stop and restart reliable. Each task gets a dedicated task terminal that is cleared on
+  restart. They also show up under **Run Task…** as `scripts: <name>`.
 - A scan is capped at 2000 manifests. Reaching the cap is reported once, rather than quietly
   handing you a short list.
 
 ### Staying up to date
 
-The list is cached, and the cache is dropped whenever anything a scan depends on changes: a
-`package.json` or `deno.json(c)`, and equally a lock or config file — `pnpm-lock.yaml`, `yarn.lock`,
-`bun.lockb`, `package-lock.json`, `deno.lock` and the rest of the [detection
-signals](#runner-detection). Adding or removing a script shows up on its own, in both the tree and
-an open dropdown.
+The list is cached, and the cache is dropped whenever anything a scan depends on changes: any
+manifest in [the table above](#what-gets-scanned), and equally a lock or config file —
+`pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `package-lock.json`, `deno.lock`, `uv.lock`,
+`poetry.lock` and the rest of the [detection signals](#runner-detection). Adding or removing a task
+shows up on its own, in both the tree and an open dropdown. A setting that decides what is scanned —
+`sources`, `exclude`, `cargoCommands`, `goCommands`, `pythonRunner` — does the same.
 
 Detected runners are dropped along with it. That matters because `packageManager` and `engines` live
 in the very file being edited: switching a package from npm to pnpm has to change how its scripts
 are launched, not just what the list says. The cost is a rescan plus a few stat calls per package,
 on a change you made yourself.
 
-`Task Runner Ultimate: Refresh Scripts` does exactly the same thing on demand, for the cases no
+`Task Runner Manager: Refresh Scripts` does exactly the same thing on demand, for the cases no
 watcher can see — a manifest edited outside the workspace, say.
 
 ## Runner detection
 
-Checked in this order, per package, first match wins:
+This is a Node question only. Every other ecosystem names its runner in the table the task is
+declared in, or in the file name itself — the one exception, `[project.scripts]`, is covered under
+[Python](#python). For a `package.json`, checked in this order, per package, first match wins:
 
 1. `taskRunnerUltimate.packageManager`, if set to something other than `auto`.
 2. The `packageManager` field — `"packageManager": "pnpm@9.1.0"`.

@@ -230,29 +230,29 @@ const badgeEntries = variants.map((variant, index) => ({
 }));
 
 manifest.contributes.commands = [
-  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'Task Runner Ultimate', icon: icon('') },
+  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'Task Runner Manager', icon: icon('') },
   ...badgeEntries.map((entry) => ({
     command: entry.id,
     title: `Show Scripts (${entry.label} running)`,
-    category: 'Task Runner Ultimate',
+    category: 'Task Runner Manager',
     icon: icon(entry.suffix),
   })),
-  { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'Task Runner Ultimate', icon: '$(debug-restart)' },
-  { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'Task Runner Ultimate', icon: '$(refresh)' },
-  { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'Task Runner Ultimate', icon: '$(play)' },
-  { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'Task Runner Ultimate', icon: '$(debug-stop)' },
-  { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'Task Runner Ultimate', icon: '$(debug-restart)' },
-  { command: 'taskRunnerUltimate.toggleItem', title: 'Run or Stop', category: 'Task Runner Ultimate' },
-  { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task Runner Ultimate', icon: '$(star-empty)' },
-  { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task Runner Ultimate', icon: '$(star-full)' },
-  { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task Runner Ultimate', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'Task Runner Manager', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'Task Runner Manager', icon: '$(refresh)' },
+  { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'Task Runner Manager', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'Task Runner Manager', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'Task Runner Manager', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.toggleItem', title: 'Run or Stop', category: 'Task Runner Manager' },
+  { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task Runner Manager', icon: '$(star-empty)' },
+  { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task Runner Manager', icon: '$(star-full)' },
+  { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task Runner Manager', icon: '$(edit)' },
   {
     command: 'taskRunnerUltimate.stopAll',
     title: 'Stop All Running Tasks',
-    category: 'Task Runner Ultimate',
+    category: 'Task Runner Manager',
     icon: { light: 'media/stop-all-light.svg', dark: 'media/stop-all-dark.svg' },
   },
-  { command: 'taskRunnerUltimate.restartAll', title: 'Restart All Running Tasks', category: 'Task Runner Ultimate', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.restartAll', title: 'Restart All Running Tasks', category: 'Task Runner Manager', icon: '$(debug-restart)' },
 ];
 
 const inTitle = 'config.taskRunnerUltimate.showInEditorTitle';
@@ -319,7 +319,7 @@ manifest.contributes.viewsContainers = {
   activitybar: [
     {
       id: 'taskRunnerUltimate',
-      title: 'Task Runner',
+      title: 'Task Runner Manager',
       icon: 'media/activity-bar.svg',
     },
   ],
@@ -329,9 +329,9 @@ manifest.contributes.views = {
   taskRunnerUltimate: [
     {
       id: 'taskRunnerUltimate.tree',
-      name: 'Task Runner',
+      name: 'Task Runner Manager',
       icon: 'media/activity-bar.svg',
-      contextualTitle: 'Task Runner',
+      contextualTitle: 'Task Runner Manager',
     },
   ],
 };
@@ -350,16 +350,47 @@ manifest.contributes.taskDefinitions = [
     type: 'taskRunnerUltimate',
     required: ['script'],
     properties: {
-      script: { type: 'string', description: 'Name of the package.json script.' },
-      manifest: { type: 'string', description: 'URI of the package.json the script belongs to.' },
+      script: { type: 'string', description: 'Name of the task in its manifest.' },
+      manifest: { type: 'string', description: 'URI of the manifest the task belongs to.' },
     },
   },
 ];
 
+/*
+ * Every file name the scan knows about — keep in step with MANIFEST_KINDS in
+ * src/sources.ts. They are listed one by one rather than as a single brace
+ * glob so the Marketplace page shows exactly what makes the extension wake up.
+ */
+const MANIFEST_FILES = [
+  'package.json',
+  'deno.json',
+  'deno.jsonc',
+  'composer.json',
+  'Cargo.toml',
+  'Makefile.toml',
+  'pyproject.toml',
+  'Pipfile',
+  'tox.ini',
+  'noxfile.py',
+  'Makefile',
+  'makefile',
+  'GNUmakefile',
+  'justfile',
+  'Justfile',
+  '.justfile',
+  'Taskfile.yml',
+  'Taskfile.yaml',
+  'Taskfile.dist.yml',
+  'Taskfile.dist.yaml',
+  'taskfile.yml',
+  'taskfile.yaml',
+  'go.mod',
+  'mise.toml',
+  '.mise.toml',
+];
+
 manifest.activationEvents = [
-  'workspaceContains:**/package.json',
-  'workspaceContains:**/deno.json',
-  'workspaceContains:**/deno.jsonc',
+  ...MANIFEST_FILES.map((file) => `workspaceContains:**/${file}`),
   'onTaskType:taskRunnerUltimate',
   'onView:taskRunnerUltimate.tree',
 ];
