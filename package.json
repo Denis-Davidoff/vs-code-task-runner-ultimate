@@ -1,14 +1,14 @@
 {
-  "name": "handy-task-runner",
-  "displayName": "Ultimate 🏆 Task Runner",
+  "name": "task-runner-ultimate",
+  "displayName": "Task Runner 🏆 Ultimate",
   "description": "Every script in the workspace and every running task in one dropdown: Enter starts or stops, Shift+Enter restarts, and the toolbar icon badges how many tasks are running. npm, yarn, pnpm, bun and deno.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Denis-Davidoff/vs-code-handy-task-runner.git"
+    "url": "https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate.git"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -40,395 +40,395 @@
     "workspaceContains:**/package.json",
     "workspaceContains:**/deno.json",
     "workspaceContains:**/deno.jsonc",
-    "onTaskType:handyTasksRunner",
-    "onView:handyTasksRunner.tree"
+    "onTaskType:taskRunnerUltimate",
+    "onView:taskRunnerUltimate.tree"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "handyTasksRunner.show",
+        "command": "taskRunnerUltimate.show",
         "title": "Show Scripts",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light.svg",
           "dark": "media/scripts-dark.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge1",
+        "command": "taskRunnerUltimate.show.badge1",
         "title": "Show Scripts (1 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-1.svg",
           "dark": "media/scripts-dark-1.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge2",
+        "command": "taskRunnerUltimate.show.badge2",
         "title": "Show Scripts (2 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-2.svg",
           "dark": "media/scripts-dark-2.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge3",
+        "command": "taskRunnerUltimate.show.badge3",
         "title": "Show Scripts (3 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-3.svg",
           "dark": "media/scripts-dark-3.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge4",
+        "command": "taskRunnerUltimate.show.badge4",
         "title": "Show Scripts (4 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-4.svg",
           "dark": "media/scripts-dark-4.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge5",
+        "command": "taskRunnerUltimate.show.badge5",
         "title": "Show Scripts (5 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-5.svg",
           "dark": "media/scripts-dark-5.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge6",
+        "command": "taskRunnerUltimate.show.badge6",
         "title": "Show Scripts (6 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-6.svg",
           "dark": "media/scripts-dark-6.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge7",
+        "command": "taskRunnerUltimate.show.badge7",
         "title": "Show Scripts (7 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-7.svg",
           "dark": "media/scripts-dark-7.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge8",
+        "command": "taskRunnerUltimate.show.badge8",
         "title": "Show Scripts (8 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-8.svg",
           "dark": "media/scripts-dark-8.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badge9",
+        "command": "taskRunnerUltimate.show.badge9",
         "title": "Show Scripts (9 running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-9.svg",
           "dark": "media/scripts-dark-9.svg"
         }
       },
       {
-        "command": "handyTasksRunner.show.badgeMany",
+        "command": "taskRunnerUltimate.show.badgeMany",
         "title": "Show Scripts (9+ running)",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/scripts-light-many.svg",
           "dark": "media/scripts-dark-many.svg"
         }
       },
       {
-        "command": "handyTasksRunner.restartActive",
+        "command": "taskRunnerUltimate.restartActive",
         "title": "Restart Focused Script",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": "$(debug-restart)"
       },
       {
-        "command": "handyTasksRunner.refresh",
+        "command": "taskRunnerUltimate.refresh",
         "title": "Refresh Scripts",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": "$(refresh)"
       },
       {
-        "command": "handyTasksRunner.runItem",
+        "command": "taskRunnerUltimate.runItem",
         "title": "Run",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": "$(play)"
       },
       {
-        "command": "handyTasksRunner.stopItem",
+        "command": "taskRunnerUltimate.stopItem",
         "title": "Stop",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": "$(debug-stop)"
       },
       {
-        "command": "handyTasksRunner.restartItem",
+        "command": "taskRunnerUltimate.restartItem",
         "title": "Restart",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": "$(debug-restart)"
       },
       {
-        "command": "handyTasksRunner.toggleItem",
+        "command": "taskRunnerUltimate.toggleItem",
         "title": "Run or Stop",
-        "category": "Handy Task Runner"
+        "category": "Task Runner Ultimate"
       },
       {
-        "command": "handyTasksRunner.stopAll",
+        "command": "taskRunnerUltimate.stopAll",
         "title": "Stop All Running Tasks",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": {
           "light": "media/stop-all-light.svg",
           "dark": "media/stop-all-dark.svg"
         }
       },
       {
-        "command": "handyTasksRunner.restartAll",
+        "command": "taskRunnerUltimate.restartAll",
         "title": "Restart All Running Tasks",
-        "category": "Handy Task Runner",
+        "category": "Task Runner Ultimate",
         "icon": "$(debug-restart)"
       }
     ],
     "menus": {
       "editor/title": [
         {
-          "command": "handyTasksRunner.show",
+          "command": "taskRunnerUltimate.show",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && !handyTasksRunner.runningCount"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && !taskRunnerUltimate.runningCount"
         },
         {
-          "command": "handyTasksRunner.show.badge1",
+          "command": "taskRunnerUltimate.show.badge1",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 1"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 1"
         },
         {
-          "command": "handyTasksRunner.show.badge2",
+          "command": "taskRunnerUltimate.show.badge2",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 2"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 2"
         },
         {
-          "command": "handyTasksRunner.show.badge3",
+          "command": "taskRunnerUltimate.show.badge3",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 3"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 3"
         },
         {
-          "command": "handyTasksRunner.show.badge4",
+          "command": "taskRunnerUltimate.show.badge4",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 4"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 4"
         },
         {
-          "command": "handyTasksRunner.show.badge5",
+          "command": "taskRunnerUltimate.show.badge5",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 5"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 5"
         },
         {
-          "command": "handyTasksRunner.show.badge6",
+          "command": "taskRunnerUltimate.show.badge6",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 6"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 6"
         },
         {
-          "command": "handyTasksRunner.show.badge7",
+          "command": "taskRunnerUltimate.show.badge7",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 7"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 7"
         },
         {
-          "command": "handyTasksRunner.show.badge8",
+          "command": "taskRunnerUltimate.show.badge8",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 8"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 8"
         },
         {
-          "command": "handyTasksRunner.show.badge9",
+          "command": "taskRunnerUltimate.show.badge9",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 9"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 9"
         },
         {
-          "command": "handyTasksRunner.show.badgeMany",
+          "command": "taskRunnerUltimate.show.badgeMany",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 10"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 10"
         }
       ],
       "notebook/toolbar": [
         {
-          "command": "handyTasksRunner.show",
+          "command": "taskRunnerUltimate.show",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && !handyTasksRunner.runningCount"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && !taskRunnerUltimate.runningCount"
         },
         {
-          "command": "handyTasksRunner.show.badge1",
+          "command": "taskRunnerUltimate.show.badge1",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 1"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 1"
         },
         {
-          "command": "handyTasksRunner.show.badge2",
+          "command": "taskRunnerUltimate.show.badge2",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 2"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 2"
         },
         {
-          "command": "handyTasksRunner.show.badge3",
+          "command": "taskRunnerUltimate.show.badge3",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 3"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 3"
         },
         {
-          "command": "handyTasksRunner.show.badge4",
+          "command": "taskRunnerUltimate.show.badge4",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 4"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 4"
         },
         {
-          "command": "handyTasksRunner.show.badge5",
+          "command": "taskRunnerUltimate.show.badge5",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 5"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 5"
         },
         {
-          "command": "handyTasksRunner.show.badge6",
+          "command": "taskRunnerUltimate.show.badge6",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 6"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 6"
         },
         {
-          "command": "handyTasksRunner.show.badge7",
+          "command": "taskRunnerUltimate.show.badge7",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 7"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 7"
         },
         {
-          "command": "handyTasksRunner.show.badge8",
+          "command": "taskRunnerUltimate.show.badge8",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 8"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 8"
         },
         {
-          "command": "handyTasksRunner.show.badge9",
+          "command": "taskRunnerUltimate.show.badge9",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 9"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 9"
         },
         {
-          "command": "handyTasksRunner.show.badgeMany",
+          "command": "taskRunnerUltimate.show.badgeMany",
           "group": "navigation@1",
-          "when": "config.handyTasksRunner.showInEditorTitle && handyTasksRunner.runningCount == 10"
+          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 10"
         }
       ],
       "view/title": [
         {
-          "command": "handyTasksRunner.restartAll",
+          "command": "taskRunnerUltimate.restartAll",
           "group": "navigation@1",
-          "when": "view == handyTasksRunner.tree && handyTasksRunner.runningCount > 0"
+          "when": "view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0"
         },
         {
-          "command": "handyTasksRunner.stopAll",
+          "command": "taskRunnerUltimate.stopAll",
           "group": "navigation@2",
-          "when": "view == handyTasksRunner.tree && handyTasksRunner.runningCount > 0"
+          "when": "view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0"
         },
         {
-          "command": "handyTasksRunner.show",
+          "command": "taskRunnerUltimate.show",
           "group": "navigation@3",
-          "when": "view == handyTasksRunner.tree"
+          "when": "view == taskRunnerUltimate.tree"
         },
         {
-          "command": "handyTasksRunner.refresh",
+          "command": "taskRunnerUltimate.refresh",
           "group": "navigation@4",
-          "when": "view == handyTasksRunner.tree"
+          "when": "view == taskRunnerUltimate.tree"
         }
       ],
       "view/item/context": [
         {
-          "command": "handyTasksRunner.runItem",
+          "command": "taskRunnerUltimate.runItem",
           "group": "inline@1",
-          "when": "view == handyTasksRunner.tree && viewItem == idleScript"
+          "when": "view == taskRunnerUltimate.tree && viewItem == idleScript"
         },
         {
-          "command": "handyTasksRunner.restartItem",
+          "command": "taskRunnerUltimate.restartItem",
           "group": "inline@1",
-          "when": "view == handyTasksRunner.tree && viewItem =~ /^(runningScript|foreignTask)$/"
+          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^(runningScript|foreignTask)$/"
         },
         {
-          "command": "handyTasksRunner.stopItem",
+          "command": "taskRunnerUltimate.stopItem",
           "group": "inline@2",
-          "when": "view == handyTasksRunner.tree && viewItem =~ /^(runningScript|foreignTask)$/"
+          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^(runningScript|foreignTask)$/"
         }
       ],
       "commandPalette": [
         {
-          "command": "handyTasksRunner.show.badge1",
+          "command": "taskRunnerUltimate.show.badge1",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badge2",
+          "command": "taskRunnerUltimate.show.badge2",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badge3",
+          "command": "taskRunnerUltimate.show.badge3",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badge4",
+          "command": "taskRunnerUltimate.show.badge4",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badge5",
+          "command": "taskRunnerUltimate.show.badge5",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badge6",
+          "command": "taskRunnerUltimate.show.badge6",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badge7",
+          "command": "taskRunnerUltimate.show.badge7",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badge8",
+          "command": "taskRunnerUltimate.show.badge8",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badge9",
+          "command": "taskRunnerUltimate.show.badge9",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.show.badgeMany",
+          "command": "taskRunnerUltimate.show.badgeMany",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.restartActive",
+          "command": "taskRunnerUltimate.restartActive",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.runItem",
+          "command": "taskRunnerUltimate.runItem",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.stopItem",
+          "command": "taskRunnerUltimate.stopItem",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.restartItem",
+          "command": "taskRunnerUltimate.restartItem",
           "when": "false"
         },
         {
-          "command": "handyTasksRunner.toggleItem",
+          "command": "taskRunnerUltimate.toggleItem",
           "when": "false"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "handyTasksRunner.show",
+        "command": "taskRunnerUltimate.show",
         "key": "ctrl+alt+t",
         "mac": "ctrl+cmd+t"
       },
       {
-        "command": "handyTasksRunner.restartActive",
+        "command": "taskRunnerUltimate.restartActive",
         "key": "shift+enter",
-        "when": "handyTasksRunner.pickerOpen"
+        "when": "taskRunnerUltimate.pickerOpen"
       }
     ],
     "configuration": {
-      "title": "Handy Task Runner",
+      "title": "Task Runner Ultimate",
       "properties": {
-        "handyTasksRunner.packageManager": {
+        "taskRunnerUltimate.packageManager": {
           "type": "string",
           "enum": [
             "auto",
@@ -449,35 +449,35 @@
           ],
           "description": "Runner used for package.json scripts. Tasks from deno.json(c) always use 'deno task' regardless of this setting."
         },
-        "handyTasksRunner.showInStatusBar": {
+        "taskRunnerUltimate.showInStatusBar": {
           "type": "boolean",
           "default": true,
-          "description": "Also show a 'Handy Tasks' entry in the status bar."
+          "description": "Also show a 'Task Runner' entry in the status bar."
         },
-        "handyTasksRunner.showInEditorTitle": {
+        "taskRunnerUltimate.showInEditorTitle": {
           "type": "boolean",
           "default": true,
           "description": "Show the scripts icon (with the running-task badge) in the editor title bar."
         },
-        "handyTasksRunner.openDropdownFromActivityBar": {
+        "taskRunnerUltimate.openDropdownFromActivityBar": {
           "type": "boolean",
           "default": false,
-          "description": "Also open the dropdown when the Handy Tasks view in the activity bar is revealed. Off by default: the view already shows the same list as a tree."
+          "description": "Also open the dropdown when the Task Runner view in the activity bar is revealed. Off by default: the view already shows the same list as a tree."
         },
-        "handyTasksRunner.exclude": {
+        "taskRunnerUltimate.exclude": {
           "type": "string",
           "default": "**/{node_modules,.git,dist,out,build,.next,coverage}/**",
           "description": "Glob pattern of package.json locations to ignore."
         },
-        "handyTasksRunner.colorIcons": {
+        "taskRunnerUltimate.colorIcons": {
           "type": "boolean",
           "default": true,
-          "description": "Tint script icons in the Handy Tasks view with their category colour. Turn off to keep every icon in the default foreground colour."
+          "description": "Tint script icons in the Task Runner view with their category colour. Turn off to keep every icon in the default foreground colour."
         },
-        "handyTasksRunner.categories": {
+        "taskRunnerUltimate.categories": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `handyTasksRunner.category.*` or any built-in such as `charts.green`.",
+          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `taskRunnerUltimate.category.*` or any built-in such as `charts.green`.",
           "items": {
             "type": "object",
             "required": [
@@ -509,8 +509,8 @@
     },
     "colors": [
       {
-        "id": "handyTasksRunner.sourceTitleForeground",
-        "description": "Colour of the source titles (package / manifest names) in the Handy Tasks view.",
+        "id": "taskRunnerUltimate.sourceTitleForeground",
+        "description": "Colour of the source titles (package / manifest names) in the Task Runner view.",
         "defaults": {
           "dark": "#D7BA7D",
           "light": "#B58900",
@@ -519,8 +519,8 @@
         }
       },
       {
-        "id": "handyTasksRunner.category.run",
-        "description": "Icon colour in the Handy Tasks view: Running a dev server or watcher.",
+        "id": "taskRunnerUltimate.category.run",
+        "description": "Icon colour in the Task Runner view: Running a dev server or watcher.",
         "defaults": {
           "dark": "#73C991",
           "light": "#388A34",
@@ -529,8 +529,8 @@
         }
       },
       {
-        "id": "handyTasksRunner.category.test",
-        "description": "Icon colour in the Handy Tasks view: Tests and coverage.",
+        "id": "taskRunnerUltimate.category.test",
+        "description": "Icon colour in the Task Runner view: Tests and coverage.",
         "defaults": {
           "dark": "#F14C4C",
           "light": "#E51400",
@@ -539,8 +539,8 @@
         }
       },
       {
-        "id": "handyTasksRunner.category.quality",
-        "description": "Icon colour in the Handy Tasks view: Linting, formatting and type checking.",
+        "id": "taskRunnerUltimate.category.quality",
+        "description": "Icon colour in the Task Runner view: Linting, formatting and type checking.",
         "defaults": {
           "dark": "#75BEFF",
           "light": "#0066BF",
@@ -549,8 +549,8 @@
         }
       },
       {
-        "id": "handyTasksRunner.category.build",
-        "description": "Icon colour in the Handy Tasks view: Building, bundling and packaging.",
+        "id": "taskRunnerUltimate.category.build",
+        "description": "Icon colour in the Task Runner view: Building, bundling and packaging.",
         "defaults": {
           "dark": "#D18616",
           "light": "#BF8803",
@@ -559,8 +559,8 @@
         }
       },
       {
-        "id": "handyTasksRunner.category.release",
-        "description": "Icon colour in the Handy Tasks view: Releasing, publishing and deploying.",
+        "id": "taskRunnerUltimate.category.release",
+        "description": "Icon colour in the Task Runner view: Releasing, publishing and deploying.",
         "defaults": {
           "dark": "#B180D7",
           "light": "#652D90",
@@ -569,8 +569,8 @@
         }
       },
       {
-        "id": "handyTasksRunner.category.data",
-        "description": "Icon colour in the Handy Tasks view: Migrations, seeds and code generation.",
+        "id": "taskRunnerUltimate.category.data",
+        "description": "Icon colour in the Task Runner view: Migrations, seeds and code generation.",
         "defaults": {
           "dark": "#4EC9B0",
           "light": "#0F8A82",
@@ -579,8 +579,8 @@
         }
       },
       {
-        "id": "handyTasksRunner.category.clean",
-        "description": "Icon colour in the Handy Tasks view: Cleaning and resetting.",
+        "id": "taskRunnerUltimate.category.clean",
+        "description": "Icon colour in the Task Runner view: Cleaning and resetting.",
         "defaults": {
           "dark": "#9D9D9D",
           "light": "#767676",
@@ -591,7 +591,7 @@
     ],
     "taskDefinitions": [
       {
-        "type": "handyTasksRunner",
+        "type": "taskRunnerUltimate",
         "required": [
           "script"
         ],
@@ -610,19 +610,19 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "handyTasksRunner",
-          "title": "Handy Tasks",
+          "id": "taskRunnerUltimate",
+          "title": "Task Runner",
           "icon": "media/activity-bar.svg"
         }
       ]
     },
     "views": {
-      "handyTasksRunner": [
+      "taskRunnerUltimate": [
         {
-          "id": "handyTasksRunner.tree",
-          "name": "Handy Tasks",
+          "id": "taskRunnerUltimate.tree",
+          "name": "Task Runner",
           "icon": "media/activity-bar.svg",
-          "contextualTitle": "Handy Tasks"
+          "contextualTitle": "Task Runner"
         }
       ]
     }

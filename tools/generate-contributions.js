@@ -223,44 +223,44 @@ const icon = (suffix) => ({
 });
 
 const badgeEntries = variants.map((variant, index) => ({
-  id: index < MAX_BADGE ? `handyTasksRunner.show.badge${index + 1}` : 'handyTasksRunner.show.badgeMany',
+  id: index < MAX_BADGE ? `taskRunnerUltimate.show.badge${index + 1}` : 'taskRunnerUltimate.show.badgeMany',
   count: index + 1,
   suffix: variant.suffix,
   label: variant.label,
 }));
 
 manifest.contributes.commands = [
-  { command: 'handyTasksRunner.show', title: 'Show Scripts', category: 'Handy Task Runner', icon: icon('') },
+  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'Task Runner Ultimate', icon: icon('') },
   ...badgeEntries.map((entry) => ({
     command: entry.id,
     title: `Show Scripts (${entry.label} running)`,
-    category: 'Handy Task Runner',
+    category: 'Task Runner Ultimate',
     icon: icon(entry.suffix),
   })),
-  { command: 'handyTasksRunner.restartActive', title: 'Restart Focused Script', category: 'Handy Task Runner', icon: '$(debug-restart)' },
-  { command: 'handyTasksRunner.refresh', title: 'Refresh Scripts', category: 'Handy Task Runner', icon: '$(refresh)' },
-  { command: 'handyTasksRunner.runItem', title: 'Run', category: 'Handy Task Runner', icon: '$(play)' },
-  { command: 'handyTasksRunner.stopItem', title: 'Stop', category: 'Handy Task Runner', icon: '$(debug-stop)' },
-  { command: 'handyTasksRunner.restartItem', title: 'Restart', category: 'Handy Task Runner', icon: '$(debug-restart)' },
-  { command: 'handyTasksRunner.toggleItem', title: 'Run or Stop', category: 'Handy Task Runner' },
+  { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'Task Runner Ultimate', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'Task Runner Ultimate', icon: '$(refresh)' },
+  { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'Task Runner Ultimate', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'Task Runner Ultimate', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'Task Runner Ultimate', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.toggleItem', title: 'Run or Stop', category: 'Task Runner Ultimate' },
   {
-    command: 'handyTasksRunner.stopAll',
+    command: 'taskRunnerUltimate.stopAll',
     title: 'Stop All Running Tasks',
-    category: 'Handy Task Runner',
+    category: 'Task Runner Ultimate',
     icon: { light: 'media/stop-all-light.svg', dark: 'media/stop-all-dark.svg' },
   },
-  { command: 'handyTasksRunner.restartAll', title: 'Restart All Running Tasks', category: 'Handy Task Runner', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.restartAll', title: 'Restart All Running Tasks', category: 'Task Runner Ultimate', icon: '$(debug-restart)' },
 ];
 
-const inTitle = 'config.handyTasksRunner.showInEditorTitle';
-// `!handyTasksRunner.runningCount` also covers the moment before the extension has
+const inTitle = 'config.taskRunnerUltimate.showInEditorTitle';
+// `!taskRunnerUltimate.runningCount` also covers the moment before the extension has
 // activated, when the context key does not exist yet.
 const toolbarEntries = (whenPrefix) => [
-  { command: 'handyTasksRunner.show', group: 'navigation@1', when: `${whenPrefix}!handyTasksRunner.runningCount` },
+  { command: 'taskRunnerUltimate.show', group: 'navigation@1', when: `${whenPrefix}!taskRunnerUltimate.runningCount` },
   ...badgeEntries.map((entry) => ({
     command: entry.id,
     group: 'navigation@1',
-    when: `${whenPrefix}handyTasksRunner.runningCount == ${entry.count}`,
+    when: `${whenPrefix}taskRunnerUltimate.runningCount == ${entry.count}`,
   })),
 ];
 
@@ -270,50 +270,50 @@ manifest.contributes.menus = {
   'notebook/toolbar': toolbarEntries(`${inTitle} && `),
   'view/title': [
     {
-      command: 'handyTasksRunner.restartAll',
+      command: 'taskRunnerUltimate.restartAll',
       group: 'navigation@1',
-      when: 'view == handyTasksRunner.tree && handyTasksRunner.runningCount > 0',
+      when: 'view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0',
     },
     {
-      command: 'handyTasksRunner.stopAll',
+      command: 'taskRunnerUltimate.stopAll',
       group: 'navigation@2',
-      when: 'view == handyTasksRunner.tree && handyTasksRunner.runningCount > 0',
+      when: 'view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0',
     },
-    { command: 'handyTasksRunner.show', group: 'navigation@3', when: 'view == handyTasksRunner.tree' },
-    { command: 'handyTasksRunner.refresh', group: 'navigation@4', when: 'view == handyTasksRunner.tree' },
+    { command: 'taskRunnerUltimate.show', group: 'navigation@3', when: 'view == taskRunnerUltimate.tree' },
+    { command: 'taskRunnerUltimate.refresh', group: 'navigation@4', when: 'view == taskRunnerUltimate.tree' },
   ],
   'view/item/context': [
-    { command: 'handyTasksRunner.runItem', group: 'inline@1', when: 'view == handyTasksRunner.tree && viewItem == idleScript' },
-    { command: 'handyTasksRunner.restartItem', group: 'inline@1', when: 'view == handyTasksRunner.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
-    { command: 'handyTasksRunner.stopItem', group: 'inline@2', when: 'view == handyTasksRunner.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
+    { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: 'view == taskRunnerUltimate.tree && viewItem == idleScript' },
+    { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: 'view == taskRunnerUltimate.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
+    { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: 'view == taskRunnerUltimate.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
   ],
   commandPalette: [
     ...badgeEntries.map((entry) => ({ command: entry.id, when: 'false' })),
-    { command: 'handyTasksRunner.restartActive', when: 'false' },
-    { command: 'handyTasksRunner.runItem', when: 'false' },
-    { command: 'handyTasksRunner.stopItem', when: 'false' },
-    { command: 'handyTasksRunner.restartItem', when: 'false' },
-    { command: 'handyTasksRunner.toggleItem', when: 'false' },
+    { command: 'taskRunnerUltimate.restartActive', when: 'false' },
+    { command: 'taskRunnerUltimate.runItem', when: 'false' },
+    { command: 'taskRunnerUltimate.stopItem', when: 'false' },
+    { command: 'taskRunnerUltimate.restartItem', when: 'false' },
+    { command: 'taskRunnerUltimate.toggleItem', when: 'false' },
   ],
 };
 
 manifest.contributes.viewsContainers = {
   activitybar: [
     {
-      id: 'handyTasksRunner',
-      title: 'Handy Tasks',
+      id: 'taskRunnerUltimate',
+      title: 'Task Runner',
       icon: 'media/activity-bar.svg',
     },
   ],
 };
 
 manifest.contributes.views = {
-  handyTasksRunner: [
+  taskRunnerUltimate: [
     {
-      id: 'handyTasksRunner.tree',
-      name: 'Handy Tasks',
+      id: 'taskRunnerUltimate.tree',
+      name: 'Task Runner',
       icon: 'media/activity-bar.svg',
-      contextualTitle: 'Handy Tasks',
+      contextualTitle: 'Task Runner',
     },
   ],
 };
@@ -323,13 +323,13 @@ manifest.contributes.views = {
 // which VS Code leaves entirely free. On Windows and Linux ctrl+alt+t is
 // unbound (the mac-only "close others" rule does not apply there).
 manifest.contributes.keybindings = [
-  { command: 'handyTasksRunner.show', key: 'ctrl+alt+t', mac: 'ctrl+cmd+t' },
-  { command: 'handyTasksRunner.restartActive', key: 'shift+enter', when: 'handyTasksRunner.pickerOpen' },
+  { command: 'taskRunnerUltimate.show', key: 'ctrl+alt+t', mac: 'ctrl+cmd+t' },
+  { command: 'taskRunnerUltimate.restartActive', key: 'shift+enter', when: 'taskRunnerUltimate.pickerOpen' },
 ];
 
 manifest.contributes.taskDefinitions = [
   {
-    type: 'handyTasksRunner',
+    type: 'taskRunnerUltimate',
     required: ['script'],
     properties: {
       script: { type: 'string', description: 'Name of the package.json script.' },
@@ -342,8 +342,8 @@ manifest.activationEvents = [
   'workspaceContains:**/package.json',
   'workspaceContains:**/deno.json',
   'workspaceContains:**/deno.jsonc',
-  'onTaskType:handyTasksRunner',
-  'onView:handyTasksRunner.tree',
+  'onTaskType:taskRunnerUltimate',
+  'onView:taskRunnerUltimate.tree',
 ];
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');

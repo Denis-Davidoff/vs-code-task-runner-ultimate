@@ -16,10 +16,10 @@ const RUNNERS: Record<PackageManager, (script: string) => string> = {
 const MANIFEST_GLOB = '**/{package.json,deno.json,deno.jsonc}';
 
 /** Task type used for the tasks this extension executes. Must match contributes.taskDefinitions. */
-const TASK_TYPE = 'handyTasksRunner';
+const TASK_TYPE = 'taskRunnerUltimate';
 const TASK_SOURCE = 'scripts';
-const CONTEXT_PICKER_OPEN = 'handyTasksRunner.pickerOpen';
-const CONTEXT_RUNNING_COUNT = 'handyTasksRunner.runningCount';
+const CONTEXT_PICKER_OPEN = 'taskRunnerUltimate.pickerOpen';
+const CONTEXT_RUNNING_COUNT = 'taskRunnerUltimate.runningCount';
 /** Highest count with a dedicated badge icon; above this the "9+" icon is used. */
 const MAX_BADGE = 9;
 /**
@@ -100,37 +100,37 @@ const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
   {
     match: ['dev', 'start', 'serve', 'server', 'watch', 'preview', 'storybook'],
     icon: 'play',
-    color: 'handyTasksRunner.category.run',
+    color: 'taskRunnerUltimate.category.run',
   },
   {
     match: ['test', 'tests', 'spec', 'e2e', 'jest', 'vitest', 'cypress', 'playwright', 'coverage'],
     icon: 'beaker',
-    color: 'handyTasksRunner.category.test',
+    color: 'taskRunnerUltimate.category.test',
   },
   {
     match: ['lint', 'format', 'fmt', 'prettier', 'eslint', 'stylelint', 'typecheck', 'tsc', 'check'],
     icon: 'law',
-    color: 'handyTasksRunner.category.quality',
+    color: 'taskRunnerUltimate.category.quality',
   },
   {
     match: ['build', 'compile', 'bundle', 'dist', 'prepack', 'prepare'],
     icon: 'package',
-    color: 'handyTasksRunner.category.build',
+    color: 'taskRunnerUltimate.category.build',
   },
   {
     match: ['release', 'publish', 'deploy', 'version', 'changeset'],
     icon: 'rocket',
-    color: 'handyTasksRunner.category.release',
+    color: 'taskRunnerUltimate.category.release',
   },
   {
     match: ['migrate', 'migration', 'seed', 'db', 'prisma', 'generate', 'codegen'],
     icon: 'database',
-    color: 'handyTasksRunner.category.data',
+    color: 'taskRunnerUltimate.category.data',
   },
   {
     match: ['clean', 'clear', 'reset', 'rimraf', 'purge'],
     icon: 'trash',
-    color: 'handyTasksRunner.category.clean',
+    color: 'taskRunnerUltimate.category.clean',
   },
 ];
 
@@ -164,22 +164,22 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('handyTasksRunner.show', showScriptPicker),
-    vscode.commands.registerCommand('handyTasksRunner.restartActive', restartActiveItem),
-    vscode.commands.registerCommand('handyTasksRunner.refresh', async () => {
+    vscode.commands.registerCommand('taskRunnerUltimate.show', showScriptPicker),
+    vscode.commands.registerCommand('taskRunnerUltimate.restartActive', restartActiveItem),
+    vscode.commands.registerCommand('taskRunnerUltimate.refresh', async () => {
       invalidate();
       await collectScripts();
-      vscode.window.setStatusBarMessage('Handy Task Runner: reloaded', 2000);
+      vscode.window.setStatusBarMessage('Task Runner Ultimate: reloaded', 2000);
     }),
     // One command per badge count: the toolbar icon is static, so the visible
     // entry is swapped via the runningCount context key (see contributes.menus).
     ...badgeCommandIds().map((id) => vscode.commands.registerCommand(id, showScriptPicker)),
-    vscode.commands.registerCommand('handyTasksRunner.runItem', (node?: TreeNode) => runNode(node)),
-    vscode.commands.registerCommand('handyTasksRunner.stopItem', (node?: TreeNode) => stopNode(node)),
-    vscode.commands.registerCommand('handyTasksRunner.restartItem', (node?: TreeNode) => restartNode(node)),
-    vscode.commands.registerCommand('handyTasksRunner.toggleItem', (node?: TreeNode) => toggleNode(node)),
-    vscode.commands.registerCommand('handyTasksRunner.stopAll', stopAllTasks),
-    vscode.commands.registerCommand('handyTasksRunner.restartAll', restartAllTasks),
+    vscode.commands.registerCommand('taskRunnerUltimate.runItem', (node?: TreeNode) => runNode(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.stopItem', (node?: TreeNode) => stopNode(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.restartItem', (node?: TreeNode) => restartNode(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.toggleItem', (node?: TreeNode) => toggleNode(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
+    vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
       provideTasks: async () => (await collectScripts()).map(buildTask),
       resolveTask: async (task) => {
@@ -218,10 +218,10 @@ export function activate(context: vscode.ExtensionContext): void {
     watcher,
     vscode.workspace.onDidChangeWorkspaceFolders(() => invalidate()),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('handyTasksRunner.exclude')) {
+      if (event.affectsConfiguration('taskRunnerUltimate.exclude')) {
         invalidate();
       }
-      if (event.affectsConfiguration('handyTasksRunner.showInStatusBar')) {
+      if (event.affectsConfiguration('taskRunnerUltimate.showInStatusBar')) {
         syncStatusBar(context);
       }
     }),
@@ -295,8 +295,8 @@ const treeChanged = new vscode.EventEmitter<void>();
 let treeView: vscode.TreeView<TreeNode> | undefined;
 
 /** Private URI scheme for group rows, so decorations cannot hit real files. */
-const DECORATION_SCHEME = 'handytasksrunner';
-const TITLE_COLOR = 'handyTasksRunner.sourceTitleForeground';
+const DECORATION_SCHEME = 'taskrunnerultimate';
+const TITLE_COLOR = 'taskRunnerUltimate.sourceTitleForeground';
 
 function createTree(): vscode.Disposable[] {
   const provider: vscode.TreeDataProvider<TreeNode> = {
@@ -310,7 +310,7 @@ function createTree(): vscode.Disposable[] {
     },
   };
 
-  const view = vscode.window.createTreeView('handyTasksRunner.tree', { treeDataProvider: provider });
+  const view = vscode.window.createTreeView('taskRunnerUltimate.tree', { treeDataProvider: provider });
   treeView = view;
 
   const decorations = vscode.window.registerFileDecorationProvider({
@@ -320,7 +320,7 @@ function createTree(): vscode.Disposable[] {
 
   const visibility = view.onDidChangeVisibility(({ visible }) => {
     const opensDropdown = vscode.workspace
-      .getConfiguration('handyTasksRunner')
+      .getConfiguration('taskRunnerUltimate')
       .get<boolean>('openDropdownFromActivityBar', false);
     if (visible && opensDropdown) {
       void showScriptPicker();
@@ -417,7 +417,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     item.description = node.execution.task.source ? `${node.execution.task.source} task` : 'task';
     item.iconPath = new vscode.ThemeIcon('sync~spin');
     item.contextValue = 'foreignTask';
-    item.command = { command: 'handyTasksRunner.toggleItem', title: 'Stop', arguments: [node] };
+    item.command = { command: 'taskRunnerUltimate.toggleItem', title: 'Stop', arguments: [node] };
     return item;
   }
 
@@ -428,7 +428,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   item.iconPath = iconFor(node.script, isRunning);
   item.contextValue = isRunning ? 'runningScript' : 'idleScript';
   item.command = {
-    command: 'handyTasksRunner.toggleItem',
+    command: 'taskRunnerUltimate.toggleItem',
     title: isRunning ? 'Stop' : 'Run',
     arguments: [node],
   };
@@ -464,7 +464,7 @@ function categoryFor(script: ScriptEntry): CategoryRule | undefined {
 /** User rules take precedence, so a single entry can override a built-in category. */
 function userCategories(): CategoryRule[] {
   const configured = vscode.workspace
-    .getConfiguration('handyTasksRunner')
+    .getConfiguration('taskRunnerUltimate')
     .get<CategoryRule[]>('categories', []);
 
   return (Array.isArray(configured) ? configured : []).filter(
@@ -475,7 +475,7 @@ function userCategories(): CategoryRule[] {
 
 function iconFor(script: ScriptEntry, isRunning: boolean): vscode.ThemeIcon {
   const category = categoryFor(script);
-  const colored = vscode.workspace.getConfiguration('handyTasksRunner').get<boolean>('colorIcons', true);
+  const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   const color = category && colored ? new vscode.ThemeColor(category.color) : undefined;
   return new vscode.ThemeIcon(isRunning ? 'sync~spin' : category?.icon ?? 'play', color);
 }
@@ -815,7 +815,7 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 
 function syncStatusBar(context: vscode.ExtensionContext): void {
   const enabled = vscode.workspace
-    .getConfiguration('handyTasksRunner')
+    .getConfiguration('taskRunnerUltimate')
     .get<boolean>('showInStatusBar', true);
 
   if (!enabled) {
@@ -826,7 +826,7 @@ function syncStatusBar(context: vscode.ExtensionContext): void {
 
   if (!statusBarItem) {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    statusBarItem.command = 'handyTasksRunner.show';
+    statusBarItem.command = 'taskRunnerUltimate.show';
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
   }
@@ -838,7 +838,7 @@ function updateStatusBar(count: number): void {
   if (!statusBarItem) {
     return;
   }
-  statusBarItem.text = count > 0 ? `$(sync~spin) Handy Tasks ${count}` : '$(play-circle) Handy Tasks';
+  statusBarItem.text = count > 0 ? `$(sync~spin) Task Runner ${count}` : '$(play-circle) Task Runner';
   statusBarItem.tooltip = count > 0 ? `${count} running task(s) — click to manage` : 'Show package.json scripts';
 }
 
@@ -846,9 +846,9 @@ function updateStatusBar(count: number): void {
 function badgeCommandIds(): string[] {
   const ids: string[] = [];
   for (let count = 1; count <= MAX_BADGE; count++) {
-    ids.push(`handyTasksRunner.show.badge${count}`);
+    ids.push(`taskRunnerUltimate.show.badge${count}`);
   }
-  ids.push('handyTasksRunner.show.badgeMany');
+  ids.push('taskRunnerUltimate.show.badgeMany');
   return ids;
 }
 
@@ -859,7 +859,7 @@ async function collectScripts(): Promise<ScriptEntry[]> {
     return cache;
   }
 
-  const config = vscode.workspace.getConfiguration('handyTasksRunner');
+  const config = vscode.workspace.getConfiguration('taskRunnerUltimate');
   const exclude = config.get<string>('exclude') || '**/node_modules/**';
   const manifests = await vscode.workspace.findFiles(MANIFEST_GLOB, exclude, MAX_MANIFESTS);
 
@@ -868,8 +868,8 @@ async function collectScripts(): Promise<ScriptEntry[]> {
   if (manifests.length === MAX_MANIFESTS && !warnedAboutTruncation) {
     warnedAboutTruncation = true;
     void vscode.window.showWarningMessage(
-      `Handy Task Runner stopped after ${MAX_MANIFESTS} manifests, so some scripts are missing. ` +
-        'Widen "handyTasksRunner.exclude" to skip the ones you do not need.',
+      `Task Runner Ultimate stopped after ${MAX_MANIFESTS} manifests, so some scripts are missing. ` +
+        'Widen "taskRunnerUltimate.exclude" to skip the ones you do not need.',
     );
   }
 
@@ -1007,7 +1007,7 @@ function resolvePackageManager(script: ScriptEntry): PackageManager {
   }
 
   const configured = vscode.workspace
-    .getConfiguration('handyTasksRunner', script.manifest)
+    .getConfiguration('taskRunnerUltimate', script.manifest)
     .get<string>('packageManager', 'auto');
 
   if (configured && configured !== 'auto') {

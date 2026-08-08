@@ -1,14 +1,14 @@
-# ▶ Handy Task Runner
+# ▶ Task Runner Ultimate
 
 **Every script in your workspace, and everything currently running, in one list. Start, stop and
 restart without ever going looking for a terminal tab.**
 
 Scripts scatter. A monorepo buries them across a dozen `package.json` files, the dev server you
 started an hour ago is alive in a tab you can no longer find, and running anything by hand means
-getting the directory *and* the package manager right first. Handy Task Runner collapses all of
+getting the directory *and* the package manager right first. Task Runner Ultimate collapses all of
 that into one list, and gives you three ways to reach it.
 
-![Handy Task Runner in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-handy-task-runner/main/promo-video.gif)
+![Task Runner Ultimate in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
 ### ▶ in the toolbar of every file
 
@@ -59,10 +59,10 @@ above it — so one list works unchanged across a mixed monorepo.
 
 | Place | Notes |
 | --- | --- |
-| Editor title bar (top right) | The badged icon. Toggle with `handyTasksRunner.showInEditorTitle`. |
-| Activity bar (left strip) | The **Handy Tasks** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
-| Status bar (bottom left) | `$(play-circle) Handy Tasks`, or `$(sync~spin) Handy Tasks N` while tasks run. Toggle with `handyTasksRunner.showInStatusBar`. |
-| Command palette | `Handy Task Runner: Show Scripts` |
+| Editor title bar (top right) | The badged icon. Toggle with `taskRunnerUltimate.showInEditorTitle`. |
+| Activity bar (left strip) | The **Task Runner** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
+| Status bar (bottom left) | `$(play-circle) Task Runner`, or `$(sync~spin) Task Runner N` while tasks run. Toggle with `taskRunnerUltimate.showInStatusBar`. |
+| Command palette | `Task Runner Ultimate: Show Scripts` |
 | Keybinding | `Ctrl+Cmd+T` on macOS, `Ctrl+Alt+T` on Windows and Linux — see [Keyboard shortcuts](#keyboard-shortcuts) |
 
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
@@ -79,7 +79,7 @@ menu. Notebooks are covered separately through `notebook/toolbar`, and the icon 
 `navigation@1` so it is among the first to survive the overflow — but the surface that is *always*
 there is the activity bar view, plus the status bar entry and the keyboard shortcut.
 
-### The Handy Tasks view
+### The Task Runner view
 
 The activity bar icon opens a tree with the same content as the dropdown: a **Running** group on
 top, then one group per package. Clicking a row toggles it — run if stopped, stop if running — and
@@ -93,7 +93,7 @@ this extension did not start.
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
 do "what the toolbar icon does". If you would rather have the dropdown anyway, set
-`handyTasksRunner.openDropdownFromActivityBar` to `true` and it opens as soon as the view is revealed.
+`taskRunnerUltimate.openDropdownFromActivityBar` to `true` and it opens as soon as the view is revealed.
 
 ## In the dropdown
 
@@ -141,17 +141,17 @@ obvious candidates are not:
 
 ### Changing it
 
-Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Handy Task Runner: Show Scripts** and click the
+Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Task Runner Ultimate: Show Scripts** and click the
 pencil. Or write it out in `keybindings.json`:
 
 ```json
-{ "key": "cmd+alt+j", "command": "handyTasksRunner.show" }
+{ "key": "cmd+alt+j", "command": "taskRunnerUltimate.show" }
 ```
 
 That *adds* a shortcut. To retire the default as well, disable it with a leading `-`:
 
 ```json
-{ "key": "ctrl+cmd+t", "command": "-handyTasksRunner.show" }
+{ "key": "ctrl+cmd+t", "command": "-taskRunnerUltimate.show" }
 ```
 
 > On Ubuntu and most GNOME desktops `Ctrl+Alt+T` opens a system terminal, and the desktop takes the
@@ -159,7 +159,7 @@ That *adds* a shortcut. To retire the default as well, disable it with a leading
 
 ## Settings
 
-Everything lives under `handyTasksRunner.*` and works in user settings as well as in a workspace's
+Everything lives under `taskRunnerUltimate.*` and works in user settings as well as in a workspace's
 `.vscode/settings.json`, so a repository can pin its own runner for everyone who opens it.
 
 | Setting | Default | What it does |
@@ -167,7 +167,7 @@ Everything lives under `handyTasksRunner.*` and works in user settings as well a
 | `packageManager` | `auto` | Forces `npm`, `yarn`, `pnpm`, `bun` or `deno` instead of [detecting it](#runner-detection). Tasks from `deno.json(c)` ignore this — only Deno can run them. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `showInEditorTitle` | `true` | The badged ▶ icon in the editor title bar. |
-| `showInStatusBar` | `true` | The `Handy Tasks` entry in the status bar. |
+| `showInStatusBar` | `true` | The `Task Runner` entry in the status bar. |
 | `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
 | `colorIcons` | `true` | Tints script icons by category. Turn off for plain foreground-coloured icons. |
 | `categories` | `[]` | Extra category rules, checked *before* the built-in ones. |
@@ -181,22 +181,22 @@ token first, then the command behind it, so a script called `ci` that in fact ru
 gets the test icon. A rule that repeats a built-in token overrides the built-in:
 
 ```json
-"handyTasksRunner.categories": [
+"taskRunnerUltimate.categories": [
   { "match": ["bench", "perf"], "icon": "dashboard", "color": "charts.purple" }
 ]
 ```
 
 `icon` is a [codicon](https://microsoft.github.io/vscode-codicons/dist/codicon.html) id and `color`
-a theme colour id — either one of `handyTasksRunner.category.*` or any built-in such as
+a theme colour id — either one of `taskRunnerUltimate.category.*` or any built-in such as
 `charts.green`. The built-in categories are run, test, quality, build, release, data and clean, and
-each has a `handyTasksRunner.category.<name>` colour you can override in
+each has a `taskRunnerUltimate.category.<name>` colour you can override in
 `workbench.colorCustomizations`.
 
 ## Behaviour
 
 - Scans `**/package.json` (the `scripts` field) and `**/deno.json` / `**/deno.jsonc` (the `tasks`
   field), skipping `node_modules`, `dist`, `out`, `build`, `.next`, `coverage` (configurable via
-  `handyTasksRunner.exclude`). `deno.jsonc` comments and trailing commas are tolerated, and both the
+  `taskRunnerUltimate.exclude`). `deno.jsonc` comments and trailing commas are tolerated, and both the
   string and the Deno 2 object task form (`{ "command": …, "description": … }`) are read.
 - In a monorepo the idle list is grouped per package, showing the package name and relative path.
 - Scripts run through the VS Code **task** system (not a raw terminal), which is what makes running
@@ -218,14 +218,14 @@ in the very file being edited: switching a package from npm to pnpm has to chang
 are launched, not just what the list says. The cost is a rescan plus a few stat calls per package,
 on a change you made yourself.
 
-`Handy Task Runner: Refresh Scripts` does exactly the same thing on demand, for the cases no
+`Task Runner Ultimate: Refresh Scripts` does exactly the same thing on demand, for the cases no
 watcher can see — a manifest edited outside the workspace, say.
 
 ## Runner detection
 
 Checked in this order, per package, first match wins:
 
-1. `handyTasksRunner.packageManager`, if set to something other than `auto`.
+1. `taskRunnerUltimate.packageManager`, if set to something other than `auto`.
 2. The `packageManager` field — `"packageManager": "pnpm@9.1.0"`.
 3. The `engines` field — `deno`, `bun`, `pnpm`, `yarn`, then `npm` (so the usual
    `{ "node": …, "npm": … }` still resolves to npm).
@@ -246,14 +246,14 @@ Two details worth knowing:
 - Deno signals are checked **last** within a directory, so a package.json project that also carries
   a `deno.lock` still runs its scripts with the npm-family runner its own lock file names.
 - A task that came from a `deno.json(c)` always runs as `deno task <name>`, including when
-  `handyTasksRunner.packageManager` is pinned to something else — no other runner can execute it.
+  `taskRunnerUltimate.packageManager` is pinned to something else — no other runner can execute it.
 
 ### How the badge works
 
 The activity bar badge is a real API (`TreeView.badge`). The toolbar one is not: editor title icons
 are static images with no way to draw on them. So `media/` holds pre-rendered icons for counts 1–9
 plus `9+`, one command per variant, and the extension publishes the running count into the
-`handyTasksRunner.runningCount` context key — the `editor/title` menu then shows whichever variant
+`taskRunnerUltimate.runningCount` context key — the `editor/title` menu then shows whichever variant
 matches. Those icons and the menu entries that reference them are generated:
 
 ```bash
@@ -277,7 +277,7 @@ To build and install a package:
 
 ```bash
 npx @vscode/vsce package --skip-license
-code --install-extension handy-task-runner-0.1.4.vsix --force
+code --install-extension task-runner-ultimate-0.1.8.vsix --force
 ```
 
 Reload the VS Code window after installing (`Developer: Reload Window`).
