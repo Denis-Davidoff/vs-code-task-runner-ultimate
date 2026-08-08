@@ -925,8 +925,7 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
     items.push(separator(`Other tasks (${foreign.length})`));
     for (const execution of foreign) {
       items.push({
-        label: execution.task.name,
-        iconPath: new vscode.ThemeIcon('sync~spin'),
+        label: `$(sync~spin) ${execution.task.name}`,
         description: execution.task.source ? `${execution.task.source} task` : 'task',
         buttons: [restartButton(true), stopButton()],
         execution,
@@ -970,22 +969,28 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
  * same way the tree's FAVORITES rows do — listed away from a package heading,
  * the row has to answer that itself.
  *
- * The icon goes in `iconPath` rather than as a `$(id)` in the label so it lands
- * in the row's own icon slot and lines up with every other row, running or not.
+ * The icon is written into the label as `$(id)` rather than passed as `iconPath`,
+ * which looks like the worse of the two and is not:
  *
- * It is the same `ThemeIcon` the tree gets, colour and all, but the colour will
- * not show: VS Code converts the icon to a bare codicon class on its way to the
- * quick pick and drops the `ThemeColor` doing it — `mainThreadQuickOpen.ts`
- * carries a TODO saying exactly that. Passing the coloured icon anyway costs
- * nothing and starts working the day that changes. There is no workaround worth
- * having: only a URI icon is drawn in colour, and a pre-rendered SVG cannot
- * resolve a theme colour id — least of all one a user put in `categories`.
+ * - `iconPath` puts the icon in the row's own 16px slot, which carries
+ *   `padding-right: 6px`. A codicon lands centred in the content box while
+ *   `transform: rotate()` turns about the border box, so `sync~spin` orbits its
+ *   own centre by 3px instead of spinning on it. That CSS belongs to VS Code and
+ *   an extension cannot reach it.
+ * - The colour is dropped either way. VS Code converts a `ThemeIcon` to a bare
+ *   codicon class on the way into a quick pick and loses the `ThemeColor` doing
+ *   it — `mainThreadQuickOpen.ts` carries a TODO saying exactly that. Only URI
+ *   icons are drawn in colour there, and a pre-rendered SVG cannot resolve a
+ *   theme colour id, least of all one a user put in `categories`.
+ *
+ * So `iconPath` costs the spinner and buys nothing. In the label the codicon is
+ * an inline span sized to the glyph, and it spins true.
  */
 function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
   const isRunning = running.has(script.key);
+  const icon = isRunning ? 'sync~spin' : categoryFor(script)?.icon ?? 'play';
   return {
-    label: displayName(script),
-    iconPath: iconFor(script, isRunning),
+    label: `$(${icon}) ${displayName(script)}`,
     description: scriptDescription(script, inFavorites),
     buttons: isRunning ? [restartButton(true), stopButton()] : [restartButton(false)],
     script,

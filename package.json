@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task Runner 🏆 Ultimate",
   "description": "Every script in the workspace and every running task in one dropdown: Enter starts or stops, Shift+Enter restarts, and the toolbar icon badges how many tasks are running. npm, yarn, pnpm, bun and deno.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
