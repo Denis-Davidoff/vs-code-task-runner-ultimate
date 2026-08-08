@@ -3,14 +3,44 @@
 **Every script in your workspace, and everything currently running, in one list. Start, stop and
 restart without ever going looking for a terminal tab.**
 
+![Task Runner Manager in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
+
+- 📋 **[A panel in the left bar](#the-task-runner-manager-view)** — every task of the workspace as a
+  tree, grouped by the manifest it came from. Running tasks float to the top of their group and the
+  number of them rides on the activity bar icon as a real VS Code badge.
+- ⚡ **[A button in every editor's toolbar](#-in-the-toolbar-of-every-file)** — the ▶ icon, carrying
+  a live badge with how many tasks are running, so the watcher you forgot about stays in the corner
+  of your eye instead of hiding in a stack of terminals.
+- ⌨️ **[A hotkey, from anywhere](#keyboard-shortcuts)** — <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>T</kbd>
+  (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> on Windows and Linux) opens the whole list without
+  touching the mouse, from the editor, the terminal, anywhere.
+- 🔍 **Search that matches the command too** — type `vitest` and find the script that runs it, not
+  just the ones called "test". <kbd>Enter</kbd> toggles a task, <kbd>Shift</kbd>+<kbd>Enter</kbd>
+  restarts it.
+- ✏️ **[Rename any row](#renaming-a-row)** — `dev` becomes `API server`. Display only: the project's
+  manifest is never edited, and the real name stays visible beside it and searchable.
+- ⭐ **[Favorites](#favorites)** — star the two or three scripts you actually run and they pin to a
+  group at the very top, above everything, without leaving the package they belong to.
+- 🎨 **Colour and an icon per task** — ▶ for dev servers, a beaker for tests, a rocket for releases,
+  a database for migrations, decided by what the task really runs — and [your own rules](#settings)
+  come first.
+- 🧩 **[Nine ecosystems, one list](#what-gets-scanned)** — `package.json`, `deno.json`, `Cargo.toml`,
+  `Makefile.toml`, `pyproject.toml`, `Pipfile`, `tox.ini`, `noxfile.py`, `Makefile`, `justfile`,
+  `Taskfile.yml`, `go.mod`, `composer.json` and `mise.toml`, so a mixed monorepo is still one list.
+- 🧠 **[Knows how to run things](#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
+  package from `packageManager`, `engines` and the lock files; everything else named by the table it
+  is declared in.
+- ⏹ **Stop all / restart all** — kill five watchers before a rebase, or bring the whole stack back
+  up after switching branches, in one click.
+- 👀 **Running tasks this extension did not start** — from `tasks.json`, other extensions or the
+  built-in npm list — are shown and can be stopped from the same place.
+
 Tasks scatter. A monorepo buries them across a dozen `package.json` files, the Rust service next to
 them keeps its own in a `Makefile.toml`, the Python one in `pyproject.toml`, and there is a
 `justfile` at the root that half the team forgets exists. The dev server you started an hour ago is
 alive in a tab you can no longer find, and running anything by hand means getting the directory
 *and* the tool right first. Task Runner Manager collapses all of that into one list, and gives you
 three ways to reach it.
-
-![Task Runner Manager in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
 ### ▶ in the toolbar of every file
 
