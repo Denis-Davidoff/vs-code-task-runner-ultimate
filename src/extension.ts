@@ -891,28 +891,42 @@ async function showScriptPicker(): Promise<void> {
   picker.show();
 }
 
+const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemKind.Separator });
+
+/**
+ * The tree's shape, flattened into separators and rows: FAVORITES, then the
+ * tasks that came from outside a manifest, then one block per package — the
+ * packages with something running first, and inside each of them the running
+ * scripts first. Two surfaces showing the same list in two different orders is
+ * two things to learn instead of one.
+ *
+ * It departs from the tree in one place. The tree lists a starred script twice,
+ * in FAVORITES and in its own package, because the two rows sit in different
+ * collapsible groups; flattened, that reads as a duplicate. So here a script has
+ * exactly one row, and a starred one is lifted out of its package — its
+ * FAVORITES row names the package instead, which is what the tree does too.
+ */
 function buildItems(scripts: ScriptEntry[]): Item[] {
   const items: Item[] = [];
-  const runningScripts = scripts.filter((script) => running.has(script.key));
   const foreign = foreignExecutions();
   const multiPackage = new Set(scripts.map((script) => script.manifest.toString())).size > 1;
 
-  if (runningScripts.length > 0 || foreign.length > 0) {
-    items.push({ label: `Running (${runningScripts.length + foreign.length})`, kind: vscode.QuickPickItemKind.Separator });
+  const favorites = favoriteScripts(scripts);
+  const starred = new Set(favorites.map((script) => script.key));
 
-    for (const script of runningScripts) {
-      items.push({
-        label: `$(sync~spin) ${displayName(script)}`,
-        description: scriptDescription(script),
-        detail: multiPackage ? packageLabel(script) : undefined,
-        buttons: [restartButton(true), stopButton()],
-        script,
-      });
+  if (favorites.length > 0) {
+    items.push(separator(`Favorites (${favorites.length})`));
+    for (const script of favorites) {
+      items.push(scriptItem(script, true));
     }
+  }
 
+  if (foreign.length > 0) {
+    items.push(separator(`Other tasks (${foreign.length})`));
     for (const execution of foreign) {
       items.push({
-        label: `$(sync~spin) ${execution.task.name}`,
+        label: execution.task.name,
+        iconPath: new vscode.ThemeIcon('sync~spin'),
         description: execution.task.source ? `${execution.task.source} task` : 'task',
         buttons: [restartButton(true), stopButton()],
         execution,
@@ -920,27 +934,62 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
     }
   }
 
-  let currentGroup: string | undefined;
+  // One block per package, keeping the order the scan produced.
+  const blocks = new Map<string, { label: string; running: Item[]; idle: Item[] }>();
   for (const script of scripts) {
-    if (running.has(script.key)) {
+    if (starred.has(script.key)) {
       continue;
     }
-    const group = script.manifest.toString();
-    if (multiPackage && group !== currentGroup) {
-      currentGroup = group;
-      items.push({ label: packageLabel(script), kind: vscode.QuickPickItemKind.Separator });
+    const key = script.manifest.toString();
+    let block = blocks.get(key);
+    if (!block) {
+      block = { label: packageLabel(script), running: [], idle: [] };
+      blocks.set(key, block);
     }
-    items.push({
-      // Quick pick labels take a codicon but no colour, so the category shows
-      // through the glyph alone here.
-      label: `$(${categoryFor(script)?.icon ?? 'play'}) ${displayName(script)}`,
-      description: scriptDescription(script),
-      buttons: [restartButton(false)],
-      script,
-    });
+    (running.has(script.key) ? block.running : block.idle).push(scriptItem(script, false));
+  }
+
+  // A separator is the only thing that closes the block above it off, so package
+  // headings appear as soon as there is anything above them — including in a
+  // single-package workspace, where on their own they would be pure noise.
+  const headings = multiPackage || items.length > 0;
+  const ordered = [...blocks.values()];
+
+  for (const block of [...ordered.filter((b) => b.running.length > 0), ...ordered.filter((b) => b.running.length === 0)]) {
+    if (headings) {
+      items.push(separator(block.label));
+    }
+    items.push(...block.running, ...block.idle);
   }
 
   return items;
+}
+
+/**
+ * One script row. Under Favorites it also says which package it came from, the
+ * same way the tree's FAVORITES rows do — listed away from a package heading,
+ * the row has to answer that itself.
+ *
+ * The icon goes in `iconPath` rather than as a `$(id)` in the label so it lands
+ * in the row's own icon slot and lines up with every other row, running or not.
+ *
+ * It is the same `ThemeIcon` the tree gets, colour and all, but the colour will
+ * not show: VS Code converts the icon to a bare codicon class on its way to the
+ * quick pick and drops the `ThemeColor` doing it — `mainThreadQuickOpen.ts`
+ * carries a TODO saying exactly that. Passing the coloured icon anyway costs
+ * nothing and starts working the day that changes. There is no workaround worth
+ * having: only a URI icon is drawn in colour, and a pre-rendered SVG cannot
+ * resolve a theme colour id — least of all one a user put in `categories`.
+ */
+function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
+  const isRunning = running.has(script.key);
+  return {
+    label: displayName(script),
+    iconPath: iconFor(script, isRunning),
+    description: scriptDescription(script, inFavorites),
+    buttons: isRunning ? [restartButton(true), stopButton()] : [restartButton(false)],
+    script,
+  };
 }
 
 async function restartActiveItem(): Promise<void> {

@@ -140,10 +140,11 @@ FAVORITES
 Click ★ to unpin. Order is the order you starred things in — new stars go to the bottom, so the list
 stays where you put it.
 
-A starred script appears twice, and the two rows are independent: running it from FAVORITES and
-running it from its package group are the same task, and both rows spin. Stars live in the tree only
-— the dropdown keeps its own order, **Running** first and then package by package, so a favorite is
-not lifted to the top there.
+In the tree a starred script appears twice, and the two rows are independent: running it from
+FAVORITES and running it from its package group are the same task, and both rows spin. The dropdown
+puts it at the top too, but lists it **once** — flattened into a single list, a second copy four rows
+down reads as a duplicate rather than as a shortcut, so the row is lifted out of its package and
+says where it came from instead.
 
 ### Renaming a row
 
@@ -201,14 +202,26 @@ nothing and never shows.
 
 ## In the dropdown
 
+The dropdown is the tree flattened — the same blocks in the same order, so the two surfaces are one
+thing to learn rather than two:
+
 ```
-Running (2) ─────────────────────
-⟳ dev            vite          ⟳ ■
-⟳ tsc: watch     Workspace task ⟳ ■
-root-pkg — package.json ─────────
-▶ build          tsc -p .        ⟳
-▶ test:e2e       playwright test ⟳
+Favorites (2) ───────────────────
+⟳ dev            api · vite dev      ⟳ ■
+🧪 test          api · vitest run     ⟳
+Other tasks (1) ─────────────────
+⟳ tsc: watch     Workspace task      ⟳ ■
+api — packages/api/package.json ──
+▶ build          tsc -p .             ⟳
+web — packages/web/package.json ──
+▶ dev            next dev             ⟳
+▶ test:e2e       playwright test      ⟳
 ```
+
+Favorites first, then anything running that did not come from a manifest, then one block per
+package — packages with something running above the idle ones, and running scripts at the top of
+their block. On a workspace with a single package and nothing starred the headings are dropped
+entirely, since the only one there would be repeating the picker's own title.
 
 | Action | Effect |
 | --- | --- |
@@ -218,10 +231,16 @@ root-pkg — package.json ─────────
 | ⟳ button | Same as `Shift+Enter`, without leaving the keyboard row. |
 | ■ button | Stops that task. Only shown for entries that are actually running. |
 
-The **Running** group lists *all* running tasks, including ones this extension did not start —
-tasks from `tasks.json`, other extensions, or the built-in npm task provider. Tasks that map onto a
-package.json script (our own and `npm:` ones) are shown as that script rather than duplicated, so a
-script started from the built-in npm list can be stopped from here too.
+**Other tasks** covers running tasks this extension did not start — tasks from `tasks.json`, other
+extensions, or the built-in npm task provider. Tasks that map onto a package.json script (our own and
+`npm:` ones) are shown as that script, in its own package block, rather than duplicated — so a script
+started from the built-in npm list can be stopped from here too.
+
+Each row carries the same category icon as the tree, but not its colour. That one is out of an
+extension's hands: VS Code turns a `ThemeIcon` into a plain codicon class on the way into a quick
+pick and discards the `ThemeColor` — [`mainThreadQuickOpen.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/api/browser/mainThreadQuickOpen.ts)
+carries a TODO to that effect. Only URI icons are drawn in colour there, and a pre-rendered SVG
+cannot resolve a theme colour id, so the colours stay where they can follow your theme: the tree.
 
 ## Keyboard shortcuts
 
