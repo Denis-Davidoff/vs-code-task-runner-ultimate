@@ -243,6 +243,9 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'Task Runner Ultimate', icon: '$(debug-stop)' },
   { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'Task Runner Ultimate', icon: '$(debug-restart)' },
   { command: 'taskRunnerUltimate.toggleItem', title: 'Run or Stop', category: 'Task Runner Ultimate' },
+  { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task Runner Ultimate', icon: '$(star-empty)' },
+  { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task Runner Ultimate', icon: '$(star-full)' },
+  { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task Runner Ultimate', icon: '$(edit)' },
   {
     command: 'taskRunnerUltimate.stopAll',
     title: 'Stop All Running Tasks',
@@ -253,6 +256,7 @@ manifest.contributes.commands = [
 ];
 
 const inTitle = 'config.taskRunnerUltimate.showInEditorTitle';
+const inTree = 'view == taskRunnerUltimate.tree';
 // `!taskRunnerUltimate.runningCount` also covers the moment before the extension has
 // activated, when the context key does not exist yet.
 const toolbarEntries = (whenPrefix) => [
@@ -282,10 +286,19 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.show', group: 'navigation@3', when: 'view == taskRunnerUltimate.tree' },
     { command: 'taskRunnerUltimate.refresh', group: 'navigation@4', when: 'view == taskRunnerUltimate.tree' },
   ],
+  // Script rows carry a composed contextValue — `script:<idle|running>:<fav|nofav>`
+  // (see `treeItemFor`) — so a `when` clause can match on any one of the three
+  // axes without a combinatorial list of context values.
   'view/item/context': [
-    { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: 'view == taskRunnerUltimate.tree && viewItem == idleScript' },
-    { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: 'view == taskRunnerUltimate.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
-    { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: 'view == taskRunnerUltimate.tree && viewItem =~ /^(runningScript|foreignTask)$/' },
+    { command: 'taskRunnerUltimate.addFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:nofav$/` },
+    { command: 'taskRunnerUltimate.removeFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:fav$/` },
+    { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^script:idle:/` },
+    { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
+    { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
+    // Non-inline groups are what the right-click menu shows.
+    { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav$/` },
+    { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav$/` },
+    { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^script:/` },
   ],
   commandPalette: [
     ...badgeEntries.map((entry) => ({ command: entry.id, when: 'false' })),
@@ -294,6 +307,11 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.stopItem', when: 'false' },
     { command: 'taskRunnerUltimate.restartItem', when: 'false' },
     { command: 'taskRunnerUltimate.toggleItem', when: 'false' },
+    // All three act on the row they were invoked from, so they are useless
+    // without one.
+    { command: 'taskRunnerUltimate.addFavorite', when: 'false' },
+    { command: 'taskRunnerUltimate.removeFavorite', when: 'false' },
+    { command: 'taskRunnerUltimate.editTitle', when: 'false' },
   ],
 };
 

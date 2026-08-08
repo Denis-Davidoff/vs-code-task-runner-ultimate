@@ -50,6 +50,10 @@ above it — so one list works unchanged across a mixed monorepo.
 - **Toggle on <kbd>Enter</kbd>** — start what is stopped, stop what is running; ⟳ or
   <kbd>Shift</kbd>+<kbd>Enter</kbd> restarts, with a cleared terminal.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
+- **Favorites** — star the two or three scripts you actually run and they pin to a group at the top
+  of the tree, above everything, without leaving the package they belong to.
+- **Rename any row** — `dev` becomes `API server`. Display only: the manifest is never edited, and
+  the real name stays visible beside it and searchable.
 - **A live badge** — the number of running tasks, on the toolbar icon, the panel and the status bar.
 - **Knows your runner** — npm, yarn, pnpm, bun and deno, detected per package, overridable.
 - **Real tasks, not typed-out terminal commands** — running state, stop and restart are reliable, and
@@ -81,10 +85,30 @@ there is the activity bar view, plus the status bar entry and the keyboard short
 
 ### The Task Runner view
 
-The activity bar icon opens a tree with the same content as the dropdown: a **Running** group on
-top, then one group per package. Clicking a row toggles it — run if stopped, stop if running — and
-each row has inline ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as
-a real VS Code badge.
+The activity bar icon opens a tree with the same content as the dropdown, in this order: **FAVORITES**
+first, then **Other tasks** — anything running that this extension did not start — then one group per
+package. Packages with something running float above the idle ones, and inside a group the running
+scripts float to the top, so whatever is alive is always the first thing on screen. Clicking a row
+toggles it — run if stopped, stop if running — and hovering one reveals inline ☆ / ▶ / ⟳ / ■ buttons.
+The count of running tasks rides on the activity bar icon as a real VS Code badge.
+
+Every group heading carries an icon for what it holds. ★ is FAVORITES, ∿ is the tasks this extension
+did not start, and a package group shows the runner its scripts will actually go through — so a
+monorepo mixing pnpm workspaces with a Deno service says so on the headings, before any script is
+read:
+
+| Icon | Group |
+| --- | --- |
+| ★ | FAVORITES |
+| ▣ | npm |
+| 🗄 | yarn |
+| ≣ | pnpm |
+| ⚡ | bun |
+| 🌐 | deno |
+| ∿ | Other tasks — running, but not from a manifest |
+
+The runner shown is the one that will be used, so a `taskRunnerUltimate.packageManager` override
+moves the icon with it.
 
 The view header holds four actions. **Restart all** (⟳) and **stop all** (◼) appear only while
 something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
@@ -94,6 +118,86 @@ this extension did not start.
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
 do "what the toolbar icon does". If you would rather have the dropdown anyway, set
 `taskRunnerUltimate.openDropdownFromActivityBar` to `true` and it opens as soon as the view is revealed.
+
+### Favorites
+
+The ☆ on a row — hover it, or right-click → **Add to Favorites** — pins that script to a
+**FAVORITES** group at the very top of the tree, above even the packages that have something
+running. In a monorepo the two or three scripts you actually use stop being buried under twenty you
+never touch.
+
+A favorite is a second way in, not a move: the script stays in its own package group as well. Since
+it is listed away from that group heading, the FAVORITES row says where it came from — the package's
+name, or the manifest path for a package that has none:
+
+```
+FAVORITES
+  ▶ dev      api · vite dev
+  ▶ dev      web · next dev
+  🧪 test    api · vitest run
+```
+
+Click ★ to unpin. Order is the order you starred things in — new stars go to the bottom, so the list
+stays where you put it.
+
+A starred script appears twice, and the two rows are independent: running it from FAVORITES and
+running it from its package group are the same task, and both rows spin. Stars live in the tree only
+— the dropdown keeps its own order, **Running** first and then package by package, so a favorite is
+not lifted to the top there.
+
+### Renaming a row
+
+Right-click a script → **Edit Title…** to call it whatever you actually call it. `dev` becomes
+`API server`, and the row keeps the real script name in the dimmed text beside it, so you can still
+see what runs:
+
+```
+▶ API server    dev · vite dev
+```
+
+The name in the manifest is never touched — this is a label on your side of the screen, not an edit
+to the project's `package.json`. The renamed script stays findable by its real name in the dropdown,
+which matches on that dimmed text too. Clear the input box to get the original name back.
+
+The rename follows the script everywhere it is listed: the dropdown, the FAVORITES group and its own
+package group all show the new title. The task terminal keeps the real name, since that is the one
+the package manager is given.
+
+### Reaching the row commands
+
+**Add to Favorites**, **Remove from Favorites** and **Edit Title…** all act on the row they were
+invoked from, so they live where there is a row to invoke them on:
+
+| Command | Where |
+| --- | --- |
+| Add to Favorites | ☆ inline on hover, and right-click |
+| Remove from Favorites | ★ inline on hover, and right-click |
+| Edit Title… | right-click only — a rename is rare enough not to earn a permanent button |
+
+All three are deliberately hidden from the command palette, which has no row to hand them. The
+palette keeps the four that stand on their own: **Show Scripts**, **Refresh Scripts**, **Stop All
+Running Tasks** and **Restart All Running Tasks**.
+
+### Where favorites and titles are stored
+
+In VS Code's own workspace storage (`ExtensionContext.workspaceState`), under the keys `favorites`
+and `titles` — not in your `package.json`, and not in `.vscode/settings.json`. That storage is
+already scoped to this extension and this workspace, so neither key can collide with anything and
+neither shows up in a diff.
+
+Starring a script is a personal note about a file the project owns, so the alternatives both have a
+cost: the manifest is shared with everyone who clones the repo, and a setting would rewrite
+`settings.json` on every click. Workspace storage keeps it out of both, at the price of it being
+per-workspace and per-machine — a second computer starts with an empty FAVORITES.
+
+Scripts are matched back by the workspace folder's name plus the manifest path inside it plus the
+script name — `my-app/packages/api/package.json::dev` — rather than by absolute path. Moving the
+whole project somewhere else on disk therefore keeps every star and every title; *renaming* the
+folder does not.
+
+A favorite whose manifest is temporarily out of the workspace is hidden, not forgotten: it stays in
+storage and comes back with its folder. Deleting the script for real leaves a dead entry that costs
+nothing and never shows.
 
 ## In the dropdown
 

@@ -155,7 +155,19 @@ function invalidate(): void {
   void activePicker?.reload();
 }
 
+/**
+ * Repaints both surfaces from the scripts already in hand. For changes to how a
+ * script is presented — starred, renamed — where the manifests themselves have
+ * not moved and a rescan would be wasted work.
+ */
+function repaint(): void {
+  treeChanged.fire();
+  activePicker?.refresh();
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  storage = context.workspaceState;
+
   for (const exec of vscode.tasks.taskExecutions) {
     const key = keyForTask(exec.task);
     if (key) {
@@ -178,6 +190,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.stopItem', (node?: TreeNode) => stopNode(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.restartItem', (node?: TreeNode) => restartNode(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.toggleItem', (node?: TreeNode) => toggleNode(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.addFavorite', (node?: TreeNode) => setFavorite(node, true)),
+    vscode.commands.registerCommand('taskRunnerUltimate.removeFavorite', (node?: TreeNode) => setFavorite(node, false)),
+    vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
@@ -284,11 +299,124 @@ function keyForTask(task: vscode.Task): string | undefined {
   return undefined;
 }
 
+// --- favorites and custom titles ---------------------------------------------
+
+/**
+ * Both annotate a script that lives in a file we do not own — a package.json is
+ * the project's, often someone else's, and a starred or renamed script must not
+ * show up in its diff. They go to the workspace's own storage instead:
+ * per-workspace, per-machine, invisible to git, and disposed with the workspace.
+ *
+ * The trade-off is that neither travels: a second machine starts with an empty
+ * FAVORITES, and a team cannot share one. Moving either to a setting would buy
+ * that at the cost of rewriting settings.json on every click of a star.
+ */
+const FAVORITES_KEY = 'favorites';
+const TITLES_KEY = 'titles';
+
+let storage: vscode.Memento | undefined;
+
+/**
+ * Storage identity of a script — the namespace it belongs to plus its name,
+ * e.g. `my-app/packages/api/package.json::dev`. Deliberately not the absolute
+ * URI `ScriptEntry.key` uses: that one is rebuilt on every scan and is fine as a
+ * runtime handle, but a workspace moved to another path on disk would lose all
+ * of its favorites.
+ */
+function scriptRef(script: ScriptEntry): string {
+  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
+  const where = folder ? `${folder.name}/${script.location}` : script.manifest.toString();
+  return `${where}::${script.name}`;
+}
+
+function favoriteRefs(): string[] {
+  const stored = storage?.get<unknown>(FAVORITES_KEY);
+  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+}
+
+function isFavorite(script: ScriptEntry): boolean {
+  return favoriteRefs().includes(scriptRef(script));
+}
+
+/**
+ * The favorites in the order they were starred, resolved against the current
+ * scan. A ref that resolves to nothing is skipped but kept in storage — the
+ * script may be behind a closed workspace folder, and dropping it here would
+ * quietly delete a favorite the user still wants.
+ */
+function favoriteScripts(scripts: ScriptEntry[]): ScriptEntry[] {
+  const byRef = new Map(scripts.map((script) => [scriptRef(script), script]));
+  return favoriteRefs()
+    .map((ref) => byRef.get(ref))
+    .filter((script): script is ScriptEntry => script !== undefined);
+}
+
+async function setFavorite(node: TreeNode | undefined, favorite: boolean): Promise<void> {
+  if (node?.kind !== 'script') {
+    return;
+  }
+  const ref = scriptRef(node.script);
+  const refs = favoriteRefs().filter((item) => item !== ref);
+  if (favorite) {
+    refs.push(ref);
+  }
+  await storage?.update(FAVORITES_KEY, refs);
+  repaint();
+}
+
+function customTitles(): Record<string, string> {
+  const stored = storage?.get<unknown>(TITLES_KEY);
+  return stored && typeof stored === 'object' && !Array.isArray(stored)
+    ? (stored as Record<string, string>)
+    : {};
+}
+
+function customTitle(script: ScriptEntry): string | undefined {
+  const title = customTitles()[scriptRef(script)];
+  return typeof title === 'string' && title ? title : undefined;
+}
+
+/** What the lists show for a script: the user's title if it has one, else its name. */
+function displayName(script: ScriptEntry): string {
+  return customTitle(script) ?? script.name;
+}
+
+/**
+ * Renames a script for display only. The manifest is never touched: the name in
+ * it is what the package manager is asked to run, so rewriting it would either
+ * break the script or force a change to a file the user did not ask us to edit.
+ */
+async function editTitle(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'script') {
+    return;
+  }
+  const script = node.script;
+  const entered = await vscode.window.showInputBox({
+    title: `Rename "${script.name}"`,
+    prompt: 'Shown in this list only — the script in the manifest keeps its name. Leave empty to restore it.',
+    value: displayName(script),
+    placeHolder: script.name,
+  });
+  if (entered === undefined) {
+    return;
+  }
+
+  const titles = { ...customTitles() };
+  const title = entered.trim();
+  if (title && title !== script.name) {
+    titles[scriptRef(script)] = title;
+  } else {
+    delete titles[scriptRef(script)];
+  }
+  await storage?.update(TITLES_KEY, titles);
+  repaint();
+}
+
 // --- activity bar tree -------------------------------------------------------
 
 type TreeNode =
-  | { kind: 'group'; label: string; detail?: string; folder?: string; children: TreeNode[] }
-  | { kind: 'script'; script: ScriptEntry }
+  | { kind: 'group'; id: string; label: string; detail?: string; folder?: string; icon?: string; children: TreeNode[] }
+  | { kind: 'script'; script: ScriptEntry; inFavorites?: boolean }
   | { kind: 'foreign'; execution: vscode.TaskExecution };
 
 const treeChanged = new vscode.EventEmitter<void>();
@@ -346,9 +474,11 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       group = {
         node: {
           kind: 'group',
+          id: `group:${key}`,
           label: packageTitle(script),
           detail: packagePath(script),
           folder: packageFolder(script),
+          icon: groupIcon(script),
           children: [],
         },
         hasRunning: false,
@@ -380,8 +510,26 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   if (foreign.length > 0) {
     roots.unshift({
       kind: 'group',
+      id: 'group:foreign',
       label: `Other tasks (${foreign.length})`,
+      // Nothing here comes from a manifest, so there is no runner to name. What
+      // the group has in common is that all of it is already running.
+      icon: 'pulse',
       children: foreign.map((execution): TreeNode => ({ kind: 'foreign', execution })),
+    });
+  }
+
+  // Favorites sit above everything, including running groups: a pinned list is
+  // only worth pinning if it does not move. The scripts stay in their own group
+  // as well — this is a second way in, not a way out of the package it lives in.
+  const favorites = favoriteScripts(scripts);
+  if (favorites.length > 0) {
+    roots.unshift({
+      kind: 'group',
+      id: 'group:favorites',
+      label: 'Favorites',
+      icon: 'star-full',
+      children: favorites.map((script): TreeNode => ({ kind: 'script', script, inFavorites: true })),
     });
   }
 
@@ -396,7 +544,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // The folder is part of the label rather than a description on purpose: the
     // decoration below tints the whole label, so an arrow-joined title keeps one
     // colour across the row instead of a tinted title beside a dimmed path.
-    const heading = node.folder ? `${title} → ${node.folder.toUpperCase()}` : title;
+    //
+    // It stays lower-case against the upper-cased title: both halves carry the
+    // same colour, so case is the only thing left to separate the name from the
+    // path it lives at — and a path reads as a path in the case it is typed in.
+    const heading = node.folder ? `${title} → ${node.folder.toLowerCase()}` : title;
     const item = new vscode.TreeItem(heading, vscode.TreeItemCollapsibleState.Expanded);
     item.tooltip = node.detail ? `${node.label} — ${node.detail}` : node.label;
     // A resourceUri makes the row eligible for a file decoration, the only API
@@ -408,6 +560,10 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // be tinted too. The path therefore lives in the tooltip and the row shows
     // the title alone — that keeps the colour on the title and nothing else.
     item.resourceUri = vscode.Uri.from({ scheme: DECORATION_SCHEME, path: `/${node.detail ?? node.label}` });
+    if (node.icon) {
+      item.iconPath = new vscode.ThemeIcon(node.icon, new vscode.ThemeColor(TITLE_COLOR));
+    }
+    item.id = node.id;
     item.contextValue = 'group';
     return item;
   }
@@ -422,17 +578,51 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   }
 
   const isRunning = running.has(node.script.key);
-  const item = new vscode.TreeItem(node.script.name);
-  item.description = node.script.command;
+  const item = new vscode.TreeItem(displayName(node.script));
+  // A starred script is on screen twice, under FAVORITES and in its own group.
+  // Without ids of its own the tree cannot tell the two rows apart, and the
+  // selection would jump between them. Built from the absolute `key` rather than
+  // the storage ref, which trades uniqueness for portability.
+  item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
+  item.description = scriptDescription(node.script, node.inFavorites);
   item.tooltip = `${commandFor(node.script)}\n${node.script.location}`;
   item.iconPath = iconFor(node.script, isRunning);
-  item.contextValue = isRunning ? 'runningScript' : 'idleScript';
+  // Three independent axes in one value, matched a piece at a time by the
+  // `when` clauses in contributes.menus.
+  item.contextValue = `script:${isRunning ? 'running' : 'idle'}:${isFavorite(node.script) ? 'fav' : 'nofav'}`;
   item.command = {
     command: 'taskRunnerUltimate.toggleItem',
     title: isRunning ? 'Stop' : 'Run',
     arguments: [node],
   };
   return item;
+}
+
+/**
+ * Dimmed text after the label, in the tree and in the picker alike. The command
+ * is always in it; the rest adds back whatever the label stopped saying — the
+ * real script name once the row has been renamed, and the package it belongs to
+ * once it is listed under FAVORITES, away from the group heading that would
+ * otherwise answer that.
+ *
+ * Keeping the manifest's own name here is also what leaves a renamed script
+ * findable by it: the picker matches on the description too.
+ */
+function scriptDescription(script: ScriptEntry, inFavorites = false): string {
+  const parts: string[] = [];
+  if (customTitle(script)) {
+    parts.push(script.name);
+  }
+  if (inFavorites) {
+    parts.push(packageOrigin(script));
+  }
+  parts.push(script.command);
+  return parts.join(' · ');
+}
+
+/** Namespace a script belongs to: its package's name, or where the manifest lives. */
+function packageOrigin(script: ScriptEntry): string {
+  return script.packageName ?? packagePath(script);
 }
 
 // --- script categories -------------------------------------------------------
@@ -478,6 +668,33 @@ function iconFor(script: ScriptEntry, isRunning: boolean): vscode.ThemeIcon {
   const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   const color = category && colored ? new vscode.ThemeColor(category.color) : undefined;
   return new vscode.ThemeIcon(isRunning ? 'sync~spin' : category?.icon ?? 'play', color);
+}
+
+/**
+ * Codicon per runner, shown at the head of a group row so a package says how its
+ * scripts will be launched before any of them is read — the same job the star
+ * does for FAVORITES.
+ *
+ * Each is a property of the runner rather than its logo, since codicons carry no
+ * brand marks: npm's registry package, yarn's zipped caches, pnpm's layered
+ * content store, bun's speed, deno's web-standard runtime. They are meant to be
+ * told apart at a glance, not recognised.
+ */
+const MANAGER_ICONS: Record<PackageManager, string> = {
+  npm: 'package',
+  yarn: 'archive',
+  pnpm: 'layers',
+  bun: 'zap',
+  deno: 'globe',
+};
+
+/**
+ * Icon for a group row. Every script in a group shares a manifest, so any one of
+ * them resolves to the runner the whole group goes through — including a
+ * `packageManager` override, which is what will really be executed.
+ */
+function groupIcon(script: ScriptEntry): string {
+  return MANAGER_ICONS[resolvePackageManager(script)];
 }
 
 /** Highlighted part of a group row: the package's own name, or where it lives if it has none. */
@@ -685,8 +902,8 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
 
     for (const script of runningScripts) {
       items.push({
-        label: `$(sync~spin) ${script.name}`,
-        description: script.command,
+        label: `$(sync~spin) ${displayName(script)}`,
+        description: scriptDescription(script),
         detail: multiPackage ? packageLabel(script) : undefined,
         buttons: [restartButton(true), stopButton()],
         script,
@@ -716,8 +933,8 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
     items.push({
       // Quick pick labels take a codicon but no colour, so the category shows
       // through the glyph alone here.
-      label: `$(${categoryFor(script)?.icon ?? 'play'}) ${script.name}`,
-      description: script.command,
+      label: `$(${categoryFor(script)?.icon ?? 'play'}) ${displayName(script)}`,
+      description: scriptDescription(script),
       buttons: [restartButton(false)],
       script,
     });
