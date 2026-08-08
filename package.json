@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task Runner Manager🏆",
   "description": "One list for every task in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -716,6 +716,16 @@
           "light": "#B58900",
           "highContrast": "#F0C674",
           "highContrastLight": "#8F6A00"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.runningForeground",
+        "description": "Colour of the spinner on a task that is currently running in the Task Runner view.",
+        "defaults": {
+          "dark": "#4CE64C",
+          "light": "#1A9E1A",
+          "highContrast": "#5AFF5A",
+          "highContrastLight": "#0A6B0A"
         }
       },
       {

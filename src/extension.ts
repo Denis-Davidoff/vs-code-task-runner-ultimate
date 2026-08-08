@@ -641,6 +641,12 @@ type TreeNode =
       label: string;
       detail?: string;
       folder?: string;
+      /**
+       * Whether the manifest sits at the root of its workspace folder. Only that
+       * one heading is dressed up for the tree; everything nested keeps the name
+       * its own manifest gives it.
+       */
+      root?: boolean;
       icon?: string;
       /** Drag scope of its rows, absent for a group nothing can be dropped in. */
       scope?: string;
@@ -669,6 +675,21 @@ const GROUP_ICON = 'layers';
 /** Private URI scheme for group rows, so decorations cannot hit real files. */
 const DECORATION_SCHEME = 'taskrunnerultimate';
 const TITLE_COLOR = 'taskRunnerUltimate.sourceTitleForeground';
+
+/**
+ * The spinner's colour, shared by every running row. A category colour says what
+ * kind of script a row is, which is the one thing a spinning row is not being
+ * asked; while it runs the icon answers "this one is busy" instead.
+ *
+ * A bright, saturated green — brighter than any category colour, because a
+ * running row is the one thing in the tree worth finding at a glance and it has
+ * to win against six of them sitting in the same column. It is close in hue to
+ * the muted green `category.run` wears, which costs nothing: the two never show
+ * at once on the same row, and the glyph has already changed from play to
+ * spinner by then. The light default is a darker green of the same hue — a full
+ * one on white is barely there.
+ */
+const RUNNING_COLOR = 'taskRunnerUltimate.runningForeground';
 
 /**
  * The tree's own drag type. VS Code lower-cases mime types, so the view id is
@@ -883,6 +904,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
           label: manifestTitle(script),
           detail: packagePath(script),
           folder: packageFolder(script),
+          root: script.directory === '',
           icon: GROUP_ICON,
           scope: groupRef(script),
           ref: groupRef(script),
@@ -941,22 +963,24 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
 
 function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
-    // Group rows are upper-cased with separators opened up; the tooltip keeps
-    // the name exactly as written in the manifest.
+    // Exactly one heading is dressed up: the workspace root's. It is the tree's
+    // masthead, it is the one name that is usually the repository rather than a
+    // package, and `task-runner-ultimate` is nobody's idea of a title.
     //
-    // A title the user typed is only upper-cased, never opened up: `-` and `_`
-    // are worth turning into spaces in `my-app`, which nobody chose to read, and
-    // are a decision in `web-ui`, which somebody did.
+    // Every other heading is left alone. A nested package spells its own name in
+    // its own package.json, and a group named after a directory spells it the
+    // way the directory is spelled — `@acme/web-ui` and `iOS` are decisions, and
+    // a title case that walks over them makes the tree disagree with the disk
+    // about what things are called. So is a title the user typed by hand.
     const custom = node.ref ? storedTitle(node.ref) : undefined;
-    const title = custom ? custom.toUpperCase() : node.label.toUpperCase().replace(/[-_]+/g, ' ');
+    const title = custom ?? (node.root ? headingTitle(node.label) : node.label);
     // The folder is part of the label rather than a description on purpose: the
     // decoration below tints the whole label, so an arrow-joined title keeps one
     // colour across the row instead of a tinted title beside a dimmed path.
     //
-    // It stays lower-case against the upper-cased title: both halves carry the
-    // same colour, so case is the only thing left to separate the name from the
-    // path it lives at — and a path reads as a path in the case it is typed in.
-    const heading = node.folder ? `${title} → ${node.folder.toLowerCase()}` : title;
+    // It is spelled as it is on disk, for the same reason: it is a path, and a
+    // path that has been re-cased is a path you cannot paste into a terminal.
+    const heading = node.folder ? `${title} → ${node.folder}` : title;
     const item = new vscode.TreeItem(heading, vscode.TreeItemCollapsibleState.Expanded);
     // The tooltip is where the manifest's own name survives a rename. A script
     // row keeps it in the dimmed description instead, which a heading cannot
@@ -984,7 +1008,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'foreign') {
     const item = new vscode.TreeItem(node.execution.task.name);
     item.description = node.execution.task.source ? `${node.execution.task.source} task` : 'task';
-    item.iconPath = new vscode.ThemeIcon('sync~spin');
+    item.iconPath = runningIcon();
     item.contextValue = 'foreignTask';
     item.command = { command: 'taskRunnerUltimate.toggleItem', title: 'Stop', arguments: [node] };
     return item;
@@ -1077,10 +1101,37 @@ function userCategories(): CategoryRule[] {
 }
 
 function iconFor(script: ScriptEntry, isRunning: boolean): vscode.ThemeIcon {
+  if (isRunning) {
+    return runningIcon();
+  }
   const category = categoryFor(script);
   const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   const color = category && colored ? new vscode.ThemeColor(category.color) : undefined;
-  return new vscode.ThemeIcon(isRunning ? 'sync~spin' : category?.icon ?? 'play', color);
+  return new vscode.ThemeIcon(category?.icon ?? 'play', color);
+}
+
+/**
+ * The spinner every running row shows, ours and the tasks other extensions
+ * started alike. It follows `colorIcons` with the category colours it replaces:
+ * the setting promises every icon in the default foreground, and a row that
+ * opted out of colour did not opt out of it only while idle.
+ */
+function runningIcon(): vscode.ThemeIcon {
+  const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
+  return new vscode.ThemeIcon('sync~spin', colored ? new vscode.ThemeColor(RUNNING_COLOR) : undefined);
+}
+
+/**
+ * The root manifest's name dressed as a heading: `-` and `_` opened up into the
+ * spaces they stand in for, and every word started on a capital — `my-app` reads
+ * as `My App`. Nested groups never come through here.
+ *
+ * Only the first letter of a word is touched. The rest is the author's spelling,
+ * and lower-casing it would cost `webUI` and `iOS` the very thing that makes
+ * them legible.
+ */
+function headingTitle(label: string): string {
+  return label.replace(/[-_]+/g, ' ').replace(/\S+/g, (word) => word[0].toUpperCase() + word.slice(1));
 }
 
 /**
