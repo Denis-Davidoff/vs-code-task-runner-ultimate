@@ -6,8 +6,8 @@ restart without ever going looking for a terminal tab.**
 ![Task Runner Manager in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
 - 📋 **[A panel in the left bar](#the-task-runner-manager-view)** — every task of the workspace as a
-  tree, grouped by the manifest it came from. Running tasks float to the top of their group and the
-  number of them rides on the activity bar icon as a real VS Code badge.
+  tree, grouped by the manifest it came from. Groups with something running float to the top and the
+  number of running tasks rides on the activity bar icon as a real VS Code badge.
 - ⚡ **[A button in every editor's toolbar](#-in-the-toolbar-of-every-file)** — the ▶ icon, carrying
   a live badge with how many tasks are running, so the watcher you forgot about stays in the corner
   of your eye instead of hiding in a stack of terminals.
@@ -21,6 +21,8 @@ restart without ever going looking for a terminal tab.**
   manifest is never edited, and the real name stays visible beside it and searchable.
 - ⭐ **[Favorites](#favorites)** — star the two or three scripts you actually run and they pin to a
   group at the very top, above everything, without leaving the package they belong to.
+- ↕️ **[Drag rows into the order you want](#reordering-rows)** — inside a package or inside
+  FAVORITES. The order is remembered per workspace and the manifests are never edited.
 - 🎨 **Colour and an icon per task** — ▶ for dev servers, a beaker for tests, a rocket for releases,
   a database for migrations, decided by what the task really runs — and [your own rules](#settings)
   come first.
@@ -59,8 +61,9 @@ the editor, the terminal, anywhere. Both defaults were picked because VS Code le
 
 Always there, whatever the active editor is: every task of every manifest, **grouped by the file it
 came from**, each row carrying **its own icon and colour** for what it actually does — ▶ for dev
-servers, a beaker for tests, a rocket for releases, a database for migrations. Running tasks spin at
-the top of their group, and the count rides on the activity bar icon as a real VS Code badge.
+servers, a beaker for tests, a rocket for releases, a database for migrations. A running task spins
+where it stands, groups with something running float to the top, and the count rides on the activity
+bar icon as a real VS Code badge.
 
 Two buttons appear in the panel header the moment anything is running: **stop everything** and
 **restart everything**. Killing five watchers before a rebase, or bringing the whole stack back up
@@ -184,47 +187,42 @@ there is the activity bar view, plus the status bar entry and the keyboard short
 
 The activity bar icon opens a tree with the same content as the dropdown, in this order: **FAVORITES**
 first, then **Other tasks** — anything running that this extension did not start — then one group per
-manifest. Groups with something running float above the idle ones, and inside a group the running
-tasks float to the top, so whatever is alive is always the first thing on screen. Clicking a row
-toggles it — run if stopped, stop if running — and hovering one reveals inline ☆ / ▶ / ⟳ / ■ buttons.
-The count of running tasks rides on the activity bar icon as a real VS Code badge.
+manifest. Groups with something running float above the idle ones, so whatever is alive is on screen
+without scrolling; inside a group nothing moves — a running task spins in the place it has always
+had, because a row that jumps when you start it is a row you have to find again to stop it. Clicking
+a row toggles it — run if stopped, stop if running — and hovering one reveals inline
+☆ / ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as a real VS Code
+badge.
 
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
 `justfile` side by side gets three, each headed by its file name and the folder it sits in. A
 manifest that names its package — `name` in a `package.json`, `[package] name` in a `Cargo.toml`,
 `module` in a `go.mod` — is headed by that name instead.
 
-Every group heading also carries an icon for what it holds. ★ is FAVORITES, ∿ is the tasks this
-extension did not start, and everything else says which tool its rows will actually go through — so
-a monorepo mixing pnpm workspaces with a Deno service and a cargo crate says so on the headings,
-before any row is read:
-
-| Icon | Group |
-| --- | --- |
-| ★ | FAVORITES |
-| ▣ | npm |
-| 🗄 | yarn |
-| ≣ | pnpm |
-| ⚡ | bun |
-| 🌐 | deno |
-| ⚙ | cargo, cargo-make |
-| 🛠 | poetry, pdm, hatch, rye, poe, pipenv |
-| 🧪 | tox, nox |
-| ▤ | make |
-| ☑ | just |
-| ≡ | go-task |
-| ⌗ | go |
-| ⟨⟩ | composer |
-| ⧉ | mise |
-| ∿ | Other tasks — running, but not from a manifest |
-
-For a Node package the runner shown is the one that will be used, so a
-`taskRunnerUltimate.packageManager` override moves the icon with it.
+Every group heading carries an icon for what it is: ★ for FAVORITES, ∿ for the tasks this extension
+did not start, and a stack (≣) for a package — the pile of tasks the heading opens into. The rows
+underneath are the ones that vary, each with its own colour and glyph, so the headings stay one
+quiet shape down the left edge instead of competing with them.
 
 The view header holds four actions. **Restart all** (⟳) and **stop all** (◼) appear only while
 something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
-**refresh** (↻) are always there. Stop-all and restart-all reach every running task, including ones
+the **menu** (☰) are always there. Stop-all and restart-all reach every running task, including ones
 this extension did not start.
+
+### The menu
+
+The ☰ in the view header opens everything that is not aimed at one row:
+
+| Entry | What it does |
+| --- | --- |
+| **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
+| **Reset all titles** | Every [renamed](#renaming-a-row) row goes back to the name its manifest gives it. |
+| **Reset sort order** | Every list goes back to the order its manifest declares, undoing [the drags](#reordering-rows). |
+| **Remove favorites** | Empties FAVORITES. The tasks stay where they are, in their own packages. |
+
+Each entry says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `5 starred` —
+and the three resets ask once before they do it. Refresh is also in the command palette under
+**Task Runner Manager: Refresh Scripts**.
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
 do "what the toolbar icon does". If you would rather have the dropdown anyway, set
@@ -249,13 +247,30 @@ FAVORITES
 ```
 
 Click ★ to unpin. Order is the order you starred things in — new stars go to the bottom, so the list
-stays where you put it.
+stays where you put it — and it can be [dragged](#reordering-rows) into any other order.
 
 In the tree a starred script appears twice, and the two rows are independent: running it from
 FAVORITES and running it from its package group are the same task, and both rows spin. The dropdown
 puts it at the top too, but lists it **once** — flattened into a single list, a second copy four rows
 down reads as a duplicate rather than as a shortcut, so the row is lifted out of its package and
 says where it came from instead.
+
+### Reordering rows
+
+Drag a row in the tree to put it where you want it. A manifest lists its tasks in whatever order they
+were written in, which is rarely the order you use them in — so `dev` can sit at the top of its
+package even if it is the eleventh script in the `package.json`.
+
+A drag stays inside the list it started in. The tree's groups are the manifests on disk, and no
+gesture in a sidebar can move a script from one `package.json` to another, so a row dropped on
+another group is ignored rather than half-honoured. Dropping on a group heading sends the row to the
+end of that group. FAVORITES is a list of its own and reorders the same way.
+
+The order lives in the workspace's own storage, next to the stars and the renames — the manifests
+themselves are never rewritten, so nothing shows up in `git status` and nobody else on the team
+inherits your ordering. A task added to the manifest later keeps the neighbour it has there, sorting
+in right below the row it follows in the file rather than appearing at the bottom of a list you
+arranged months ago. **Reset sort order** in [the menu](#the-menu) puts everything back.
 
 ### Renaming a row
 
@@ -287,15 +302,15 @@ invoked from, so they live where there is a row to invoke them on:
 | Edit Title… | right-click only — a rename is rare enough not to earn a permanent button |
 
 All three are deliberately hidden from the command palette, which has no row to hand them. The
-palette keeps the four that stand on their own: **Show Scripts**, **Refresh Scripts**, **Stop All
-Running Tasks** and **Restart All Running Tasks**.
+palette keeps the five that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
+**Stop All Running Tasks** and **Restart All Running Tasks**.
 
-### Where favorites and titles are stored
+### Where favorites, titles and order are stored
 
-In VS Code's own workspace storage (`ExtensionContext.workspaceState`), under the keys `favorites`
-and `titles` — not in your `package.json`, and not in `.vscode/settings.json`. That storage is
-already scoped to this extension and this workspace, so neither key can collide with anything and
-neither shows up in a diff.
+In VS Code's own workspace storage (`ExtensionContext.workspaceState`), under the keys `favorites`,
+`titles` and `order` — not in your `package.json`, and not in `.vscode/settings.json`. That storage
+is already scoped to this extension and this workspace, so no key can collide with anything and none
+of them show up in a diff. [The menu](#the-menu) empties any one of the three.
 
 Starring a script is a personal note about a file the project owns, so the alternatives both have a
 cost: the manifest is shared with everyone who clones the repo, and a setting would rewrite
@@ -334,9 +349,9 @@ Makefile ───────────────────────�
 ```
 
 Favorites first, then anything running that did not come from a manifest, then one block per
-manifest — manifests with something running above the idle ones, and running tasks at the top of
-their block. On a workspace with a single manifest and nothing starred the headings are dropped
-entirely, since the only one there would be repeating the picker's own title.
+manifest — manifests with something running above the idle ones, and inside a block the order the
+tree shows, drags and all. On a workspace with a single manifest and nothing starred the headings
+are dropped entirely, since the only one there would be repeating the picker's own title.
 
 | Action | Effect |
 | --- | --- |

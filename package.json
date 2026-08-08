@@ -1,8 +1,8 @@
 {
   "name": "task-runner-ultimate",
   "displayName": "Task Runner 🏆 Manager",
-  "description": "Every task in your workspace in one list: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Run, stop, restart, favorite, edit titles.",
-  "version": "0.3.1",
+  "description": "Run and manage every task in your workspace in one list: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Run, stop, restart, favorite, edit titles.",
+  "version": "0.4.0",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -21,8 +21,12 @@
     "run npm script",
     "package.json scripts",
     "task runner",
+    "run manager",
     "tasks",
     "task manager",
+    "run task",
+    "run script",
+    "npm run",
     "package manager",
     "script manager",
     "script runner",
@@ -234,6 +238,12 @@
         "icon": "$(edit)"
       },
       {
+        "command": "taskRunnerUltimate.menu",
+        "title": "Menu",
+        "category": "Task Runner Manager",
+        "icon": "$(menu)"
+      },
+      {
         "command": "taskRunnerUltimate.stopAll",
         "title": "Stop All Running Tasks",
         "category": "Task Runner Manager",
@@ -381,7 +391,7 @@
           "when": "view == taskRunnerUltimate.tree"
         },
         {
-          "command": "taskRunnerUltimate.refresh",
+          "command": "taskRunnerUltimate.menu",
           "group": "navigation@4",
           "when": "view == taskRunnerUltimate.tree"
         }

@@ -154,37 +154,6 @@ export const WATCH_GLOB = `**/{${[
   ]),
 ].join(',')}}`;
 
-/** Codicon per Node runner, shown at the head of a group row. */
-const MANAGER_ICONS: Record<PackageManager, string> = {
-  npm: 'package',
-  yarn: 'archive',
-  pnpm: 'layers',
-  bun: 'zap',
-  deno: 'globe',
-};
-
-/**
- * Codicon per source kind, for everything that is not a Node package. Each says
- * which tool the group's rows will go through, the same job MANAGER_ICONS does
- * for npm and friends.
- */
-const KIND_ICONS: Record<SourceKind, string> = {
-  npm: 'package',
-  deno: 'globe',
-  composer: 'symbol-namespace',
-  cargo: 'gear',
-  'cargo-make': 'gear',
-  pyproject: 'tools',
-  pipfile: 'tools',
-  tox: 'beaker',
-  nox: 'beaker',
-  make: 'terminal',
-  just: 'checklist',
-  taskfile: 'list-ordered',
-  go: 'circuit-board',
-  mise: 'versions',
-};
-
 export interface ScriptEntry {
   /** Stable identity of a task: its manifest plus the task name. */
   key: string;
@@ -1278,13 +1247,6 @@ function shellArg(name: string): string {
 
 export function commandFor(script: ScriptEntry): string {
   return script.exec ?? RUNNERS[resolvePackageManager(script)](shellArg(script.name));
-}
-
-/** Icon for a group row: the tool its tasks will actually go through. */
-export function groupIcon(script: ScriptEntry): string {
-  return script.kind === 'npm' || script.kind === 'deno'
-    ? MANAGER_ICONS[resolvePackageManager(script)]
-    : KIND_ICONS[script.kind];
 }
 
 export function resolvePackageManager(script: ScriptEntry): PackageManager {

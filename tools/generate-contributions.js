@@ -246,6 +246,7 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task Runner Manager', icon: '$(star-empty)' },
   { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task Runner Manager', icon: '$(star-full)' },
   { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task Runner Manager', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task Runner Manager', icon: '$(menu)' },
   {
     command: 'taskRunnerUltimate.stopAll',
     title: 'Stop All Running Tasks',
@@ -284,7 +285,9 @@ manifest.contributes.menus = {
       when: 'view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0',
     },
     { command: 'taskRunnerUltimate.show', group: 'navigation@3', when: 'view == taskRunnerUltimate.tree' },
-    { command: 'taskRunnerUltimate.refresh', group: 'navigation@4', when: 'view == taskRunnerUltimate.tree' },
+    // Refresh lives inside the menu: it is the rarest of the header actions, and
+    // the command palette still has it under its own name.
+    { command: 'taskRunnerUltimate.menu', group: 'navigation@4', when: 'view == taskRunnerUltimate.tree' },
   ],
   // Script rows carry a composed contextValue — `script:<idle|running>:<fav|nofav>`
   // (see `treeItemFor`) — so a `when` clause can match on any one of the three

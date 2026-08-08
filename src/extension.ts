@@ -1,14 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import {
-  collectScripts,
-  commandFor,
-  groupIcon,
-  resetSources,
-  scriptKey,
-  ScriptEntry,
-  WATCH_GLOB,
-} from './sources';
+import { collectScripts, commandFor, resetSources, scriptKey, ScriptEntry, WATCH_GLOB } from './sources';
 
 /** Task type used for the tasks this extension executes. Must match contributes.taskDefinitions. */
 const TASK_TYPE = 'taskRunnerUltimate';
@@ -156,11 +148,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('taskRunnerUltimate.show', showScriptPicker),
     vscode.commands.registerCommand('taskRunnerUltimate.restartActive', restartActiveItem),
-    vscode.commands.registerCommand('taskRunnerUltimate.refresh', async () => {
-      invalidate();
-      await collectScripts();
-      vscode.window.setStatusBarMessage('Task Runner Manager: reloaded', 2000);
-    }),
+    vscode.commands.registerCommand('taskRunnerUltimate.refresh', refreshScripts),
     // One command per badge count: the toolbar icon is static, so the visible
     // entry is swapped via the runningCount context key (see contributes.menus).
     ...badgeCommandIds().map((id) => vscode.commands.registerCommand(id, showScriptPicker)),
@@ -171,6 +159,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.addFavorite', (node?: TreeNode) => setFavorite(node, true)),
     vscode.commands.registerCommand('taskRunnerUltimate.removeFavorite', (node?: TreeNode) => setFavorite(node, false)),
     vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.menu', showMenu),
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
@@ -292,20 +281,29 @@ function keyForTask(task: vscode.Task): string | undefined {
  */
 const FAVORITES_KEY = 'favorites';
 const TITLES_KEY = 'titles';
+const ORDER_KEY = 'order';
 
 let storage: vscode.Memento | undefined;
 
 /**
- * Storage identity of a script — the namespace it belongs to plus its name,
+ * Storage identity of the group a script belongs to — its manifest, named the
+ * way the workspace sees it, e.g. `my-app/packages/api/package.json`. Doubles as
+ * the scope a drag is allowed to move a script inside of.
+ */
+function groupRef(script: ScriptEntry): string {
+  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
+  return folder ? `${folder.name}/${script.location}` : script.manifest.toString();
+}
+
+/**
+ * Storage identity of a script — the group it belongs to plus its name,
  * e.g. `my-app/packages/api/package.json::dev`. Deliberately not the absolute
  * URI `ScriptEntry.key` uses: that one is rebuilt on every scan and is fine as a
  * runtime handle, but a workspace moved to another path on disk would lose all
  * of its favorites.
  */
 function scriptRef(script: ScriptEntry): string {
-  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
-  const where = folder ? `${folder.name}/${script.location}` : script.manifest.toString();
-  return `${where}::${script.name}`;
+  return `${groupRef(script)}::${script.name}`;
 }
 
 function favoriteRefs(): string[] {
@@ -391,19 +389,313 @@ async function editTitle(node: TreeNode | undefined): Promise<void> {
   repaint();
 }
 
+// --- manual order ------------------------------------------------------------
+
+/** The Favorites group as a drag scope. No manifest ref can collide: they all
+ * start with a folder or scheme name, never with the separator. */
+const FAVORITES_SCOPE = '::favorites';
+
+/** Scope -> the script refs in it, in the order the user dragged them into. */
+function manualOrders(): Record<string, string[]> {
+  const stored = storage?.get<unknown>(ORDER_KEY);
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
+    return {};
+  }
+  const orders: Record<string, string[]> = {};
+  for (const [scope, refs] of Object.entries(stored as Record<string, unknown>)) {
+    if (Array.isArray(refs)) {
+      orders[scope] = refs.filter((ref): ref is string => typeof ref === 'string');
+    }
+  }
+  return orders;
+}
+
+/**
+ * The scan with the user's drags applied: inside a manifest the stored order
+ * wins, and the manifests themselves stay where the scan put them.
+ *
+ * A script the stored order has never seen — one just added to the manifest —
+ * keeps the neighbour it has there, sorting in right below the last script above
+ * it that the order does know. Appending it to the bottom instead would hide a
+ * new script under a list the user last touched weeks ago.
+ */
+function orderedScripts(scripts: ScriptEntry[]): ScriptEntry[] {
+  const orders = manualOrders();
+  if (Object.keys(orders).length === 0) {
+    return scripts;
+  }
+
+  // Positions each group occupies in the flat list. Rewriting only those slots
+  // permutes a group internally and leaves every other group untouched.
+  const slots = new Map<string, number[]>();
+  for (const [index, script] of scripts.entries()) {
+    const scope = groupRef(script);
+    const taken = slots.get(scope);
+    if (taken) {
+      taken.push(index);
+    } else {
+      slots.set(scope, [index]);
+    }
+  }
+
+  const result = [...scripts];
+  for (const [scope, indices] of slots) {
+    const order = orders[scope];
+    if (!order?.length) {
+      continue;
+    }
+    const rank = new Map(order.map((ref, index) => [ref, index]));
+    let anchor = -1;
+    const ranked = indices.map((slot, position) => {
+      const known = rank.get(scriptRef(scripts[slot]));
+      if (known !== undefined) {
+        anchor = known;
+      }
+      return { slot, position, rank: known ?? anchor, unknown: known === undefined ? 1 : 0 };
+    });
+    ranked.sort((a, b) => a.rank - b.rank || a.unknown - b.unknown || a.position - b.position);
+    ranked.forEach((entry, position) => {
+      result[indices[position]] = scripts[entry.slot];
+    });
+  }
+  return result;
+}
+
+/** The scan in the order both surfaces show it. Everything user-facing goes through here. */
+async function listScripts(): Promise<ScriptEntry[]> {
+  return orderedScripts(await collectScripts());
+}
+
+/** The refs of a scope's rows, top to bottom, as they are on screen right now. */
+async function scopeRefs(scope: string): Promise<string[]> {
+  const scripts = await listScripts();
+  const rows =
+    scope === FAVORITES_SCOPE ? favoriteScripts(scripts) : scripts.filter((script) => groupRef(script) === scope);
+  return rows.map(scriptRef);
+}
+
+async function saveOrder(scope: string, refs: string[]): Promise<void> {
+  if (scope !== FAVORITES_SCOPE) {
+    await storage?.update(ORDER_KEY, { ...manualOrders(), [scope]: refs });
+    return;
+  }
+  // FAVORITES is its own order, so a drag there rewrites the starred list itself.
+  // Refs that resolve to nothing keep both their place and their existence: they
+  // may belong to a closed folder, and this is a reorder, not an unstar.
+  const queue = [...refs];
+  const visible = new Set(refs);
+  const merged = favoriteRefs().map((ref) => (visible.has(ref) ? (queue.shift() ?? ref) : ref));
+  await storage?.update(FAVORITES_KEY, merged);
+}
+
+// --- menu --------------------------------------------------------------------
+
+/** Throws the scan away and reads every manifest again. */
+async function refreshScripts(): Promise<void> {
+  invalidate();
+  await collectScripts();
+  vscode.window.setStatusBarMessage('Task Runner Manager: reloaded', 2000);
+}
+
+interface MenuItem extends vscode.QuickPickItem {
+  run?(): Promise<void>;
+}
+
+/**
+ * Everything the view can do that is not aimed at one row: the rescan, and the
+ * three stores this workspace keeps about the lists. Each store empties whole,
+ * so its entry says how much is in it before you pick it and asks once after —
+ * a mis-click here costs every rename.
+ */
+async function showMenu(): Promise<void> {
+  const titles = Object.keys(customTitles()).length;
+  const orders = Object.values(manualOrders()).filter((refs) => refs.length > 0).length;
+  const favorites = favoriteRefs().length;
+
+  const stores = [
+    {
+      key: TITLES_KEY,
+      icon: 'discard',
+      name: 'Reset all titles',
+      count: titles,
+      held: `${titles} renamed`,
+      confirm: 'Reset titles',
+      detail: 'Every renamed task goes back to the name its manifest gives it.',
+    },
+    {
+      key: ORDER_KEY,
+      icon: 'list-ordered',
+      name: 'Reset sort order',
+      count: orders,
+      held: `${orders} ${orders === 1 ? 'list' : 'lists'} reordered`,
+      confirm: 'Reset order',
+      detail: 'Every list goes back to the order its manifest declares.',
+    },
+    {
+      key: FAVORITES_KEY,
+      icon: 'star-empty',
+      name: 'Remove favorites',
+      count: favorites,
+      held: `${favorites} starred`,
+      confirm: 'Remove favorites',
+      detail: 'The FAVORITES group disappears. The tasks themselves stay in their packages.',
+    },
+  ];
+
+  const items: MenuItem[] = [
+    {
+      label: '$(refresh) Refresh scripts',
+      description: 'read every manifest again',
+      run: refreshScripts,
+    },
+    { label: 'Undo', kind: vscode.QuickPickItemKind.Separator },
+    ...stores.map((store) => ({
+      label: `$(${store.icon}) ${store.name}`,
+      description: store.count > 0 ? store.held : 'nothing to undo',
+      run: () => emptyStore(store),
+    })),
+  ];
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Task Runner Manager',
+    placeHolder: 'Pick an action',
+  });
+  await picked?.run?.();
+}
+
+/** One of the three stores behind the menu, emptied after a confirmation. */
+async function emptyStore(store: {
+  key: string;
+  name: string;
+  count: number;
+  confirm: string;
+  detail: string;
+}): Promise<void> {
+  if (store.count === 0) {
+    vscode.window.showInformationMessage(`${store.name}: nothing to undo.`);
+    return;
+  }
+
+  const answer = await vscode.window.showWarningMessage(
+    `${store.name}?`,
+    { modal: true, detail: store.detail },
+    store.confirm,
+  );
+  if (answer !== store.confirm) {
+    return;
+  }
+  // `undefined` deletes the key outright, so the next read falls back to the
+  // empty default instead of finding an empty object left behind.
+  await storage?.update(store.key, undefined);
+  repaint();
+}
+
 // --- activity bar tree -------------------------------------------------------
 
 type TreeNode =
-  | { kind: 'group'; id: string; label: string; detail?: string; folder?: string; icon?: string; children: TreeNode[] }
+  | {
+      kind: 'group';
+      id: string;
+      label: string;
+      detail?: string;
+      folder?: string;
+      icon?: string;
+      /** Drag scope of its rows, absent for a group nothing can be dropped in. */
+      scope?: string;
+      children: TreeNode[];
+    }
   | { kind: 'script'; script: ScriptEntry; inFavorites?: boolean }
   | { kind: 'foreign'; execution: vscode.TaskExecution };
 
 const treeChanged = new vscode.EventEmitter<void>();
 let treeView: vscode.TreeView<TreeNode> | undefined;
 
+/**
+ * One icon for every package row: a stack, for the pile of tasks the row opens
+ * into. It used to name the runner instead — npm, cargo, make — but a column of
+ * different glyphs made the headings compete with the rows under them, and the
+ * runner is already spelled out by the manifest each heading names.
+ */
+const GROUP_ICON = 'layers';
+
 /** Private URI scheme for group rows, so decorations cannot hit real files. */
 const DECORATION_SCHEME = 'taskrunnerultimate';
 const TITLE_COLOR = 'taskRunnerUltimate.sourceTitleForeground';
+
+/**
+ * The tree's own drag type. VS Code lower-cases mime types, so the view id is
+ * spelled out in lower case here — otherwise what we write on drag is not what
+ * we look for on drop.
+ */
+const DRAG_MIME = 'application/vnd.code.tree.taskrunnerultimate.tree';
+
+/** The list a script row belongs to: its own package, or FAVORITES. */
+function dragScope(node: TreeNode): string | undefined {
+  if (node.kind === 'group') {
+    return node.scope;
+  }
+  return node.kind === 'script' ? (node.inFavorites ? FAVORITES_SCOPE : groupRef(node.script)) : undefined;
+}
+
+/**
+ * Reordering by hand, within one list. A drag never leaves the group it started
+ * in: the tree's groups are the manifests on disk, and a script cannot be moved
+ * out of the file that declares it. Dropping across groups is therefore ignored
+ * rather than translated into something we cannot honour.
+ */
+const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
+  dragMimeTypes: [DRAG_MIME],
+  dropMimeTypes: [DRAG_MIME],
+
+  handleDrag(source, transfer) {
+    const dragged = source.filter((node): node is TreeNode & { kind: 'script' } => node.kind === 'script');
+    const scope = dragged.length > 0 ? dragScope(dragged[0]) : undefined;
+    if (!scope) {
+      return;
+    }
+    // One drag carries one scope, so a multi-select spanning two packages moves
+    // only the rows that belong to the list it started in.
+    const refs = dragged.filter((node) => dragScope(node) === scope).map((node) => scriptRef(node.script));
+    transfer.set(DRAG_MIME, new vscode.DataTransferItem(JSON.stringify({ scope, refs })));
+  },
+
+  async handleDrop(target, transfer) {
+    const raw = await transfer.get(DRAG_MIME)?.asString();
+    // No target means the empty space below the tree, which names no position.
+    if (!raw || !target) {
+      return;
+    }
+
+    let payload: { scope?: unknown; refs?: unknown };
+    try {
+      payload = JSON.parse(raw) as typeof payload;
+    } catch {
+      return;
+    }
+    const scope = typeof payload.scope === 'string' ? payload.scope : undefined;
+    const dragged = Array.isArray(payload.refs) ? payload.refs.filter((ref): ref is string => typeof ref === 'string') : [];
+    if (!scope || dragged.length === 0 || dragScope(target) !== scope) {
+      return;
+    }
+
+    const current = await scopeRefs(scope);
+    const moved = dragged.filter((ref) => current.includes(ref));
+    const anchor = target.kind === 'script' ? scriptRef(target.script) : undefined;
+    // Dropped on itself, or on a row travelling with it: nothing to work out.
+    if (moved.length === 0 || (anchor && moved.includes(anchor))) {
+      return;
+    }
+
+    const rest = current.filter((ref) => !moved.includes(ref));
+    // The dragged rows take the target's place — dropped on the row above they
+    // land in front of it, on the row below they land behind it, which is what
+    // a highlighted row reads as when the tree draws no gap to aim at. Dropping
+    // on the group heading has no row to take, so it means the end of the list.
+    const at = anchor ? Math.min(current.indexOf(anchor), rest.length) : rest.length;
+    await saveOrder(scope, [...rest.slice(0, at), ...moved, ...rest.slice(at)]);
+    repaint();
+  },
+};
 
 function createTree(): vscode.Disposable[] {
   const provider: vscode.TreeDataProvider<TreeNode> = {
@@ -411,13 +703,16 @@ function createTree(): vscode.Disposable[] {
     getTreeItem: treeItemFor,
     getChildren: async (node) => {
       if (!node) {
-        return buildTreeRoots(await collectScripts());
+        return buildTreeRoots(await listScripts());
       }
       return node.kind === 'group' ? node.children : [];
     },
   };
 
-  const view = vscode.window.createTreeView('taskRunnerUltimate.tree', { treeDataProvider: provider });
+  const view = vscode.window.createTreeView('taskRunnerUltimate.tree', {
+    treeDataProvider: provider,
+    dragAndDropController,
+  });
   treeView = view;
 
   const decorations = vscode.window.registerFileDecorationProvider({
@@ -438,9 +733,10 @@ function createTree(): vscode.Disposable[] {
 }
 
 /**
- * One group per manifest. Running scripts stay in the group they belong to but
- * float to the top of it, and groups that have something running float to the
- * top of the tree — so whatever is alive is always the first thing on screen.
+ * One group per manifest. Scripts keep the order the manifest declares them in,
+ * running or not — a row that moves when you start it is a row you have to find
+ * again to stop it. Groups that have something running float to the top of the
+ * tree, so what is alive is still the first thing on screen.
  */
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const groups: Array<{ node: TreeNode & { kind: 'group' }; hasRunning: boolean }> = [];
@@ -457,7 +753,8 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
           label: packageTitle(script),
           detail: packagePath(script),
           folder: packageFolder(script),
-          icon: groupIcon(script),
+          icon: GROUP_ICON,
+          scope: groupRef(script),
           children: [],
         },
         hasRunning: false,
@@ -466,16 +763,9 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       groups.push(group);
     }
 
-    const node: TreeNode = { kind: 'script', script };
+    group.node.children.push({ kind: 'script', script });
     if (running.has(script.key)) {
-      // Running first, in the order they were declared.
-      const insertAt = group.node.children.filter(
-        (child) => child.kind === 'script' && running.has(child.script.key),
-      ).length;
-      group.node.children.splice(insertAt, 0, node);
       group.hasRunning = true;
-    } else {
-      group.node.children.push(node);
     }
   }
 
@@ -508,6 +798,9 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       id: 'group:favorites',
       label: 'Favorites',
       icon: 'star-full',
+      // Starring already writes an order, so FAVORITES is draggable in its own
+      // right: the drag rewrites the starred list instead of a manifest's order.
+      scope: FAVORITES_SCOPE,
       children: favorites.map((script): TreeNode => ({ kind: 'script', script, inFavorites: true })),
     });
   }
@@ -779,7 +1072,7 @@ let activePicker: ActivePicker | undefined;
 
 async function showScriptPicker(): Promise<void> {
   // Reassigned by `reload` when a manifest changes while the picker is open.
-  let scripts = await collectScripts();
+  let scripts = await listScripts();
 
   if (scripts.length === 0 && runningCount() === 0) {
     vscode.window.showInformationMessage('No tasks found in any manifest of this workspace.');
@@ -805,7 +1098,7 @@ async function showScriptPicker(): Promise<void> {
   };
 
   const reload = async () => {
-    scripts = await collectScripts();
+    scripts = await listScripts();
     render();
   };
 
@@ -853,9 +1146,9 @@ const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemK
 /**
  * The tree's shape, flattened into separators and rows: FAVORITES, then the
  * tasks that came from outside a manifest, then one block per package — the
- * packages with something running first, and inside each of them the running
- * scripts first. Two surfaces showing the same list in two different orders is
- * two things to learn instead of one.
+ * packages with something running first, and inside each of them the order the
+ * manifest declares. Two surfaces showing the same list in two different orders
+ * is two things to learn instead of one.
  *
  * It departs from the tree in one place. The tree lists a starred script twice,
  * in FAVORITES and in its own package, because the two rows sit in different
@@ -891,7 +1184,7 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
   }
 
   // One block per package, keeping the order the scan produced.
-  const blocks = new Map<string, { label: string; running: Item[]; idle: Item[] }>();
+  const blocks = new Map<string, { label: string; items: Item[]; hasRunning: boolean }>();
   for (const script of scripts) {
     if (starred.has(script.key)) {
       continue;
@@ -899,10 +1192,11 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
     const key = script.manifest.toString();
     let block = blocks.get(key);
     if (!block) {
-      block = { label: packageLabel(script), running: [], idle: [] };
+      block = { label: packageLabel(script), items: [], hasRunning: false };
       blocks.set(key, block);
     }
-    (running.has(script.key) ? block.running : block.idle).push(scriptItem(script, false));
+    block.items.push(scriptItem(script, false));
+    block.hasRunning ||= running.has(script.key);
   }
 
   // A separator is the only thing that closes the block above it off, so package
@@ -911,11 +1205,11 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
   const headings = multiPackage || items.length > 0;
   const ordered = [...blocks.values()];
 
-  for (const block of [...ordered.filter((b) => b.running.length > 0), ...ordered.filter((b) => b.running.length === 0)]) {
+  for (const block of [...ordered.filter((b) => b.hasRunning), ...ordered.filter((b) => !b.hasRunning)]) {
     if (headings) {
       items.push(separator(block.label));
     }
-    items.push(...block.running, ...block.idle);
+    items.push(...block.items);
   }
 
   return items;
