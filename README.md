@@ -17,7 +17,8 @@ restart without ever going looking for a terminal tab.**
 - 🔍 **Search that matches the command too** — type `vitest` and find the script that runs it, not
   just the ones called "test". <kbd>Enter</kbd> toggles a task, <kbd>Shift</kbd>+<kbd>Enter</kbd>
   restarts it.
-- ✏️ **[Rename any row](#renaming-a-row)** — `dev` becomes `API server`. Display only: the project's
+- ✏️ **[Rename any row, and any heading](#renaming-a-row)** — `dev` becomes `API server`, and the
+  group titled `packages/services/api-gateway` becomes `GATEWAY`. Display only: the project's
   manifest is never edited, and the real name stays visible beside it and searchable.
 - ⭐ **[Favorites](#favorites)** — star the two or three scripts you actually run and they pin to a
   group at the very top, above everything, without leaving the package they belong to.
@@ -89,8 +90,8 @@ monorepo.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
 - **Favorites** — star the two or three tasks you actually run and they pin to a group at the top
   of the tree, above everything, without leaving the manifest they belong to.
-- **Rename any row** — `dev` becomes `API server`. Display only: the manifest is never edited, and
-  the real name stays visible beside it and searchable.
+- **Rename any row, and any heading** — `dev` becomes `API server`, `@acme/api-gateway` becomes
+  `GATEWAY`. Display only: nothing on disk is renamed, and the real name stays findable.
 - **A live badge** — the number of running tasks, on the toolbar icon, the panel and the status bar.
 - **Knows your runner** — npm, yarn, pnpm, bun and deno, detected per package, overridable.
 - **Real tasks, not typed-out terminal commands** — running state, stop and restart are reliable, and
@@ -197,7 +198,9 @@ badge.
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
 `justfile` side by side gets three, each headed by its file name and the folder it sits in. A
 manifest that names its package — `name` in a `package.json`, `[package] name` in a `Cargo.toml`,
-`module` in a `go.mod` — is headed by that name instead.
+`module` in a `go.mod` — is headed by that name instead, and that heading can be
+[renamed](#renaming-a-group-heading) too when the name the registry needs is longer than the sidebar
+has room for.
 
 Every group heading carries an icon for what it is: ★ for FAVORITES, ∿ for the tasks this extension
 did not start, and a stack (≣) for a package — the pile of tasks the heading opens into. The rows
@@ -216,7 +219,7 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | Entry | What it does |
 | --- | --- |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
-| **Reset all titles** | Every [renamed](#renaming-a-row) row goes back to the name its manifest gives it. |
+| **Reset all titles** | Every [renamed](#renaming-a-row) row and group heading goes back to the name its manifest gives it. |
 | **Reset sort order** | Every list goes back to the order its manifest declares, undoing [the drags](#reordering-rows). |
 | **Remove favorites** | Empties FAVORITES. The tasks stay where they are, in their own packages. |
 
@@ -298,6 +301,35 @@ The rename follows the script everywhere it is listed: the dropdown, the FAVORIT
 package group all show the new title. The task terminal keeps the real name, since that is the one
 the package manager is given.
 
+#### Renaming a group heading
+
+The same **Edit Title…** on a group heading renames the package instead. A monorepo names its
+packages for the registry rather than for a sidebar — `@acme/platform-api-gateway` on a row that has
+room for half of it — and the folder underneath is often no shorter:
+
+```
+PLATFORM API GATEWAY → packages/services/api-gateway
+GATEWAY → packages/services/api-gateway
+```
+
+It is the same kind of label as a renamed script: the `package.json` keeps its `name`, the folder
+keeps its name on disk, nothing lands in `git status`. What the heading loses, the row keeps
+elsewhere — the path after the arrow still says where the group is, and the tooltip still carries the
+name the manifest gives it. That is the one difference from a script row, which shows its real name
+in the dimmed text beside the label: a heading is tinted whole, description included, so the real
+name lives in the tooltip rather than on the row.
+
+The new title is used wherever the group is named — the tree heading, the dropdown's separator, the
+package a FAVORITES row says it came from, and the status-bar message while a row is being dragged.
+A title typed by hand is upper-cased but not otherwise touched: `-` and `_` are opened up into
+spaces in a name read off disk, where nobody chose them, and left alone in one you typed.
+
+FAVORITES and **Other tasks** cannot be renamed — they are this extension's own labels, not names
+read off a manifest, so there is nothing to restore them to.
+
+Both kinds of title live in the same store, so **Reset all titles** in [the menu](#the-menu) undoes
+scripts and headings together.
+
 ### Reaching the row commands
 
 **Add to Favorites**, **Remove from Favorites** and **Edit Title…** all act on the row they were
@@ -307,7 +339,7 @@ invoked from, so they live where there is a row to invoke them on:
 | --- | --- |
 | Add to Favorites | ☆ inline on hover, and right-click |
 | Remove from Favorites | ★ inline on hover, and right-click |
-| Edit Title… | right-click only — a rename is rare enough not to earn a permanent button |
+| Edit Title… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
 
 All three are deliberately hidden from the command palette, which has no row to hand them. The
 palette keeps the five that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
@@ -329,6 +361,11 @@ Scripts are matched back by the workspace folder's name plus the manifest path i
 script name — `my-app/packages/api/package.json::dev` — rather than by absolute path. Moving the
 whole project somewhere else on disk therefore keeps every star and every title; *renaming* the
 folder does not.
+
+A renamed heading is keyed by the same string without the `::name` half —
+`my-app/packages/api/package.json` — which is also the scope a drag reorders inside. Since no
+manifest path ends in `::` plus a name, headings and scripts share the `titles` key without any
+chance of one shadowing the other.
 
 A favorite whose manifest is temporarily out of the workspace is hidden, not forgotten: it stays in
 storage and comes back with its folder. Deleting the script for real leaves a dead entry that costs

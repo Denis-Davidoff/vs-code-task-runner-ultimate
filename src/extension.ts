@@ -349,9 +349,24 @@ function customTitles(): Record<string, string> {
     : {};
 }
 
-function customTitle(script: ScriptEntry): string | undefined {
-  const title = customTitles()[scriptRef(script)];
+/**
+ * The user's title for a ref, if it has one. Scripts and group headings share
+ * one store: a group's ref is its manifest and a script's is that same ref plus
+ * `::name`, so the two can never collide, and one "Reset all titles" undoes
+ * both rather than making the menu carry two entries that mean the same thing.
+ */
+function storedTitle(ref: string): string | undefined {
+  const title = customTitles()[ref];
   return typeof title === 'string' && title ? title : undefined;
+}
+
+function customTitle(script: ScriptEntry): string | undefined {
+  return storedTitle(scriptRef(script));
+}
+
+/** The user's title for the group a script sits in — the heading, not the row. */
+function customGroupTitle(script: ScriptEntry): string | undefined {
+  return storedTitle(groupRef(script));
 }
 
 /** What the lists show for a script: the user's title if it has one, else its name. */
@@ -359,21 +374,46 @@ function displayName(script: ScriptEntry): string {
   return customTitle(script) ?? script.name;
 }
 
-/**
- * Renames a script for display only. The manifest is never touched: the name in
- * it is what the package manager is asked to run, so rewriting it would either
- * break the script or force a change to a file the user did not ask us to edit.
- */
+/** The rename dialog, for a script row and for a group heading alike. */
 async function editTitle(node: TreeNode | undefined): Promise<void> {
-  if (node?.kind !== 'script') {
+  if (node?.kind === 'group') {
+    // Favorites and the foreign-task group are labels of ours, not names read
+    // off disk, so they carry no ref and there is nothing to restore a rename to.
+    await renameRef(node.ref, node.label, 'package');
+  } else if (node?.kind === 'script') {
+    await renameRef(scriptRef(node.script), node.script.name, 'task');
+  }
+}
+
+/** Why a rename is display-only, said in the terms of the row it was invoked on. */
+const RENAME_PROMPT = {
+  task: 'Shown in this list only — the task in the manifest keeps its name. Leave empty to restore it.',
+  package: 'Shown in this list only — the manifest and its folder are not renamed. Leave empty to restore it.',
+};
+
+/**
+ * Renames a row for display only. Nothing on disk is touched: a task's name is
+ * what the package manager is asked to run, and a heading's name is a file or a
+ * directory the project owns — rewriting either would break the task or force a
+ * change to a file the user did not ask us to edit.
+ *
+ * Storing the original as a title is the same as having none, so a title equal
+ * to it deletes the entry: it leaves no dead row in the menu's count, and a
+ * later edit to the manifest is then followed rather than shadowed.
+ */
+async function renameRef(
+  ref: string | undefined,
+  original: string,
+  subject: keyof typeof RENAME_PROMPT,
+): Promise<void> {
+  if (!ref) {
     return;
   }
-  const script = node.script;
   const entered = await vscode.window.showInputBox({
-    title: `Rename "${script.name}"`,
-    prompt: 'Shown in this list only — the script in the manifest keeps its name. Leave empty to restore it.',
-    value: displayName(script),
-    placeHolder: script.name,
+    title: `Rename "${original}"`,
+    prompt: RENAME_PROMPT[subject],
+    value: storedTitle(ref) ?? original,
+    placeHolder: original,
   });
   if (entered === undefined) {
     return;
@@ -381,10 +421,10 @@ async function editTitle(node: TreeNode | undefined): Promise<void> {
 
   const titles = { ...customTitles() };
   const title = entered.trim();
-  if (title && title !== script.name) {
-    titles[scriptRef(script)] = title;
+  if (title && title !== original) {
+    titles[ref] = title;
   } else {
-    delete titles[scriptRef(script)];
+    delete titles[ref];
   }
   await storage?.update(TITLES_KEY, titles);
   repaint();
@@ -521,7 +561,7 @@ async function showMenu(): Promise<void> {
       count: titles,
       held: `${titles} renamed`,
       confirm: 'Reset titles',
-      detail: 'Every renamed task goes back to the name its manifest gives it.',
+      detail: 'Every renamed task and package heading goes back to the name its manifest gives it.',
     },
     {
       key: ORDER_KEY,
@@ -597,12 +637,19 @@ type TreeNode =
   | {
       kind: 'group';
       id: string;
+      /** The name the manifest itself gives the group, whatever the row shows. */
       label: string;
       detail?: string;
       folder?: string;
       icon?: string;
       /** Drag scope of its rows, absent for a group nothing can be dropped in. */
       scope?: string;
+      /**
+       * Storage identity of the heading, present only for the groups that are a
+       * manifest — the ones with a name off disk, and so the ones a rename has
+       * something to restore.
+       */
+      ref?: string;
       children: TreeNode[];
     }
   | { kind: 'script'; script: ScriptEntry; inFavorites?: boolean }
@@ -750,7 +797,12 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
 
 /** The name a scope goes by on screen, for a message that has to name one. */
 function scopeName(scope: string): string {
-  return scope === FAVORITES_SCOPE ? 'FAVORITES' : scope;
+  if (scope === FAVORITES_SCOPE) {
+    return 'FAVORITES';
+  }
+  // A renamed group is named by its heading; an untouched one has no title of
+  // its own here, and its ref is the manifest path the heading also shows.
+  return storedTitle(scope) ?? scope;
 }
 
 /**
@@ -828,11 +880,12 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
         node: {
           kind: 'group',
           id: `group:${key}`,
-          label: packageTitle(script),
+          label: manifestTitle(script),
           detail: packagePath(script),
           folder: packageFolder(script),
           icon: GROUP_ICON,
           scope: groupRef(script),
+          ref: groupRef(script),
           children: [],
         },
         hasRunning: false,
@@ -890,7 +943,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
     // Group rows are upper-cased with separators opened up; the tooltip keeps
     // the name exactly as written in the manifest.
-    const title = node.label.toUpperCase().replace(/[-_]+/g, ' ');
+    //
+    // A title the user typed is only upper-cased, never opened up: `-` and `_`
+    // are worth turning into spaces in `my-app`, which nobody chose to read, and
+    // are a decision in `web-ui`, which somebody did.
+    const custom = node.ref ? storedTitle(node.ref) : undefined;
+    const title = custom ? custom.toUpperCase() : node.label.toUpperCase().replace(/[-_]+/g, ' ');
     // The folder is part of the label rather than a description on purpose: the
     // decoration below tints the whole label, so an arrow-joined title keeps one
     // colour across the row instead of a tinted title beside a dimmed path.
@@ -900,6 +958,9 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // path it lives at — and a path reads as a path in the case it is typed in.
     const heading = node.folder ? `${title} → ${node.folder.toLowerCase()}` : title;
     const item = new vscode.TreeItem(heading, vscode.TreeItemCollapsibleState.Expanded);
+    // The tooltip is where the manifest's own name survives a rename. A script
+    // row keeps it in the dimmed description instead, which a heading cannot
+    // use: the decoration below tints the whole label and a description with it.
     item.tooltip = node.detail ? `${node.label} — ${node.detail}` : node.label;
     // A resourceUri makes the row eligible for a file decoration, the only API
     // that can colour a tree label. The scheme is ours, so the decoration never
@@ -914,7 +975,9 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
       item.iconPath = new vscode.ThemeIcon(node.icon, new vscode.ThemeColor(TITLE_COLOR));
     }
     item.id = node.id;
-    item.contextValue = 'group';
+    // Only a heading that names something on disk can be renamed back to it, so
+    // the two kinds of group are told apart for the `when` clause that offers it.
+    item.contextValue = node.ref ? 'group:package' : 'group';
     return item;
   }
 
@@ -972,7 +1035,7 @@ function scriptDescription(script: ScriptEntry, inFavorites = false): string {
 
 /** Namespace a script belongs to: its package's name, or where the manifest lives. */
 function packageOrigin(script: ScriptEntry): string {
-  return script.packageName ?? packagePath(script);
+  return customGroupTitle(script) ?? script.packageName ?? packagePath(script);
 }
 
 // --- script categories -------------------------------------------------------
@@ -1021,16 +1084,21 @@ function iconFor(script: ScriptEntry, isRunning: boolean): vscode.ThemeIcon {
 }
 
 /**
- * Highlighted part of a group row: the package's own name, or the manifest's
- * file name when it does not name one.
+ * The name a group is known by in its manifest: the package's own name, or the
+ * manifest's file name when it does not name one. What a rename restores to.
  *
  * The file name rather than the directory, because a directory can hold several
  * manifests — a Cargo.toml beside a Makefile beside a justfile is an ordinary
  * Rust repository — and three groups all titled after the same folder would say
  * nothing about which is which.
  */
-function packageTitle(script: ScriptEntry): string {
+function manifestTitle(script: ScriptEntry): string {
   return script.packageName ?? path.posix.basename(script.manifest.path);
+}
+
+/** Highlighted part of a group row: the user's title for it, else the manifest's. */
+function packageTitle(script: ScriptEntry): string {
+  return customGroupTitle(script) ?? manifestTitle(script);
 }
 
 /**
@@ -1055,7 +1123,8 @@ function packagePath(script: ScriptEntry): string {
 /** Single-line form used by the quick pick, which has no rich labels. */
 function packageLabel(script: ScriptEntry): string {
   const where = packagePath(script);
-  return script.packageName ? `${script.packageName} — ${where}` : where;
+  const name = customGroupTitle(script) ?? script.packageName;
+  return name ? `${name} — ${where}` : where;
 }
 
 // --- actions shared by the tree and the picker -------------------------------

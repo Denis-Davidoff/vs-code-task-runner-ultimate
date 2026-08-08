@@ -302,6 +302,10 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav$/` },
     { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav$/` },
     { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^script:/` },
+    // The same command on a package heading. FAVORITES and the foreign-task
+    // group are labels of ours rather than names read off disk, and carry the
+    // plain `group` value, so neither matches.
+    { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^group:package$/` },
   ],
   commandPalette: [
     ...badgeEntries.map((entry) => ({ command: entry.id, when: 'false' })),

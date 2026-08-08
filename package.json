@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task Runner Manager🏆",
   "description": "One list for every task in a monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -436,6 +436,11 @@
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
           "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:/"
+        },
+        {
+          "command": "taskRunnerUltimate.editTitle",
+          "group": "2_modify@1",
+          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^group:package$/"
         }
       ],
       "commandPalette": [
