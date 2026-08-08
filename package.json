@@ -2,7 +2,7 @@
   "name": "handy-task-runner",
   "displayName": "Ultimate 🏆 Task Runner",
   "description": "Every script in the workspace and every running task in one dropdown: Enter starts or stops, Shift+Enter restarts, and the toolbar icon badges how many tasks are running. npm, yarn, pnpm, bun and deno.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
