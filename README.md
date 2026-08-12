@@ -187,7 +187,7 @@ there is the activity bar view, plus the status bar entry and the keyboard short
 ### The Task Runner Manager view
 
 The activity bar icon opens a tree with the same content as the dropdown, in this order: **FAVORITES**
-first, then **Other tasks** — anything running that this extension did not start — then one group per
+first, then **OTHER TASKS** — anything running that this extension did not start — then one group per
 manifest. Groups with something running float above the idle ones, so whatever is alive is on screen
 without scrolling; inside a group nothing moves — a running task spins in the place it has always
 had, because a row that jumps when you start it is a row you have to find again to stop it. Clicking
@@ -196,11 +196,27 @@ a row toggles it — run if stopped, stop if running — and hovering one reveal
 badge.
 
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
-`justfile` side by side gets three, each headed by its file name and the folder it sits in. A
-manifest that names its package — `name` in a `package.json`, `[package] name` in a `Cargo.toml`,
-`module` in a `go.mod` — is headed by that name instead, and that heading can be
-[renamed](#renaming-a-group-heading) too when the name the registry needs is longer than the sidebar
-has room for.
+`justfile` side by side gets three, all in the same folder.
+
+Every heading is read in the same three parts:
+
+```
+ACME PLATFORM api-gateway → packages/services/api-gateway
+```
+
+The project comes first, in upper case with `-` and `_` opened up into spaces — the name the root
+manifest gives itself (`name` in a `package.json`, `[package] name` in a `Cargo.toml`, `module` in a
+`go.mod`), or the workspace folder's own name when the root names nothing. It is the same on every
+group in that project, FAVORITES and OTHER TASKS included, so the sidebar has one masthead rather
+than one per row. Then the folder the manifest sits in, spelled exactly as it is on disk — `webUI`
+stays `webUI`. Then, after the arrow, the path to it, also as it is on disk, so it can be pasted
+into a terminal. A manifest at the root of its project has neither part: the project name has
+already said where it is.
+
+Where one folder holds several manifests the path after the arrow ends in the file name —
+`services/api/Cargo.toml` beside `services/api/Makefile` — because the folder alone would name all
+three groups the same. And any heading can be [renamed](#renaming-a-group-heading) when what it says
+is longer than the sidebar has room for.
 
 Every group heading carries an icon for what it is: ★ for FAVORITES, ∿ for the tasks this extension
 did not start, and a stack (≣) for a package — the pile of tasks the heading opens into. The rows
@@ -303,12 +319,12 @@ the package manager is given.
 
 #### Renaming a group heading
 
-The same **Edit Title…** on a group heading renames the package instead. A monorepo names its
-packages for the registry rather than for a sidebar — `@acme/platform-api-gateway` on a row that has
-room for half of it — and the folder underneath is often no shorter:
+The same **Edit Title…** on a group heading renames the package instead. A deep monorepo spends the
+row on saying where it is twice over — the project, the folder, and the path to it — and a title of
+your own stands in for everything before the arrow:
 
 ```
-PLATFORM API GATEWAY → packages/services/api-gateway
+ACME PLATFORM api-gateway → packages/services/api-gateway
 GATEWAY → packages/services/api-gateway
 ```
 
@@ -324,7 +340,7 @@ package a FAVORITES row says it came from, and the status-bar message while a ro
 A title typed by hand is upper-cased but not otherwise touched: `-` and `_` are opened up into
 spaces in a name read off disk, where nobody chose them, and left alone in one you typed.
 
-FAVORITES and **Other tasks** cannot be renamed — they are this extension's own labels, not names
+FAVORITES and **OTHER TASKS** cannot be renamed — they are this extension's own labels, not names
 read off a manifest, so there is nothing to restore them to.
 
 Both kinds of title live in the same store, so **Reset all titles** in [the menu](#the-menu) undoes

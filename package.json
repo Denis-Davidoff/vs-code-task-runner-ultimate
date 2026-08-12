@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task Runner Manager🏆",
   "description": "Task manager and runner with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",

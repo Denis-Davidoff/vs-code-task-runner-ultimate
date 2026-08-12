@@ -642,11 +642,16 @@ type TreeNode =
       detail?: string;
       folder?: string;
       /**
-       * Whether the manifest sits at the root of its workspace folder. Only that
-       * one heading is dressed up for the tree; everything nested keeps the name
-       * its own manifest gives it.
+       * The project the group belongs to, upper-cased for the row. Every manifest
+       * in a workspace folder is filed under the same one, so a heading says which
+       * project it is part of before it says which corner of it.
        */
-      root?: boolean;
+      project?: string;
+      /**
+       * The folder the manifest sits in, spelled as it is on disk. Empty for a
+       * manifest at the root of its project, where the project name has said it.
+       */
+      place?: string;
       icon?: string;
       /** Drag scope of its rows, absent for a group nothing can be dropped in. */
       scope?: string;
@@ -892,19 +897,26 @@ function createTree(): vscode.Disposable[] {
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const groups: Array<{ node: TreeNode & { kind: 'group' }; hasRunning: boolean }> = [];
   const byManifest = new Map<string, (typeof groups)[number]>();
+  const projects = projectNames(scripts);
+  const crowded = crowdedFolders(scripts);
 
   for (const script of scripts) {
     const key = script.manifest.toString();
     let group = byManifest.get(key);
     if (!group) {
+      // A folder with a second manifest in it — a Cargo.toml beside a Makefile —
+      // has two headings that name the same folder, so there the path after the
+      // arrow carries the file name that tells them apart.
+      const shared = crowded.has(manifestFolder(script));
       group = {
         node: {
           kind: 'group',
           id: `group:${key}`,
           label: manifestTitle(script),
           detail: packagePath(script),
-          folder: packageFolder(script),
-          root: script.directory === '',
+          folder: shared ? packagePath(script) : packageFolder(script),
+          project: projectHeading(projects.get(projectKey(script)) ?? manifestTitle(script)),
+          place: path.posix.basename(script.directory),
           icon: GROUP_ICON,
           scope: groupRef(script),
           ref: groupRef(script),
@@ -933,7 +945,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     roots.unshift({
       kind: 'group',
       id: 'group:foreign',
-      label: `Other tasks (${foreign.length})`,
+      label: `OTHER TASKS (${foreign.length})`,
       // Nothing here comes from a manifest, so there is no runner to name. What
       // the group has in common is that all of it is already running.
       icon: 'pulse',
@@ -949,7 +961,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     roots.unshift({
       kind: 'group',
       id: 'group:favorites',
-      label: 'Favorites',
+      label: 'FAVORITES',
       icon: 'star-full',
       // Starring already writes an order, so FAVORITES is draggable in its own
       // right: the drag rewrites the starred list instead of a manifest's order.
@@ -963,23 +975,30 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
 
 function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
-    // Exactly one heading is dressed up: the workspace root's. It is the tree's
-    // masthead, it is the one name that is usually the repository rather than a
-    // package, and `task-runner-ultimate` is nobody's idea of a title.
+    // A heading is read in two registers, and the row spells each in its own way.
     //
-    // Every other heading is left alone. A nested package spells its own name in
-    // its own package.json, and a group named after a directory spells it the
-    // way the directory is spelled — `@acme/web-ui` and `iOS` are decisions, and
-    // a title case that walks over them makes the tree disagree with the disk
-    // about what things are called. So is a title the user typed by hand.
+    // The project comes first, upper-cased with `-` and `_` opened up into the
+    // spaces they stand in for: it is a title, not a path, and upper case is what
+    // makes it read as the masthead every group under it belongs to. FAVORITES and
+    // OTHER TASKS are labels of ours and already spelled that way.
+    //
+    // What follows is disk. The folder the manifest sits in keeps the case it has
+    // on disk — `@acme/web-ui` and `iOS` are decisions, and a case that walks over
+    // them makes the tree disagree with the disk about what things are called.
+    //
+    // A title typed by hand stands in for both parts, and is upper-cased with them:
+    // it is a heading in the same column as the rest, and `-` and `_` are left in
+    // it because a name typed by hand chose them.
     const custom = node.ref ? storedTitle(node.ref) : undefined;
-    const title = custom ?? (node.root ? headingTitle(node.label) : node.label);
+    const named = [node.project, node.place].filter(Boolean).join(' ');
+    const title = custom ? custom.toUpperCase() : named || node.label;
     // The folder is part of the label rather than a description on purpose: the
     // decoration below tints the whole label, so an arrow-joined title keeps one
     // colour across the row instead of a tinted title beside a dimmed path.
     //
-    // It is spelled as it is on disk, for the same reason: it is a path, and a
-    // path that has been re-cased is a path you cannot paste into a terminal.
+    // It is spelled as it is on disk, for the same reason as the folder above: it
+    // is a path, and a path that has been re-cased is one you cannot paste into a
+    // terminal.
     const heading = node.folder ? `${title} → ${node.folder}` : title;
     const item = new vscode.TreeItem(heading, vscode.TreeItemCollapsibleState.Expanded);
     // The tooltip is where the manifest's own name survives a rename. A script
@@ -1122,16 +1141,75 @@ function runningIcon(): vscode.ThemeIcon {
 }
 
 /**
- * The root manifest's name dressed as a heading: `-` and `_` opened up into the
- * spaces they stand in for, and every word started on a capital — `my-app` reads
- * as `My App`. Nested groups never come through here.
+ * A project's name dressed as a heading: `-` and `_` opened up into the spaces
+ * they stand in for, and the whole of it upper-cased — `my-app` reads as
+ * `MY APP`.
  *
- * Only the first letter of a word is touched. The rest is the author's spelling,
- * and lower-casing it would cost `webUI` and `iOS` the very thing that makes
- * them legible.
+ * Upper case is what separates the two halves of a heading. The project is a
+ * title we chose the spelling of, so re-casing it costs nothing; everything after
+ * it is a name on disk, and is left exactly as the disk spells it.
  */
-function headingTitle(label: string): string {
-  return label.replace(/[-_]+/g, ' ').replace(/\S+/g, (word) => word[0].toUpperCase() + word.slice(1));
+function projectHeading(name: string): string {
+  return name.replace(/[-_]+/g, ' ').toUpperCase();
+}
+
+/**
+ * The project every manifest in a workspace folder is filed under, keyed by that
+ * folder: the name its root manifest gives itself, else the folder's own name on
+ * disk. Keyed rather than resolved per script because only the whole scan can say
+ * what a folder's root manifest was.
+ *
+ * The root manifest wins because it is the name the project is known by — the
+ * repository directory is often a checkout path (`vs-code-task-list` for a
+ * `task-runner-ultimate`), and the manifest is where the project says its name
+ * itself. The folder is the fallback for a project whose root names nothing, or
+ * has no manifest at all because everything it runs is nested.
+ */
+function projectNames(scripts: ScriptEntry[]): Map<string, string> {
+  const names = new Map<string, string>();
+  const named = new Set<string>();
+  for (const script of scripts) {
+    const key = projectKey(script);
+    if (script.directory === '' && script.packageName && !named.has(key)) {
+      names.set(key, script.packageName);
+      named.add(key);
+    } else if (!names.has(key)) {
+      names.set(key, workspaceFolderOf(script)?.name ?? path.posix.basename(manifestFolder(script)));
+    }
+  }
+  return names;
+}
+
+/**
+ * The manifests that share a folder with another one, as folder paths. A Rust
+ * service with a Cargo.toml, a Makefile and a justfile side by side is one
+ * folder and three groups, and a heading naming the folder alone would name all
+ * three the same.
+ */
+function crowdedFolders(scripts: ScriptEntry[]): Set<string> {
+  const manifests = new Map<string, Set<string>>();
+  for (const script of scripts) {
+    const folder = manifestFolder(script);
+    const seen = manifests.get(folder) ?? new Set<string>();
+    seen.add(script.manifest.toString());
+    manifests.set(folder, seen);
+  }
+  return new Set([...manifests].filter(([, seen]) => seen.size > 1).map(([folder]) => folder));
+}
+
+/** The workspace folder a manifest was scanned out of, if it is still open. */
+function workspaceFolderOf(script: ScriptEntry): vscode.WorkspaceFolder | undefined {
+  return vscode.workspace.getWorkspaceFolder(script.manifest);
+}
+
+/** Which project a manifest belongs to: its workspace folder, when it has one. */
+function projectKey(script: ScriptEntry): string {
+  return workspaceFolderOf(script)?.uri.toString() ?? manifestFolder(script);
+}
+
+/** Absolute path of the folder a manifest sits in. */
+function manifestFolder(script: ScriptEntry): string {
+  return path.posix.dirname(script.manifest.path);
 }
 
 /**
