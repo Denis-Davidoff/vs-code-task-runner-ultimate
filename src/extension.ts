@@ -634,9 +634,13 @@ function openSettings(): void {
 
 /**
  * Everything the view can do that is not aimed at one row: the rescan, the
- * settings, and the three stores this workspace keeps about the lists. Each store
- * empties whole, so its entry says how much is in it before you pick it and asks
- * once after — a mis-click here costs every rename.
+ * settings, and the three stores the menu can empty. Each of those empties whole,
+ * so its entry says how much is in it before you pick it and asks once after —
+ * a mis-click here costs every rename.
+ *
+ * The workspace keeps a fourth store of its own, the folded headings, and it
+ * deliberately has no entry here: a fold is undone by clicking the same arrow
+ * that made it, which is one click where the user is already looking.
  */
 async function showMenu(): Promise<void> {
   const titles = Object.keys(customTitles()).length;
