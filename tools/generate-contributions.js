@@ -270,39 +270,39 @@ const badgeEntries = variants.map((variant, index) => ({
 }));
 
 manifest.contributes.commands = [
-  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'Task Runner Manager', icon: icon('') },
+  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'Task & Script Explorer', icon: icon('') },
   ...badgeEntries.map((entry) => ({
     command: entry.id,
     title: `Show Scripts (${entry.label} running)`,
-    category: 'Task Runner Manager',
+    category: 'Task & Script Explorer',
     icon: icon(entry.suffix),
   })),
-  { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'Task Runner Manager', icon: '$(debug-restart)' },
-  { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'Task Runner Manager', icon: '$(refresh)' },
-  { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'Task Runner Manager', icon: '$(play)' },
-  { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'Task Runner Manager', icon: '$(debug-stop)' },
-  { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'Task Runner Manager', icon: '$(debug-restart)' },
-  { command: 'taskRunnerUltimate.toggleItem', title: 'Run or Stop', category: 'Task Runner Manager' },
-  { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task Runner Manager', icon: '$(star-empty)' },
-  { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task Runner Manager', icon: '$(star-full)' },
-  { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task Runner Manager', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'Task & Script Explorer', icon: '$(refresh)' },
+  { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'Task & Script Explorer', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.toggleItem', title: 'Run or Stop', category: 'Task & Script Explorer' },
+  { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task & Script Explorer', icon: '$(star-empty)' },
+  { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task & Script Explorer', icon: '$(star-full)' },
+  { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task & Script Explorer', icon: '$(edit)' },
   // The swatch rides in the title; see PALETTE above for why it is not an icon.
   // None of these reach the command palette (see commandPalette below), so the
   // glyph is only ever read where it means something.
   ...PALETTE.map(({ name, swatch }) => ({
     command: colourCommand(name),
     title: `${swatch} ${titleCase(name)}`,
-    category: 'Task Runner Manager',
+    category: 'Task & Script Explorer',
   })),
-  { command: CLEAR_COLOUR, title: 'Default', category: 'Task Runner Manager' },
-  { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task Runner Manager', icon: '$(menu)' },
+  { command: CLEAR_COLOUR, title: 'Default', category: 'Task & Script Explorer' },
+  { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task & Script Explorer', icon: '$(menu)' },
   {
     command: 'taskRunnerUltimate.stopAll',
     title: 'Stop All Running Tasks',
-    category: 'Task Runner Manager',
+    category: 'Task & Script Explorer',
     icon: { light: 'media/stop-all-light.svg', dark: 'media/stop-all-dark.svg' },
   },
-  { command: 'taskRunnerUltimate.restartAll', title: 'Restart All Running Tasks', category: 'Task Runner Manager', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.restartAll', title: 'Restart All Running Tasks', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
 ];
 
 const inTitle = 'config.taskRunnerUltimate.showInEditorTitle';
@@ -399,7 +399,7 @@ manifest.contributes.viewsContainers = {
   activitybar: [
     {
       id: 'taskRunnerUltimate',
-      title: 'Task Runner Manager',
+      title: 'Task & Script Explorer',
       icon: 'media/activity-bar.svg',
     },
   ],
@@ -409,9 +409,9 @@ manifest.contributes.views = {
   taskRunnerUltimate: [
     {
       id: 'taskRunnerUltimate.tree',
-      name: 'Task Runner Manager',
+      name: 'Task & Script Explorer',
       icon: 'media/activity-bar.svg',
-      contextualTitle: 'Task Runner Manager',
+      contextualTitle: 'Task & Script Explorer',
     },
   ],
 };

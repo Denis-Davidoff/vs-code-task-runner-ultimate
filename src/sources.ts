@@ -246,7 +246,7 @@ export async function collectScripts(): Promise<ScriptEntry[]> {
   if (manifests.length === MAX_MANIFESTS && !warnedAboutTruncation) {
     warnedAboutTruncation = true;
     void vscode.window.showWarningMessage(
-      `Task Runner Manager stopped after ${MAX_MANIFESTS} manifests, so some tasks are missing. ` +
+      `Task & Script Explorer stopped after ${MAX_MANIFESTS} manifests, so some tasks are missing. ` +
         'Widen "taskRunnerUltimate.exclude" to skip the ones you do not need.',
     );
   }

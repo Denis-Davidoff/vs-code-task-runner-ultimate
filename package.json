@@ -1,8 +1,8 @@
 {
   "name": "task-runner-ultimate",
-  "displayName": "Task & Script Runner🏆",
-  "description": "Task and script runner with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.4.9",
+  "displayName": "Task & Script Explorer🏆",
+  "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
+  "version": "0.5.0",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -17,6 +17,11 @@
     "Other"
   ],
   "keywords": [
+    "task explorer",
+    "tasks explorer",
+    "scripts explorer",
+    "script exporer",
+    "task script explorer",
     "npm scripts",
     "run npm script",
     "package.json scripts",
@@ -88,7 +93,7 @@
       {
         "command": "taskRunnerUltimate.show",
         "title": "Show Scripts",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light.svg",
           "dark": "media/scripts-dark.svg"
@@ -97,7 +102,7 @@
       {
         "command": "taskRunnerUltimate.show.badge1",
         "title": "Show Scripts (1 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-1.svg",
           "dark": "media/scripts-dark-1.svg"
@@ -106,7 +111,7 @@
       {
         "command": "taskRunnerUltimate.show.badge2",
         "title": "Show Scripts (2 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-2.svg",
           "dark": "media/scripts-dark-2.svg"
@@ -115,7 +120,7 @@
       {
         "command": "taskRunnerUltimate.show.badge3",
         "title": "Show Scripts (3 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-3.svg",
           "dark": "media/scripts-dark-3.svg"
@@ -124,7 +129,7 @@
       {
         "command": "taskRunnerUltimate.show.badge4",
         "title": "Show Scripts (4 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-4.svg",
           "dark": "media/scripts-dark-4.svg"
@@ -133,7 +138,7 @@
       {
         "command": "taskRunnerUltimate.show.badge5",
         "title": "Show Scripts (5 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-5.svg",
           "dark": "media/scripts-dark-5.svg"
@@ -142,7 +147,7 @@
       {
         "command": "taskRunnerUltimate.show.badge6",
         "title": "Show Scripts (6 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-6.svg",
           "dark": "media/scripts-dark-6.svg"
@@ -151,7 +156,7 @@
       {
         "command": "taskRunnerUltimate.show.badge7",
         "title": "Show Scripts (7 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-7.svg",
           "dark": "media/scripts-dark-7.svg"
@@ -160,7 +165,7 @@
       {
         "command": "taskRunnerUltimate.show.badge8",
         "title": "Show Scripts (8 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-8.svg",
           "dark": "media/scripts-dark-8.svg"
@@ -169,7 +174,7 @@
       {
         "command": "taskRunnerUltimate.show.badge9",
         "title": "Show Scripts (9 running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-9.svg",
           "dark": "media/scripts-dark-9.svg"
@@ -178,7 +183,7 @@
       {
         "command": "taskRunnerUltimate.show.badgeMany",
         "title": "Show Scripts (9+ running)",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/scripts-light-many.svg",
           "dark": "media/scripts-dark-many.svg"
@@ -187,121 +192,121 @@
       {
         "command": "taskRunnerUltimate.restartActive",
         "title": "Restart Focused Script",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(debug-restart)"
       },
       {
         "command": "taskRunnerUltimate.refresh",
         "title": "Refresh Scripts",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(refresh)"
       },
       {
         "command": "taskRunnerUltimate.runItem",
         "title": "Run",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(play)"
       },
       {
         "command": "taskRunnerUltimate.stopItem",
         "title": "Stop",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(debug-stop)"
       },
       {
         "command": "taskRunnerUltimate.restartItem",
         "title": "Restart",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(debug-restart)"
       },
       {
         "command": "taskRunnerUltimate.toggleItem",
         "title": "Run or Stop",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.addFavorite",
         "title": "Add to Favorites",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(star-empty)"
       },
       {
         "command": "taskRunnerUltimate.removeFavorite",
         "title": "Remove from Favorites",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(star-full)"
       },
       {
         "command": "taskRunnerUltimate.editTitle",
         "title": "Edit Title…",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(edit)"
       },
       {
         "command": "taskRunnerUltimate.setColor.red",
         "title": "🔴 Red",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.orange",
         "title": "🟠 Orange",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.yellow",
         "title": "🟡 Yellow",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.green",
         "title": "🟢 Green",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.teal",
         "title": "💠 Teal",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.blue",
         "title": "🔵 Blue",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.purple",
         "title": "🟣 Purple",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.pink",
         "title": "🌸 Pink",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.brown",
         "title": "🟤 Brown",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.gray",
         "title": "⚪ Gray",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.clearColor",
         "title": "Default",
-        "category": "Task Runner Manager"
+        "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.menu",
         "title": "Menu",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(menu)"
       },
       {
         "command": "taskRunnerUltimate.stopAll",
         "title": "Stop All Running Tasks",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": {
           "light": "media/stop-all-light.svg",
           "dark": "media/stop-all-dark.svg"
@@ -310,7 +315,7 @@
       {
         "command": "taskRunnerUltimate.restartAll",
         "title": "Restart All Running Tasks",
-        "category": "Task Runner Manager",
+        "category": "Task & Script Explorer",
         "icon": "$(debug-restart)"
       }
     ],
@@ -688,7 +693,7 @@
       }
     ],
     "configuration": {
-      "title": "Task Runner Manager",
+      "title": "Task & Script Explorer",
       "properties": {
         "taskRunnerUltimate.packageManager": {
           "type": "string",
@@ -714,7 +719,7 @@
         "taskRunnerUltimate.showInStatusBar": {
           "type": "boolean",
           "default": true,
-          "description": "Also show a 'Task Runner' entry in the status bar."
+          "description": "Also show a 'Task & Script Explorer' entry in the status bar."
         },
         "taskRunnerUltimate.showInEditorTitle": {
           "type": "boolean",
@@ -724,7 +729,7 @@
         "taskRunnerUltimate.openDropdownFromActivityBar": {
           "type": "boolean",
           "default": false,
-          "description": "Also open the dropdown when the Task Runner view in the activity bar is revealed. Off by default: the view already shows the same list as a tree."
+          "description": "Also open the dropdown when the Task & Script Explorer view in the activity bar is revealed. Off by default: the view already shows the same list as a tree."
         },
         "taskRunnerUltimate.exclude": {
           "type": "string",
@@ -829,7 +834,7 @@
         "taskRunnerUltimate.colorIcons": {
           "type": "boolean",
           "default": true,
-          "description": "Tint script icons in the Task Runner view with their category colour. Turn off to keep every icon in the default foreground colour."
+          "description": "Tint script icons in the Task & Script Explorer view with their category colour. Turn off to keep every icon in the default foreground colour."
         },
         "taskRunnerUltimate.pinRunningTasks": {
           "type": "boolean",
@@ -872,7 +877,7 @@
     "colors": [
       {
         "id": "taskRunnerUltimate.sourceTitleForeground",
-        "description": "Colour of the source titles (package / manifest names) in the Task Runner view.",
+        "description": "Colour of the source titles (package / manifest names) in the Task & Script Explorer view.",
         "defaults": {
           "dark": "#D7BA7D",
           "light": "#B58900",
@@ -882,7 +887,7 @@
       },
       {
         "id": "taskRunnerUltimate.runningForeground",
-        "description": "Colour of the spinner on a task that is currently running in the Task Runner view.",
+        "description": "Colour of the spinner on a task that is currently running in the Task & Script Explorer view.",
         "defaults": {
           "dark": "#4CE64C",
           "light": "#1A9E1A",
@@ -892,7 +897,7 @@
       },
       {
         "id": "taskRunnerUltimate.category.run",
-        "description": "Icon colour in the Task Runner view: Running a dev server or watcher.",
+        "description": "Icon colour in the Task & Script Explorer view: Running a dev server or watcher.",
         "defaults": {
           "dark": "#73C991",
           "light": "#388A34",
@@ -902,7 +907,7 @@
       },
       {
         "id": "taskRunnerUltimate.category.test",
-        "description": "Icon colour in the Task Runner view: Tests and coverage.",
+        "description": "Icon colour in the Task & Script Explorer view: Tests and coverage.",
         "defaults": {
           "dark": "#F14C4C",
           "light": "#E51400",
@@ -912,7 +917,7 @@
       },
       {
         "id": "taskRunnerUltimate.category.quality",
-        "description": "Icon colour in the Task Runner view: Linting, formatting and type checking.",
+        "description": "Icon colour in the Task & Script Explorer view: Linting, formatting and type checking.",
         "defaults": {
           "dark": "#75BEFF",
           "light": "#0066BF",
@@ -922,7 +927,7 @@
       },
       {
         "id": "taskRunnerUltimate.category.build",
-        "description": "Icon colour in the Task Runner view: Building, bundling and packaging.",
+        "description": "Icon colour in the Task & Script Explorer view: Building, bundling and packaging.",
         "defaults": {
           "dark": "#D18616",
           "light": "#BF8803",
@@ -932,7 +937,7 @@
       },
       {
         "id": "taskRunnerUltimate.category.release",
-        "description": "Icon colour in the Task Runner view: Releasing, publishing and deploying.",
+        "description": "Icon colour in the Task & Script Explorer view: Releasing, publishing and deploying.",
         "defaults": {
           "dark": "#B180D7",
           "light": "#652D90",
@@ -942,7 +947,7 @@
       },
       {
         "id": "taskRunnerUltimate.category.data",
-        "description": "Icon colour in the Task Runner view: Migrations, seeds and code generation.",
+        "description": "Icon colour in the Task & Script Explorer view: Migrations, seeds and code generation.",
         "defaults": {
           "dark": "#4EC9B0",
           "light": "#0F8A82",
@@ -952,7 +957,7 @@
       },
       {
         "id": "taskRunnerUltimate.category.clean",
-        "description": "Icon colour in the Task Runner view: Cleaning and resetting.",
+        "description": "Icon colour in the Task & Script Explorer view: Cleaning and resetting.",
         "defaults": {
           "dark": "#9D9D9D",
           "light": "#767676",
@@ -1083,7 +1088,7 @@
       "activitybar": [
         {
           "id": "taskRunnerUltimate",
-          "title": "Task Runner Manager",
+          "title": "Task & Script Explorer",
           "icon": "media/activity-bar.svg"
         }
       ]
@@ -1092,9 +1097,9 @@
       "taskRunnerUltimate": [
         {
           "id": "taskRunnerUltimate.tree",
-          "name": "Task Runner Manager",
+          "name": "Task & Script Explorer",
           "icon": "media/activity-bar.svg",
-          "contextualTitle": "Task Runner Manager"
+          "contextualTitle": "Task & Script Explorer"
         }
       ]
     }

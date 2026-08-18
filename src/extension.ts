@@ -717,7 +717,7 @@ async function saveOrder(scope: string, refs: string[]): Promise<void> {
 async function refreshScripts(): Promise<void> {
   invalidate();
   await collectScripts();
-  vscode.window.setStatusBarMessage('Task Runner Manager: reloaded', 2000);
+  vscode.window.setStatusBarMessage('Task & Script Explorer: reloaded', 2000);
 }
 
 interface MenuItem extends vscode.QuickPickItem {
@@ -813,7 +813,7 @@ async function showMenu(): Promise<void> {
   ];
 
   const picked = await vscode.window.showQuickPick(items, {
-    title: 'Task Runner Manager',
+    title: 'Task & Script Explorer',
     placeHolder: 'Pick an action',
   });
   await picked?.run?.();
@@ -1994,7 +1994,7 @@ function updateStatusBar(count: number): void {
   if (!statusBarItem) {
     return;
   }
-  statusBarItem.text = count > 0 ? `$(sync~spin) Task Runner ${count}` : '$(play-circle) Task Runner';
+  statusBarItem.text = count > 0 ? `$(sync~spin) Task & Script Explorer ${count}` : '$(play-circle) Task & Script Explorer';
   statusBarItem.tooltip = count > 0 ? `${count} running task(s) — click to manage` : 'Show workspace tasks';
 }
 

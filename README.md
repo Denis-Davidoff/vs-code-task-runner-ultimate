@@ -1,11 +1,11 @@
-# ▶ Task Runner Manager
+# ▶ Task & Script Explorer
 
 **Every script in your workspace, and everything currently running, in one list. Start, stop and
 restart without ever going looking for a terminal tab.**
 
-![Task Runner Manager in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
+![Task & Script Explorer in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
-- 📋 **[A panel in the left bar](#the-task-runner-manager-view)** — every task of the workspace as a
+- 📋 **[A panel in the left bar](#the-task--script-explorer-view)** — every task of the workspace as a
   tree, grouped by the manifest it came from. Groups with something running float to the top and the
   number of running tasks rides on the activity bar icon as a real VS Code badge.
 - ⚡ **[A button in every editor's toolbar](#-in-the-toolbar-of-every-file)** — the ▶ icon, carrying
@@ -45,7 +45,7 @@ Tasks scatter. A monorepo buries them across a dozen `package.json` files, the R
 them keeps its own in a `Makefile.toml`, the Python one in `pyproject.toml`, and there is a
 `justfile` at the root that half the team forgets exists. The dev server you started an hour ago is
 alive in a tab you can no longer find, and running anything by hand means getting the directory
-*and* the tool right first. Task Runner Manager collapses all of that into one list, and gives you
+*and* the tool right first. Task & Script Explorer collapses all of that into one list, and gives you
 three ways to reach it.
 
 Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?itemName=DenysDavydov.task-runner-ultimate
@@ -172,9 +172,9 @@ pins it, and `none` hides them entirely.
 | Place | Notes |
 | --- | --- |
 | Editor title bar (top right) | The badged icon. Toggle with `taskRunnerUltimate.showInEditorTitle`. |
-| Activity bar (left strip) | The **Task Runner Manager** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
-| Status bar (bottom left) | `$(play-circle) Task Runner`, or `$(sync~spin) Task Runner N` while tasks run. Toggle with `taskRunnerUltimate.showInStatusBar`. |
-| Command palette | `Task Runner Manager: Show Scripts` |
+| Activity bar (left strip) | The **Task & Script Explorer** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
+| Status bar (bottom left) | `$(play-circle) Task & Script Explorer`, or `$(sync~spin) Task & Script Explorer N` while tasks run. Toggle with `taskRunnerUltimate.showInStatusBar`. |
+| Command palette | `Task & Script Explorer: Show Scripts` |
 | Keybinding | `Ctrl+Cmd+T` on macOS, `Ctrl+Alt+T` on Windows and Linux — see [Keyboard shortcuts](#keyboard-shortcuts) |
 
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
@@ -191,7 +191,7 @@ menu. Notebooks are covered separately through `notebook/toolbar`, and the icon 
 `navigation@1` so it is among the first to survive the overflow — but the surface that is *always*
 there is the activity bar view, plus the status bar entry and the keyboard shortcut.
 
-### The Task Runner Manager view
+### The Task & Script Explorer view
 
 The activity bar icon opens a tree with the same content as the dropdown, in this order: **FAVORITES**
 first, then **OTHER TASKS** — anything running that this extension did not start — then one group per
@@ -256,7 +256,7 @@ The ☰ in the view header opens everything that is not aimed at one row:
 
 Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `4 painted`,
 `5 starred` — and asks once before it does it. Refresh is also in the command palette under
-**Task Runner Manager: Refresh Scripts**.
+**Task & Script Explorer: Refresh Scripts**.
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
 do "what the toolbar icon does". If you would rather have the dropdown anyway, set
@@ -529,7 +529,7 @@ obvious candidates are not:
 
 ### Changing it
 
-Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Task Runner Manager: Show Scripts** and click the
+Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Task & Script Explorer: Show Scripts** and click the
 pencil. Or write it out in `keybindings.json`:
 
 ```json
@@ -559,7 +559,7 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `pythonRunner` | `auto` | How `[project.scripts]` entry points are entered — see [Python](#python). `none` hides them. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `showInEditorTitle` | `true` | The badged ▶ icon in the editor title bar. |
-| `showInStatusBar` | `true` | The `Task Runner` entry in the status bar. |
+| `showInStatusBar` | `true` | The `Task & Script Explorer` entry in the status bar. |
 | `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
 | `colorIcons` | `true` | Tints task icons by category. Turn off for plain foreground-coloured icons. |
 | `pinRunningTasks` | `false` | Lifts running tasks to the top of their own group, in the tree and the dropdown. Off because a row that stays put is a row you stop where you started it. |
@@ -619,7 +619,7 @@ in the very file being edited: switching a package from npm to pnpm has to chang
 are launched, not just what the list says. The cost is a rescan plus a few stat calls per package,
 on a change you made yourself.
 
-`Task Runner Manager: Refresh Scripts` does exactly the same thing on demand, for the cases no
+`Task & Script Explorer: Refresh Scripts` does exactly the same thing on demand, for the cases no
 watcher can see — a manifest edited outside the workspace, say.
 
 ## Runner detection
