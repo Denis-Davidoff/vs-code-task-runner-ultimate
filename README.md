@@ -45,6 +45,8 @@ alive in a tab you can no longer find, and running anything by hand means gettin
 *and* the tool right first. Task Runner Manager collapses all of that into one list, and gives you
 three ways to reach it.
 
+Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?itemName=DenysDavydov.task-runner-ultimate
+
 ### ▶ in the toolbar of every file
 
 The play icon sits in the editor title bar, so the whole workspace is one click away from wherever
