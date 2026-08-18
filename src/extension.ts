@@ -137,9 +137,14 @@ function repaint(): void {
 
 export function activate(context: vscode.ExtensionContext): void {
   storage = context.workspaceState;
-  // The settings entry in the menu filters the settings editor by this id, and
-  // reading it off the context is what keeps it right if the publisher changes.
-  extensionId = context.extension.id;
+  // Derive the extension id so the settings menu filter stays correct if the
+  // publisher changes. context.extensionUri is a stable anchor available since
+  // VS Code 1.74; context.extension was added later and may not type-check
+  // against the ^1.85.0 engine target, so we match by uri instead.
+  extensionId =
+    vscode.extensions.all.find(
+      (ext) => ext.extensionUri.toString() === context.extensionUri.toString(),
+    )?.id ?? 'DenysDavydov.task-runner-ultimate';
 
   for (const exec of vscode.tasks.taskExecutions) {
     const key = keyForTask(exec.task);
@@ -287,6 +292,9 @@ const FAVORITES_KEY = 'favorites';
 const TITLES_KEY = 'titles';
 const ORDER_KEY = 'order';
 const COLLAPSED_KEY = 'collapsed';
+
+/** Serializes collapse/expand writes so rapid fold actions never interleave. */
+let collapseWriteChain: Promise<void> = Promise.resolve();
 
 let storage: vscode.Memento | undefined;
 /** This extension's `publisher.name`, for the query that filters the settings editor. */
@@ -990,17 +998,22 @@ function isCollapsed(node: TreeNode): boolean {
  * Refs of groups that are no longer on screen are left in the store, as
  * favorites are — a manifest behind a closed workspace folder should find its
  * heading the way it left it.
+ *
+ * Writes are chained so that rapid fold/unfold actions never interleave and
+ * lose updates via a stale read of COLLAPSED_KEY.
  */
-async function rememberCollapse(node: TreeNode, collapsed: boolean): Promise<void> {
+function rememberCollapse(node: TreeNode, collapsed: boolean): void {
   const ref = collapseRef(node);
   if (!ref) {
     return;
   }
-  const refs = collapsedRefs().filter((item) => item !== ref);
-  if (collapsed) {
-    refs.push(ref);
-  }
-  await storage?.update(COLLAPSED_KEY, refs);
+  collapseWriteChain = collapseWriteChain.then(async () => {
+    const refs = collapsedRefs().filter((item) => item !== ref);
+    if (collapsed) {
+      refs.push(ref);
+    }
+    await storage?.update(COLLAPSED_KEY, refs);
+  });
 }
 
 function createTree(): vscode.Disposable[] {
@@ -1026,8 +1039,8 @@ function createTree(): vscode.Disposable[] {
       uri.scheme === DECORATION_SCHEME ? { color: new vscode.ThemeColor(TITLE_COLOR) } : undefined,
   });
 
-  const collapse = view.onDidCollapseElement(({ element }) => void rememberCollapse(element, true));
-  const expand = view.onDidExpandElement(({ element }) => void rememberCollapse(element, false));
+  const collapse = view.onDidCollapseElement(({ element }) => rememberCollapse(element, true));
+  const expand = view.onDidExpandElement(({ element }) => rememberCollapse(element, false));
 
   const visibility = view.onDidChangeVisibility(({ visible }) => {
     const opensDropdown = vscode.workspace
