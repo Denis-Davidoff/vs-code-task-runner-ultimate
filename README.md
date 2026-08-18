@@ -190,13 +190,19 @@ The activity bar icon opens a tree with the same content as the dropdown, in thi
 first, then **OTHER TASKS** — anything running that this extension did not start — then one group per
 manifest. Groups with something running float above the idle ones, so whatever is alive is on screen
 without scrolling; inside a group nothing moves — a running task spins in the place it has always
-had, because a row that jumps when you start it is a row you have to find again to stop it. Clicking
+had, because a row that jumps when you start it is a row you have to find again to stop it. Set
+`taskRunnerUltimate.pinRunningTasks` to `true` if you would rather have the opposite: running tasks
+then come first inside their own group, in the tree and in the dropdown alike. Clicking
 a row toggles it — run if stopped, stop if running — and hovering one reveals inline
 ☆ / ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as a real VS Code
 badge.
 
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
 `justfile` side by side gets three, all in the same folder.
+
+Every group starts expanded, and one you fold shut stays shut — through a repaint and across a
+restart. Like the stars and the renames, the folds live in the workspace's own storage, so they are
+per-workspace and per-machine and never reach `git status`.
 
 Every heading is read in the same three parts:
 
@@ -235,12 +241,13 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | Entry | What it does |
 | --- | --- |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
+| **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
 | **Reset all titles** | Every [renamed](#renaming-a-row) row and group heading goes back to the name its manifest gives it. |
 | **Reset sort order** | Every list goes back to the order its manifest declares, undoing [the drags](#reordering-rows). |
 | **Remove favorites** | Empties FAVORITES. The tasks stay where they are, in their own packages. |
 
-Each entry says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `5 starred` —
-and the three resets ask once before they do it. Refresh is also in the command palette under
+Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `5 starred` —
+and asks once before it does it. Refresh is also in the command palette under
 **Task Runner Manager: Refresh Scripts**.
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
@@ -298,6 +305,11 @@ themselves are never rewritten, so nothing shows up in `git status` and nobody e
 inherits your ordering. A task added to the manifest later keeps the neighbour it has there, sorting
 in right below the row it follows in the file rather than appearing at the bottom of a list you
 arranged months ago. **Reset sort order** in [the menu](#the-menu) puts everything back.
+
+With `pinRunningTasks` on, what a drag saves is still the order underneath the pin: dropping a row on
+another one records that they belong next to each other, and once nothing is running that is where
+they are. Saving what was on screen instead would freeze one task's run into the store and leave the
+list scrambled the moment it stopped.
 
 ### Renaming a row
 
@@ -488,6 +500,7 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `showInStatusBar` | `true` | The `Task Runner` entry in the status bar. |
 | `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
 | `colorIcons` | `true` | Tints task icons by category. Turn off for plain foreground-coloured icons. |
+| `pinRunningTasks` | `false` | Lifts running tasks to the top of their own group, in the tree and the dropdown. Off because a row that stays put is a row you stop where you started it. |
 | `categories` | `[]` | Extra category rules, checked *before* the built-in ones. |
 
 The ones worth knowing about in a real project are `sources`, `exclude` and `packageManager`. A

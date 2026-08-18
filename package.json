@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task Runner Manager🏆",
   "description": "Task manager and runner with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -673,6 +673,11 @@
           "type": "boolean",
           "default": true,
           "description": "Tint script icons in the Task Runner view with their category colour. Turn off to keep every icon in the default foreground colour."
+        },
+        "taskRunnerUltimate.pinRunningTasks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show running tasks first inside the group they belong to, in the tree and in the dropdown alike. Off by default: a row that stays put is a row you stop where you started it."
         },
         "taskRunnerUltimate.categories": {
           "type": "array",

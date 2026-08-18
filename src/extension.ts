@@ -104,7 +104,7 @@ const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
 /** Settings a scan reads, so a change to one has to throw the cached list away. */
 const SCAN_SETTINGS = ['exclude', 'sources', 'cargoCommands', 'goCommands', 'pythonRunner'];
 /** Settings that only change how the list is drawn — no rescan, just a repaint. */
-const DISPLAY_SETTINGS = ['packageManager', 'categories', 'colorIcons'];
+const DISPLAY_SETTINGS = ['packageManager', 'categories', 'colorIcons', 'pinRunningTasks'];
 
 /** Script key -> its running task execution. */
 const running = new Map<string, vscode.TaskExecution>();
@@ -137,6 +137,9 @@ function repaint(): void {
 
 export function activate(context: vscode.ExtensionContext): void {
   storage = context.workspaceState;
+  // The settings entry in the menu filters the settings editor by this id, and
+  // reading it off the context is what keeps it right if the publisher changes.
+  extensionId = context.extension.id;
 
   for (const exec of vscode.tasks.taskExecutions) {
     const key = keyForTask(exec.task);
@@ -283,8 +286,11 @@ function keyForTask(task: vscode.Task): string | undefined {
 const FAVORITES_KEY = 'favorites';
 const TITLES_KEY = 'titles';
 const ORDER_KEY = 'order';
+const COLLAPSED_KEY = 'collapsed';
 
 let storage: vscode.Memento | undefined;
+/** This extension's `publisher.name`, for the query that filters the settings editor. */
+let extensionId: string | undefined;
 
 /**
  * Storage identity of the group a script belongs to — its manifest, named the
@@ -452,6 +458,26 @@ function manualOrders(): Record<string, string[]> {
 }
 
 /**
+ * Positions each group occupies in the flat list. Rewriting only those slots
+ * permutes a group internally and leaves every other group untouched, which is
+ * what both passes over this list need — a drag reorders one manifest, and the
+ * pin lifts a row inside one manifest.
+ */
+function groupSlots(scripts: ScriptEntry[]): Map<string, number[]> {
+  const slots = new Map<string, number[]>();
+  for (const [index, script] of scripts.entries()) {
+    const scope = groupRef(script);
+    const taken = slots.get(scope);
+    if (taken) {
+      taken.push(index);
+    } else {
+      slots.set(scope, [index]);
+    }
+  }
+  return slots;
+}
+
+/**
  * The scan with the user's drags applied: inside a manifest the stored order
  * wins, and the manifests themselves stay where the scan put them.
  *
@@ -466,21 +492,8 @@ function orderedScripts(scripts: ScriptEntry[]): ScriptEntry[] {
     return scripts;
   }
 
-  // Positions each group occupies in the flat list. Rewriting only those slots
-  // permutes a group internally and leaves every other group untouched.
-  const slots = new Map<string, number[]>();
-  for (const [index, script] of scripts.entries()) {
-    const scope = groupRef(script);
-    const taken = slots.get(scope);
-    if (taken) {
-      taken.push(index);
-    } else {
-      slots.set(scope, [index]);
-    }
-  }
-
   const result = [...scripts];
-  for (const [scope, indices] of slots) {
+  for (const [scope, indices] of groupSlots(scripts)) {
     const order = orders[scope];
     if (!order?.length) {
       continue;
@@ -502,14 +515,77 @@ function orderedScripts(scripts: ScriptEntry[]): ScriptEntry[] {
   return result;
 }
 
-/** The scan in the order both surfaces show it. Everything user-facing goes through here. */
-async function listScripts(): Promise<ScriptEntry[]> {
+// --- pinned running tasks ----------------------------------------------------
+
+/**
+ * Whether a running task is lifted to the top of the list it sits in.
+ *
+ * Off by default, because a row that stays put is a row you stop where you
+ * started it: you click ▶, look away, and ◼ is still under the cursor. Turning
+ * it on trades that for finding what is alive without reading the list, which is
+ * the better trade once a workspace runs more at once than you can keep track of.
+ */
+function pinsRunning(): boolean {
+  return vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('pinRunningTasks', false);
+}
+
+/** One list with its running rows first, each half keeping the order it had. */
+function liftRunning(scripts: ScriptEntry[]): ScriptEntry[] {
+  const live = scripts.filter((script) => running.has(script.key));
+  return live.length === 0 ? scripts : [...live, ...scripts.filter((script) => !running.has(script.key))];
+}
+
+/**
+ * The lift for a list that is already one group whole — FAVORITES, in both
+ * surfaces. The per-package pass below cannot serve it: FAVORITES draws from
+ * every manifest at once, so its rows sit in slots that pass would keep apart.
+ */
+function runningFirst(scripts: ScriptEntry[]): ScriptEntry[] {
+  return pinsRunning() ? liftRunning(scripts) : scripts;
+}
+
+/**
+ * The same lift, applied inside each package instead of across the flat list: a
+ * running task comes first in its own group and the groups themselves do not
+ * move, which is what keeps the pin from flattening the tree into one list
+ * sorted by what happens to be alive.
+ */
+function pinRunning(scripts: ScriptEntry[]): ScriptEntry[] {
+  if (!pinsRunning()) {
+    return scripts;
+  }
+  const result = [...scripts];
+  for (const indices of groupSlots(scripts).values()) {
+    const rows = liftRunning(indices.map((slot) => scripts[slot]));
+    indices.forEach((slot, position) => {
+      result[slot] = rows[position];
+    });
+  }
+  return result;
+}
+
+/**
+ * The scan with the manifests and the user's drags in it, and nothing else. This
+ * is the order a drag reads and rewrites.
+ */
+async function savedOrder(): Promise<ScriptEntry[]> {
   return orderedScripts(await collectScripts());
 }
 
-/** The refs of a scope's rows, top to bottom, as they are on screen right now. */
+/** The scan in the order both surfaces show it. Everything user-facing goes through here. */
+async function listScripts(): Promise<ScriptEntry[]> {
+  return pinRunning(await savedOrder());
+}
+
+/**
+ * The refs of a scope's rows, top to bottom, in the saved order — deliberately
+ * not the one on screen. With the pin on the two differ, and a drag has to
+ * rewrite the order underneath it: saving what is on screen would freeze one
+ * task's run into the store and leave the list scrambled once it stops. What the
+ * drag expresses is which row a row belongs next to, and that survives the pin.
+ */
 async function scopeRefs(scope: string): Promise<string[]> {
-  const scripts = await listScripts();
+  const scripts = await savedOrder();
   const rows =
     scope === FAVORITES_SCOPE ? favoriteScripts(scripts) : scripts.filter((script) => groupRef(script) === scope);
   return rows.map(scriptRef);
@@ -543,10 +619,24 @@ interface MenuItem extends vscode.QuickPickItem {
 }
 
 /**
- * Everything the view can do that is not aimed at one row: the rescan, and the
- * three stores this workspace keeps about the lists. Each store empties whole,
- * so its entry says how much is in it before you pick it and asks once after —
- * a mis-click here costs every rename.
+ * Opens the settings editor with nothing in it but this extension's own options.
+ * It lives in the menu rather than in the view header: the header is for what you
+ * reach for while working, and settings are what you go looking for once.
+ */
+function openSettings(): void {
+  // Without the id the query is a plain text search, which is still better than
+  // dropping the user into the whole of settings.
+  void vscode.commands.executeCommand(
+    'workbench.action.openSettings',
+    extensionId ? `@ext:${extensionId}` : 'taskRunnerUltimate',
+  );
+}
+
+/**
+ * Everything the view can do that is not aimed at one row: the rescan, the
+ * settings, and the three stores this workspace keeps about the lists. Each store
+ * empties whole, so its entry says how much is in it before you pick it and asks
+ * once after — a mis-click here costs every rename.
  */
 async function showMenu(): Promise<void> {
   const titles = Object.keys(customTitles()).length;
@@ -588,6 +678,11 @@ async function showMenu(): Promise<void> {
       label: '$(refresh) Refresh scripts',
       description: 'read every manifest again',
       run: refreshScripts,
+    },
+    {
+      label: '$(gear) Settings',
+      description: 'every option this extension has',
+      run: async () => openSettings(),
     },
     { label: 'Undo', kind: vscode.QuickPickItemKind.Separator },
     ...stores.map((store) => ({
@@ -853,6 +948,57 @@ async function starDropped(refs: string[], anchor: string | undefined): Promise<
   repaint();
 }
 
+// --- collapsed groups --------------------------------------------------------
+
+/**
+ * The headings the user has folded shut. Everything is open by default, so the
+ * store holds the exceptions: an empty store is a fully expanded tree, and a
+ * group that has never been touched needs no entry to be drawn open.
+ *
+ * VS Code's own view-state does remember a fold, but only until the collapsible
+ * state we hand it says otherwise — and every repaint hands it one. Keeping the
+ * answer here is what makes a fold outlive both a repaint and a restart.
+ */
+function collapsedRefs(): string[] {
+  const stored = storage?.get<unknown>(COLLAPSED_KEY);
+  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+}
+
+/**
+ * Storage identity of a heading. The manifest ref is preferred for the same
+ * reason `scriptRef` prefers it over the absolute URI: a workspace moved to
+ * another path on disk keeps its folds. FAVORITES and OTHER TASKS have no
+ * manifest, and fall back to the id, which is a constant of ours.
+ */
+function collapseRef(node: TreeNode): string | undefined {
+  return node.kind === 'group' ? (node.ref ?? node.id) : undefined;
+}
+
+function isCollapsed(node: TreeNode): boolean {
+  const ref = collapseRef(node);
+  return ref !== undefined && collapsedRefs().includes(ref);
+}
+
+/**
+ * Records a fold. No repaint follows: the tree has already drawn the row in its
+ * new state, and firing one here would fight the animation it is playing.
+ *
+ * Refs of groups that are no longer on screen are left in the store, as
+ * favorites are — a manifest behind a closed workspace folder should find its
+ * heading the way it left it.
+ */
+async function rememberCollapse(node: TreeNode, collapsed: boolean): Promise<void> {
+  const ref = collapseRef(node);
+  if (!ref) {
+    return;
+  }
+  const refs = collapsedRefs().filter((item) => item !== ref);
+  if (collapsed) {
+    refs.push(ref);
+  }
+  await storage?.update(COLLAPSED_KEY, refs);
+}
+
 function createTree(): vscode.Disposable[] {
   const provider: vscode.TreeDataProvider<TreeNode> = {
     onDidChangeTreeData: treeChanged.event,
@@ -876,6 +1022,9 @@ function createTree(): vscode.Disposable[] {
       uri.scheme === DECORATION_SCHEME ? { color: new vscode.ThemeColor(TITLE_COLOR) } : undefined,
   });
 
+  const collapse = view.onDidCollapseElement(({ element }) => void rememberCollapse(element, true));
+  const expand = view.onDidExpandElement(({ element }) => void rememberCollapse(element, false));
+
   const visibility = view.onDidChangeVisibility(({ visible }) => {
     const opensDropdown = vscode.workspace
       .getConfiguration('taskRunnerUltimate')
@@ -885,14 +1034,16 @@ function createTree(): vscode.Disposable[] {
     }
   });
 
-  return [treeChanged, view, visibility, decorations];
+  return [treeChanged, view, collapse, expand, visibility, decorations];
 }
 
 /**
  * One group per manifest. Scripts keep the order the manifest declares them in,
  * running or not — a row that moves when you start it is a row you have to find
- * again to stop it. Groups that have something running float to the top of the
- * tree, so what is alive is still the first thing on screen.
+ * again to stop it — unless `pinRunningTasks` says otherwise, which `listScripts`
+ * has already applied by the time the rows get here. Groups that have something
+ * running float to the top of the tree, so what is alive is still the first thing
+ * on screen.
  */
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const groups: Array<{ node: TreeNode & { kind: 'group' }; hasRunning: boolean }> = [];
@@ -956,7 +1107,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   // Favorites sit above everything, including running groups: a pinned list is
   // only worth pinning if it does not move. The scripts stay in their own group
   // as well — this is a second way in, not a way out of the package it lives in.
-  const favorites = favoriteScripts(scripts);
+  const favorites = runningFirst(favoriteScripts(scripts));
   if (favorites.length > 0) {
     roots.unshift({
       kind: 'group',
@@ -1000,7 +1151,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // is a path, and a path that has been re-cased is one you cannot paste into a
     // terminal.
     const heading = node.folder ? `${title} → ${node.folder}` : title;
-    const item = new vscode.TreeItem(heading, vscode.TreeItemCollapsibleState.Expanded);
+    // Open unless the user has folded this one shut before: a tree you have never
+    // touched shows everything it found, and one you have shows it as you left it.
+    const item = new vscode.TreeItem(
+      heading,
+      isCollapsed(node) ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded,
+    );
     // The tooltip is where the manifest's own name survives a rename. A script
     // row keeps it in the dimmed description instead, which a heading cannot
     // use: the decoration below tints the whole label and a description with it.
@@ -1422,9 +1578,10 @@ const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemK
 /**
  * The tree's shape, flattened into separators and rows: FAVORITES, then the
  * tasks that came from outside a manifest, then one block per package — the
- * packages with something running first, and inside each of them the order the
- * manifest declares. Two surfaces showing the same list in two different orders
- * is two things to learn instead of one.
+ * packages with something running first, and inside each of them the order
+ * `listScripts` settled on. Two surfaces showing the same list in two different
+ * orders is two things to learn instead of one, which is also why the pin and the
+ * drags are applied before either of them sees the list.
  *
  * It departs from the tree in one place. The tree lists a starred script twice,
  * in FAVORITES and in its own package, because the two rows sit in different
@@ -1437,7 +1594,7 @@ function buildItems(scripts: ScriptEntry[]): Item[] {
   const foreign = foreignExecutions();
   const multiPackage = new Set(scripts.map((script) => script.manifest.toString())).size > 1;
 
-  const favorites = favoriteScripts(scripts);
+  const favorites = runningFirst(favoriteScripts(scripts));
   const starred = new Set(favorites.map((script) => script.key));
 
   if (favorites.length > 0) {
