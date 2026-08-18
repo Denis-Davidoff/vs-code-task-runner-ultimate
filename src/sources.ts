@@ -830,8 +830,11 @@ function parseNoxfile(text: string): ParsedManifest | undefined {
  * Target lines: one or more names, a single or double colon, then prerequisites.
  * The `(?!=)` is what keeps `CFLAGS := -O2` out, and disallowing `=` in the name
  * does the same for the other assignment forms.
+ *
+ * Exported so `locate.ts` finds the line a target is on with the same rule that
+ * put it in the list.
  */
-const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?!=)\s*(.*)$/;
+export const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?!=)\s*(.*)$/;
 /** `build: deps ## Build everything` — the convention every self-documenting Makefile uses. */
 const MAKE_DOC = /##\s*(.*)$/;
 
@@ -890,8 +893,10 @@ function parseMakefile(text: string): ParsedManifest | undefined {
  * A recipe starts in the first column with its name, takes parameters up to the
  * colon and dependencies after it. `(?!=)` keeps out `x := "y"`, which covers
  * assignments, `alias b := build` and the `set` directives in one go.
+ *
+ * Exported for `locate.ts`, as MAKE_TARGET above is.
  */
-const JUST_RECIPE = /^@?([A-Za-z_][A-Za-z0-9_-]*)([^:\n]*):(?!=)/;
+export const JUST_RECIPE = /^@?([A-Za-z_][A-Za-z0-9_-]*)([^:\n]*):(?!=)/;
 
 function parseJustfile(text: string): ParsedManifest | undefined {
   const tasks: RawTask[] = [];

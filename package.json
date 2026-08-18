@@ -243,6 +243,24 @@
         "icon": "$(edit)"
       },
       {
+        "command": "taskRunnerUltimate.openScript",
+        "title": "Go to Script Definition",
+        "category": "Task & Script Explorer",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "taskRunnerUltimate.openManifest",
+        "title": "Open Manifest File",
+        "category": "Task & Script Explorer",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "taskRunnerUltimate.showTerminal",
+        "title": "Show Terminal",
+        "category": "Task & Script Explorer",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "taskRunnerUltimate.setColor.red",
         "title": "🔴 Red",
         "category": "Task & Script Explorer"
@@ -490,6 +508,21 @@
           "when": "view == taskRunnerUltimate.tree && viewItem =~ /^(script:running:|foreignTask$)/"
         },
         {
+          "command": "taskRunnerUltimate.openScript",
+          "group": "0_open@1",
+          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:/"
+        },
+        {
+          "command": "taskRunnerUltimate.openManifest",
+          "group": "0_open@1",
+          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^group:package$/"
+        },
+        {
+          "command": "taskRunnerUltimate.showTerminal",
+          "group": "0_open@2",
+          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^(script:running:|foreignTask$)/"
+        },
+        {
           "command": "taskRunnerUltimate.addFavorite",
           "group": "1_favorites@1",
           "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:.+:nofav$/"
@@ -632,6 +665,18 @@
         },
         {
           "command": "taskRunnerUltimate.editTitle",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.openScript",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.openManifest",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.showTerminal",
           "when": "false"
         },
         {

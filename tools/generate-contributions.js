@@ -286,6 +286,9 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task & Script Explorer', icon: '$(star-empty)' },
   { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task & Script Explorer', icon: '$(star-full)' },
   { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task & Script Explorer', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.openScript', title: 'Go to Script Definition', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
+  { command: 'taskRunnerUltimate.openManifest', title: 'Open Manifest File', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
+  { command: 'taskRunnerUltimate.showTerminal', title: 'Show Terminal', category: 'Task & Script Explorer', icon: '$(terminal)' },
   // The swatch rides in the title; see PALETTE above for why it is not an icon.
   // None of these reach the command palette (see commandPalette below), so the
   // glyph is only ever read where it means something.
@@ -352,6 +355,20 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     // Non-inline groups are what the right-click menu shows.
+    //
+    // Opening the file is the one action here that is about the manifest rather
+    // than the task, and it is deliberately not an inline button: a row already
+    // carries up to three of those, and a fourth would push the ones you press
+    // while working — run, stop, star — further from the label for something you
+    // reach for once a session.
+    { command: 'taskRunnerUltimate.openScript', group: '0_open@1', when: `${inTree} && viewItem =~ /^script:/` },
+    // The same action on a package heading, which is a manifest and has no line
+    // of its own to open at. Two commands rather than one because the label of a
+    // menu entry is the command's, and a heading is not promising a task.
+    { command: 'taskRunnerUltimate.openManifest', group: '0_open@1', when: `${inTree} && viewItem =~ /^group:package$/` },
+    // Only a running task has a terminal to show, which is the same set of rows
+    // that has a ■ button — ours and the foreign ones alike.
+    { command: 'taskRunnerUltimate.showTerminal', group: '0_open@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav$/` },
     { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav$/` },
     { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^script:/` },
@@ -390,6 +407,9 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.addFavorite', when: 'false' },
     { command: 'taskRunnerUltimate.removeFavorite', when: 'false' },
     { command: 'taskRunnerUltimate.editTitle', when: 'false' },
+    { command: 'taskRunnerUltimate.openScript', when: 'false' },
+    { command: 'taskRunnerUltimate.openManifest', when: 'false' },
+    { command: 'taskRunnerUltimate.showTerminal', when: 'false' },
     ...PALETTE.map(({ name }) => ({ command: colourCommand(name), when: 'false' })),
     { command: CLEAR_COLOUR, when: 'false' },
   ],

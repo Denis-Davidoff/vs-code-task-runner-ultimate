@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { locateTask } from './locate';
 import { collectScripts, commandFor, resetSources, scriptKey, ScriptEntry, WATCH_GLOB } from './sources';
 
 /** Task type used for the tasks this extension executes. Must match contributes.taskDefinitions. */
@@ -157,10 +158,18 @@ export function activate(context: vscode.ExtensionContext): void {
     // One command per badge count: the toolbar icon is static, so the visible
     // entry is swapped via the runningCount context key (see contributes.menus).
     ...badgeCommandIds().map((id) => vscode.commands.registerCommand(id, showScriptPicker)),
-    vscode.commands.registerCommand('taskRunnerUltimate.runItem', (node?: TreeNode) => runNode(node)),
+    // The buttons on a row start a task without pulling the terminal to the
+    // front; clicking the row itself is the one that also shows it. See
+    // `startScript`.
+    vscode.commands.registerCommand('taskRunnerUltimate.runItem', (node?: TreeNode) => runNode(node, false)),
     vscode.commands.registerCommand('taskRunnerUltimate.stopItem', (node?: TreeNode) => stopNode(node)),
-    vscode.commands.registerCommand('taskRunnerUltimate.restartItem', (node?: TreeNode) => restartNode(node)),
-    vscode.commands.registerCommand('taskRunnerUltimate.toggleItem', (node?: TreeNode) => toggleNode(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.restartItem', (node?: TreeNode) => restartNode(node, false)),
+    vscode.commands.registerCommand('taskRunnerUltimate.toggleItem', (node?: TreeNode) => toggleNode(node, true)),
+    // Two ids for one action: a menu entry takes its label from the command, and
+    // "the task" and "the manifest" are two different things to promise.
+    vscode.commands.registerCommand('taskRunnerUltimate.openScript', (node?: TreeNode) => openManifest(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.openManifest', (node?: TreeNode) => openManifest(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.showTerminal', (node?: TreeNode) => showTerminal(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.addFavorite', (node?: TreeNode) => setFavorite(node, true)),
     vscode.commands.registerCommand('taskRunnerUltimate.removeFavorite', (node?: TreeNode) => setFavorite(node, false)),
     vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
@@ -179,7 +188,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
-      provideTasks: async () => (await collectScripts()).map(buildTask),
+      provideTasks: async () => (await collectScripts()).map((script) => buildTask(script)),
       resolveTask: async (task) => {
         const { manifest, script } = task.definition as { manifest?: string; script?: string };
         if (!manifest || !script) {
@@ -403,6 +412,67 @@ async function editTitle(node: TreeNode | undefined): Promise<void> {
   } else if (node?.kind === 'script') {
     await renameRef(scriptRef(node.script), node.script.name, 'task');
   }
+}
+
+/**
+ * Opens the manifest behind a row: a task row at the line the task is written
+ * on, a package heading at the top of the file it names.
+ *
+ * A heading is a manifest and nothing else — it has no line of its own to point
+ * at, and the top of the file is where you start reading one anyway. The two
+ * rows are one action for the same reason they are one file: what differs is
+ * where the cursor lands, not what is opened.
+ *
+ * A task's line is found now rather than remembered from the scan: see
+ * `locateTask`. A task that has no line to point at — a cargo or go row, which
+ * is a subcommand this extension offers and not an entry anyone wrote — opens
+ * its manifest at the top, as a heading does.
+ *
+ * Opened as a real editor rather than a preview tab: this is the "go and edit
+ * it" action, and a preview tab is the one that disappears the moment you open
+ * anything else.
+ */
+async function openManifest(node: TreeNode | undefined): Promise<void> {
+  // FAVORITES and OTHER TASKS are groups of ours rather than files, and carry no
+  // manifest — the `when` clauses keep them out of the menu, and this keeps them
+  // out of the command.
+  const source: { file: vscode.Uri; where: string; task?: ScriptEntry } | undefined =
+    node?.kind === 'script'
+      ? { file: node.script.manifest, where: node.script.location, task: node.script }
+      : node?.kind === 'group' && node.manifest
+        ? { file: node.manifest, where: node.detail ?? node.manifest.fsPath }
+        : undefined;
+  if (!source) {
+    return;
+  }
+
+  let document: vscode.TextDocument;
+  try {
+    document = await vscode.workspace.openTextDocument(source.file);
+  } catch {
+    // The manifest has been deleted or renamed since the scan; the list is
+    // stale rather than wrong, so say what happened and refresh it.
+    void vscode.window.showWarningMessage(`Cannot open ${source.where}.`);
+    await refreshScripts();
+    return;
+  }
+
+  const found = source.task
+    ? locateTask(document.getText(), source.task.kind, source.task.name)
+    : undefined;
+  const position = found
+    ? new vscode.Position(found.line, found.character)
+    : new vscode.Position(0, 0);
+  const selection = new vscode.Range(
+    position,
+    found ? position.translate(0, found.length) : position,
+  );
+
+  const editor = await vscode.window.showTextDocument(document, { preview: false, selection });
+  // showTextDocument scrolls the selection into view at the edge it came in
+  // from; centring it puts the task in the middle of the file you are now
+  // reading, with its neighbours around it.
+  editor.revealRange(selection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
 
 /** Why a rename is display-only, said in the terms of the row it was invoked on. */
@@ -876,6 +946,13 @@ type TreeNode =
        * something to restore.
        */
       ref?: string;
+      /**
+       * The file the heading names, for the groups that name one. Kept on the
+       * node rather than read back off the first child: the two would agree
+       * today, and a group whose rows are filtered or reordered is not a group
+       * whose file has changed.
+       */
+      manifest?: vscode.Uri;
       children: TreeNode[];
     }
   | { kind: 'script'; script: ScriptEntry; inFavorites?: boolean }
@@ -1227,6 +1304,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
           icon: GROUP_ICON,
           scope: groupRef(script),
           ref: groupRef(script),
+          manifest: script.manifest,
           children: [],
         },
         hasRunning: false,
@@ -1310,13 +1388,19 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     const named = [node.project, node.place].filter(Boolean).join(' ');
     const title = custom ? custom.toUpperCase() : named || node.label;
     // The folder is part of the label rather than a description on purpose: the
-    // decoration below tints the whole label, so an arrow-joined title keeps one
-    // colour across the row instead of a tinted title beside a dimmed path.
+    // decoration below tints the whole label, so a joined title keeps one colour
+    // across the row instead of a tinted title beside a dimmed path.
     //
-    // It is spelled as it is on disk, for the same reason as the folder above: it
-    // is a path, and a path that has been re-cased is one you cannot paste into a
-    // terminal.
-    const heading = node.folder ? `${title} → ${node.folder}` : title;
+    // The bullet is a separator and not a direction: the two halves are a name
+    // and the path it lives at, which an arrow made look like a step from one to
+    // the other. A dot the width of a space also stays out of the way of the two
+    // things being read, in a column of headings where the path is the longer
+    // half and the name is the half being looked for.
+    //
+    // The path is spelled as it is on disk, for the same reason as the folder
+    // above: it is a path, and a path that has been re-cased is one you cannot
+    // paste into a terminal.
+    const heading = node.folder ? `${title} • ${node.folder}` : title;
     // Open unless the user has folded this one shut before: a tree you have never
     // touched shows everything it found, and one you have shows it as you left it.
     const item = new vscode.TreeItem(
@@ -1613,9 +1697,9 @@ function executionOf(node: TreeNode | undefined): vscode.TaskExecution | undefin
   return node?.kind === 'foreign' ? node.execution : undefined;
 }
 
-async function runNode(node: TreeNode | undefined): Promise<void> {
+async function runNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
   if (node?.kind === 'script') {
-    await startScript(node.script);
+    await startScript(node.script, reveal);
   }
 }
 
@@ -1626,15 +1710,17 @@ async function stopNode(node: TreeNode | undefined): Promise<void> {
   }
 }
 
-async function restartNode(node: TreeNode | undefined): Promise<void> {
+async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
   if (node?.kind === 'foreign') {
+    // A foreign task is restarted as its owner defined it, terminal and all:
+    // the presentation is part of that definition and not ours to override.
     const task = node.execution.task;
     await stopExecution(node.execution);
     await vscode.tasks.executeTask(task);
     return;
   }
   await stopNode(node);
-  await runNode(node);
+  await runNode(node, reveal);
 }
 
 /** Stops everything the task system currently runs, ours and foreign alike. */
@@ -1652,12 +1738,64 @@ async function restartAllTasks(): Promise<void> {
   }
 }
 
-async function toggleNode(node: TreeNode | undefined): Promise<void> {
+async function toggleNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
   if (executionOf(node)) {
     await stopNode(node);
   } else {
-    await runNode(node);
+    await runNode(node, reveal);
   }
+}
+
+/**
+ * Brings up the terminal a running task is writing to, and focuses it.
+ *
+ * This is the way back from a task started with ▶, which deliberately leaves
+ * the panel where it was: the output is there the whole time, and this is the
+ * one click that goes to it without stopping or restarting anything.
+ */
+async function showTerminal(node: TreeNode | undefined): Promise<void> {
+  const execution = executionOf(node);
+  if (!execution) {
+    return;
+  }
+
+  const terminal = terminalFor(execution.task);
+  if (!terminal) {
+    // The task is running but its terminal has been closed — killing a task
+    // terminal ends the task, so this is the window between the two, or a task
+    // whose owner runs it without one.
+    void vscode.window.showInformationMessage(`${execution.task.name} has no open terminal.`);
+    return;
+  }
+  terminal.show();
+}
+
+/**
+ * The terminal a task runs in, matched by name because the name is the only
+ * thread between the two: `TaskExecution` carries no terminal, and the task
+ * system creates its terminals itself rather than through the terminal API, so
+ * nothing is ever handed over to hold on to.
+ *
+ * What the name is depends on the workspace. VS Code names a task terminal after
+ * the task's own `name` in a single-folder workspace, and after its qualified
+ * label — `source: name (folder)` — in a multi-root one, where the folder is
+ * what tells two identically named tasks apart. Older versions prefixed it with
+ * `Task - `. Every whole form is tried before the containment test, so an exact
+ * name never loses to a longer one that merely has it inside.
+ *
+ * A miss is a real answer and not a failure to handle: a task terminal that has
+ * been closed took its task with it, so the caller says so rather than opening
+ * something else that happens to be there.
+ */
+function terminalFor(task: vscode.Task): vscode.Terminal | undefined {
+  const names = [task.name, `${task.source}: ${task.name}`, `Task - ${task.name}`];
+  for (const name of names) {
+    const exact = vscode.window.terminals.find((terminal) => terminal.name === name);
+    if (exact) {
+      return exact;
+    }
+  }
+  return vscode.window.terminals.find((terminal) => terminal.name.includes(task.name));
 }
 
 // --- picker ------------------------------------------------------------------
@@ -1739,7 +1877,9 @@ async function showScriptPicker(): Promise<void> {
     if (action === 'stop') {
       await stopNode(nodeOf(item));
     } else {
-      await restartNode(nodeOf(item));
+      // The picker stays open over the panel, so the same rule the tree uses
+      // applies here: a button acts on the row and leaves the view alone.
+      await restartNode(nodeOf(item), false);
     }
     render();
   });
@@ -1753,7 +1893,7 @@ async function showScriptPicker(): Promise<void> {
       // Starting: hide so the task terminal is not covered by the picker.
       const script = item.script;
       picker.hide();
-      await startScript(script);
+      await startScript(script, true);
       return;
     }
     await stopNode(nodeOf(item));
@@ -1885,7 +2025,9 @@ function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
 async function restartActiveItem(): Promise<void> {
   const item = activePicker?.activeItem();
   if (item) {
-    await restartNode(nodeOf(item));
+    // Shift+Enter restarts without dismissing the picker, so nothing is revealed
+    // over it — the same reason the restart button beside the row does not.
+    await restartNode(nodeOf(item), false);
     activePicker?.refresh();
   }
 }
@@ -1900,8 +2042,21 @@ function nodeOf(item: Item): TreeNode | undefined {
 
 // --- running tasks -----------------------------------------------------------
 
-async function startScript(script: ScriptEntry): Promise<void> {
-  const execution = await vscode.tasks.executeTask(buildTask(script));
+/**
+ * Starts a task, showing its terminal or leaving it in the background.
+ *
+ * Which of the two it is says where the click landed. Clicking the row is the
+ * whole row saying "run this", and what you asked for is the output — starting
+ * a dev server and then having to go and find its terminal is a step the click
+ * already meant. The play button beside it is the other intent: start it and
+ * leave me where I am, so a build kicked off next to the one you are reading
+ * does not take the panel away from it.
+ *
+ * The terminal exists either way and keeps its output; `Never` only means the
+ * panel is not brought to it.
+ */
+async function startScript(script: ScriptEntry, reveal: boolean): Promise<void> {
+  const execution = await vscode.tasks.executeTask(buildTask(script, reveal));
   running.set(script.key, execution);
   onStateChanged();
 }
@@ -1940,7 +2095,7 @@ function sameTask(a: vscode.Task, b: vscode.Task): boolean {
   return a.name === b.name && a.source === b.source && JSON.stringify(a.definition) === JSON.stringify(b.definition);
 }
 
-function buildTask(script: ScriptEntry): vscode.Task {
+function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
   const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
   // A directory can hold a package.json, a Makefile and a justfile, each with a
   // `test`, so what disambiguates the terminal's name is the manifest and not
@@ -1955,7 +2110,7 @@ function buildTask(script: ScriptEntry): vscode.Task {
     new vscode.ShellExecution(commandFor(script), { cwd: script.cwd.fsPath }),
   );
   task.presentationOptions = {
-    reveal: vscode.TaskRevealKind.Always,
+    reveal: reveal ? vscode.TaskRevealKind.Always : vscode.TaskRevealKind.Never,
     panel: vscode.TaskPanelKind.Dedicated,
     clear: true,
     echo: true,

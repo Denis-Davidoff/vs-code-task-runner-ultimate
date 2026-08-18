@@ -92,6 +92,13 @@ monorepo.
   extensions, or the built-in npm list. Stop or restart them from the same place.
 - **Toggle on <kbd>Enter</kbd>** — start what is stopped, stop what is running; ⟳ or
   <kbd>Shift</kbd>+<kbd>Enter</kbd> restarts, with a cleared terminal.
+- **Two ways to start one task** — [click the row](#clicking-a-row-versus-pressing-run) and the terminal
+  comes up with it; press ▶ and it starts in the background, leaving you where you were.
+- **Show Terminal** — right-click a running task to go to its output, without stopping or restarting
+  anything.
+- **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
+  at the line the task is on, in all nine ecosystems; on a heading, **Open Manifest File** opens the
+  file itself.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
 - **Favorites** — star the two or three tasks you actually run and they pin to a group at the top
   of the tree, above everything, without leaving the manifest they belong to.
@@ -204,6 +211,24 @@ a row toggles it — run if stopped, stop if running — and hovering one reveal
 ☆ / ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as a real VS Code
 badge.
 
+#### Clicking a row versus pressing Run
+
+The two ways of starting a task differ in one thing: whether the panel comes up with it.
+
+Clicking the row **runs it and shows its terminal**. The whole row is one gesture saying "run this",
+and what you wanted was the output — starting a dev server and then going to look for its terminal
+is a step the click already meant.
+
+The inline ▶ (and ⟳) **start it and leave you where you are**. That is the other intent: kicking off
+a build or a codegen next to the file you are reading, without the panel taking the editor's place.
+The terminal is still created and still keeps every line of output — it is one click away in the
+terminal dropdown, and the row spins meanwhile — it just does not come to the front.
+
+The way back is right-click → **Show Terminal**, on any running row: it brings up that task's
+terminal and focuses it, without stopping or restarting anything. It is offered on the rows under
+**OTHER TASKS** too, so a watcher some other extension started is one right-click from its output as
+well.
+
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
 `justfile` side by side gets three, all in the same folder.
 
@@ -214,7 +239,7 @@ per-workspace and per-machine and never reach `git status`.
 Every heading is read in the same three parts:
 
 ```
-ACME PLATFORM api-gateway → packages/services/api-gateway
+ACME PLATFORM api-gateway • packages/services/api-gateway
 ```
 
 The project comes first, in upper case with `-` and `_` opened up into spaces — the name the root
@@ -222,11 +247,11 @@ manifest gives itself (`name` in a `package.json`, `[package] name` in a `Cargo.
 `go.mod`), or the workspace folder's own name when the root names nothing. It is the same on every
 group in that project, FAVORITES and OTHER TASKS included, so the sidebar has one masthead rather
 than one per row. Then the folder the manifest sits in, spelled exactly as it is on disk — `webUI`
-stays `webUI`. Then, after the arrow, the path to it, also as it is on disk, so it can be pasted
+stays `webUI`. Then, after the bullet, the path to it, also as it is on disk, so it can be pasted
 into a terminal. A manifest at the root of its project has neither part: the project name has
 already said where it is.
 
-Where one folder holds several manifests the path after the arrow ends in the file name —
+Where one folder holds several manifests the path after the bullet ends in the file name —
 `services/api/Cargo.toml` beside `services/api/Makefile` — because the folder alone would name all
 three groups the same. And any heading can be [renamed](#renaming-a-group-heading) when what it says
 is longer than the sidebar has room for.
@@ -341,16 +366,16 @@ the package manager is given.
 
 The same **Edit Title…** on a group heading renames the package instead. A deep monorepo spends the
 row on saying where it is twice over — the project, the folder, and the path to it — and a title of
-your own stands in for everything before the arrow:
+your own stands in for everything before the bullet:
 
 ```
-ACME PLATFORM api-gateway → packages/services/api-gateway
-GATEWAY → packages/services/api-gateway
+ACME PLATFORM api-gateway • packages/services/api-gateway
+GATEWAY • packages/services/api-gateway
 ```
 
 It is the same kind of label as a renamed script: the `package.json` keeps its `name`, the folder
 keeps its name on disk, nothing lands in `git status`. What the heading loses, the row keeps
-elsewhere — the path after the arrow still says where the group is, and the tooltip still carries the
+elsewhere — the path after the bullet still says where the group is, and the tooltip still carries the
 name the manifest gives it. That is the one difference from a script row, which shows its real name
 in the dimmed text beside the label: a heading is tinted whole, description included, so the real
 name lives in the tooltip rather than on the row.
@@ -420,13 +445,17 @@ they are Unicode 15, and an older emoji font would draw three empty boxes instea
 
 ### Reaching the row commands
 
-**Add to Favorites**, **Remove from Favorites**, **Edit Title…** and **Colour** all act on the row
-they were invoked from, so they live where there is a row to invoke them on:
+**Add to Favorites**, **Remove from Favorites**, **Go to Script Definition**, **Open Manifest
+File**, **Show Terminal**, **Edit Title…** and **Colour** all act on the row they were invoked from,
+so they live where there is a row to invoke them on:
 
 | Command | Where |
 | --- | --- |
 | Add to Favorites | ☆ inline on hover, and right-click |
 | Remove from Favorites | ★ inline on hover, and right-click |
+| Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
+| Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; FAVORITES and OTHER TASKS name no file and do not offer it |
+| Show Terminal | right-click only, on a running row — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
 | Edit Title… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
 
@@ -492,7 +521,7 @@ are dropped entirely, since the only one there would be repeating the picker's o
 | --- | --- |
 | `Enter` on a stopped script | Starts it and closes the picker, so the task terminal is visible. |
 | `Enter` on a running task | Stops it; the picker stays open and refreshes in place. |
-| `Shift+Enter` | Restarts the focused entry (starts it if it was stopped). |
+| `Shift+Enter` | Restarts the focused entry (starts it if it was stopped). The picker stays open, so the terminal is not brought up underneath it. |
 | ⟳ button | Same as `Shift+Enter`, without leaving the keyboard row. |
 | ■ button | Stops that task. Only shown for entries that are actually running. |
 
