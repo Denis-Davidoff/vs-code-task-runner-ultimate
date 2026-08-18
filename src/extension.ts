@@ -574,7 +574,11 @@ async function savedOrder(): Promise<ScriptEntry[]> {
   return orderedScripts(await collectScripts());
 }
 
-/** The scan in the order both surfaces show it. Everything user-facing goes through here. */
+/**
+ * The scan in the order the tree shows it. The tree rebuilds from scratch on every
+ * repaint, so the pin can be applied once here; the picker caches its list instead
+ * and so pins in `buildItems`, at render. Both end up showing the same order.
+ */
 async function listScripts(): Promise<ScriptEntry[]> {
   return pinRunning(await savedOrder());
 }
@@ -1016,6 +1020,14 @@ function rememberCollapse(node: TreeNode, collapsed: boolean): void {
     return;
   }
   const refs = foldedRefs();
+  // The tree also reports the state it was handed, so an expand event arrives for
+  // every group drawn open — on the first render and again after any repaint that
+  // redraws one. Writing only a change keeps a repaint of a wide workspace from
+  // turning into one storage write per heading, all of them saying what the store
+  // already said.
+  if (collapsed === refs.has(ref)) {
+    return;
+  }
   if (collapsed) {
     refs.add(ref);
   } else {
@@ -1528,8 +1540,12 @@ interface ActivePicker {
 let activePicker: ActivePicker | undefined;
 
 async function showScriptPicker(): Promise<void> {
-  // Reassigned by `reload` when a manifest changes while the picker is open.
-  let scripts = await listScripts();
+  // The saved order, not the pinned one, and reassigned by `reload` when a
+  // manifest changes while the picker is open. The pin is applied by `buildItems`
+  // on every render instead: `render` runs again on each start and stop, and a row
+  // that has just stopped can only drop back down if the list it is rebuilt from
+  // still remembers where it belongs.
+  let scripts = await savedOrder();
 
   if (scripts.length === 0 && runningCount() === 0) {
     vscode.window.showInformationMessage('No tasks found in any manifest of this workspace.');
@@ -1555,7 +1571,7 @@ async function showScriptPicker(): Promise<void> {
   };
 
   const reload = async () => {
-    scripts = await listScripts();
+    scripts = await savedOrder();
     render();
   };
 
@@ -1603,10 +1619,14 @@ const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemK
 /**
  * The tree's shape, flattened into separators and rows: FAVORITES, then the
  * tasks that came from outside a manifest, then one block per package — the
- * packages with something running first, and inside each of them the order
- * `listScripts` settled on. Two surfaces showing the same list in two different
- * orders is two things to learn instead of one, which is also why the pin and the
- * drags are applied before either of them sees the list.
+ * packages with something running first, and inside each of them the same order
+ * the tree uses. Two surfaces showing the same list in two different orders is two
+ * things to learn instead of one.
+ *
+ * It takes the saved order and applies the pin itself, because it is re-run on
+ * every start and stop while the picker stays open. Pinning before this point
+ * would fix the rows where they stood when the picker was opened, and a task
+ * stopped from here would keep the top slot it no longer earns.
  *
  * It departs from the tree in one place. The tree lists a starred script twice,
  * in FAVORITES and in its own package, because the two rows sit in different
@@ -1614,7 +1634,8 @@ const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemK
  * exactly one row, and a starred one is lifted out of its package — its
  * FAVORITES row names the package instead, which is what the tree does too.
  */
-function buildItems(scripts: ScriptEntry[]): Item[] {
+function buildItems(saved: ScriptEntry[]): Item[] {
+  const scripts = pinRunning(saved);
   const items: Item[] = [];
   const foreign = foreignExecutions();
   const multiPackage = new Set(scripts.map((script) => script.manifest.toString())).size > 1;
