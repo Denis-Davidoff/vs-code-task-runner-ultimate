@@ -137,14 +137,11 @@ function repaint(): void {
 
 export function activate(context: vscode.ExtensionContext): void {
   storage = context.workspaceState;
-  // Derive the extension id so the settings menu filter stays correct if the
-  // publisher changes. context.extensionUri is a stable anchor available since
-  // VS Code 1.74; context.extension was added later and may not type-check
-  // against the ^1.85.0 engine target, so we match by uri instead.
-  extensionId =
-    vscode.extensions.all.find(
-      (ext) => ext.extensionUri.toString() === context.extensionUri.toString(),
-    )?.id ?? 'DenysDavydov.task-runner-ultimate';
+  // The settings entry in the menu filters the settings editor by this id, and
+  // reading it off the context is what keeps it right if the publisher changes.
+  // `ExtensionContext.extension` is stable API as of VS Code 1.62, well under the
+  // 1.85 this extension asks for, so there is no id spelled out anywhere here.
+  extensionId = context.extension.id;
 
   for (const exec of vscode.tasks.taskExecutions) {
     const key = keyForTask(exec.task);
@@ -292,9 +289,6 @@ const FAVORITES_KEY = 'favorites';
 const TITLES_KEY = 'titles';
 const ORDER_KEY = 'order';
 const COLLAPSED_KEY = 'collapsed';
-
-/** Serializes collapse/expand writes so rapid fold actions never interleave. */
-let collapseWriteChain: Promise<void> = Promise.resolve();
 
 let storage: vscode.Memento | undefined;
 /** This extension's `publisher.name`, for the query that filters the settings editor. */
@@ -970,10 +964,27 @@ async function starDropped(refs: string[], anchor: string | undefined): Promise<
  * VS Code's own view-state does remember a fold, but only until the collapsible
  * state we hand it says otherwise — and every repaint hands it one. Keeping the
  * answer here is what makes a fold outlive both a repaint and a restart.
+ *
+ * Alone among the four stores this one is held in memory as well, because alone
+ * among them it is written from a stream of UI events rather than from a command:
+ * the tree fires collapse and expand as fast as a user can click the arrows. This
+ * set is the authority and `storage` only trails it, so a fold never reads back
+ * what a previous one wrote — there is no read-modify-write for two events to
+ * interleave over, and none of it depends on how promptly a `Memento` makes a
+ * write visible to the next read. Nothing else writes the key, so the set cannot
+ * go stale; a write that fails costs that one fold, since the next one persists
+ * the set entire.
  */
-function collapsedRefs(): string[] {
-  const stored = storage?.get<unknown>(COLLAPSED_KEY);
-  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+let folded: Set<string> | undefined;
+
+function foldedRefs(): Set<string> {
+  if (!folded) {
+    const stored = storage?.get<unknown>(COLLAPSED_KEY);
+    folded = new Set(
+      Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [],
+    );
+  }
+  return folded;
 }
 
 /**
@@ -988,7 +999,7 @@ function collapseRef(node: TreeNode): string | undefined {
 
 function isCollapsed(node: TreeNode): boolean {
   const ref = collapseRef(node);
-  return ref !== undefined && collapsedRefs().includes(ref);
+  return ref !== undefined && foldedRefs().has(ref);
 }
 
 /**
@@ -998,22 +1009,19 @@ function isCollapsed(node: TreeNode): boolean {
  * Refs of groups that are no longer on screen are left in the store, as
  * favorites are — a manifest behind a closed workspace folder should find its
  * heading the way it left it.
- *
- * Writes are chained so that rapid fold/unfold actions never interleave and
- * lose updates via a stale read of COLLAPSED_KEY.
  */
 function rememberCollapse(node: TreeNode, collapsed: boolean): void {
   const ref = collapseRef(node);
   if (!ref) {
     return;
   }
-  collapseWriteChain = collapseWriteChain.then(async () => {
-    const refs = collapsedRefs().filter((item) => item !== ref);
-    if (collapsed) {
-      refs.push(ref);
-    }
-    await storage?.update(COLLAPSED_KEY, refs);
-  });
+  const refs = foldedRefs();
+  if (collapsed) {
+    refs.add(ref);
+  } else {
+    refs.delete(ref);
+  }
+  void storage?.update(COLLAPSED_KEY, [...refs]);
 }
 
 function createTree(): vscode.Disposable[] {
