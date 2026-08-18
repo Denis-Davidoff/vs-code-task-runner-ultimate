@@ -164,6 +164,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.addFavorite', (node?: TreeNode) => setFavorite(node, true)),
     vscode.commands.registerCommand('taskRunnerUltimate.removeFavorite', (node?: TreeNode) => setFavorite(node, false)),
     vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
+    // One command per colour: a submenu entry is a command, and there is no way
+    // to hand it an argument from contributes.menus. The list is the palette's,
+    // so the two can never drift apart.
+    ...PALETTE.map((name) =>
+      vscode.commands.registerCommand(`taskRunnerUltimate.setColor.${name}`, (node?: TreeNode) =>
+        setNodeColor(node, name),
+      ),
+    ),
+    vscode.commands.registerCommand('taskRunnerUltimate.clearColor', (node?: TreeNode) =>
+      setNodeColor(node, undefined),
+    ),
     vscode.commands.registerCommand('taskRunnerUltimate.menu', showMenu),
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
@@ -289,6 +300,7 @@ const FAVORITES_KEY = 'favorites';
 const TITLES_KEY = 'titles';
 const ORDER_KEY = 'order';
 const COLLAPSED_KEY = 'collapsed';
+const COLORS_KEY = 'colors';
 
 let storage: vscode.Memento | undefined;
 /** This extension's `publisher.name`, for the query that filters the settings editor. */
@@ -435,6 +447,94 @@ async function renameRef(
     delete titles[ref];
   }
   await storage?.update(TITLES_KEY, titles);
+  repaint();
+}
+
+// --- row colours -------------------------------------------------------------
+
+/**
+ * The ten colours a row can be painted, in the order the submenu offers them:
+ * around the wheel from red, then the two quiet ones — brown and grey — last,
+ * which is where a row being turned down rather than picked out belongs.
+ *
+ * The store keeps these names rather than the theme colour ids behind them. A
+ * name is what the user picked, and the id it maps to stays ours to move; a
+ * store full of ids is one that goes blank the day one of them is renamed. It is
+ * also what lets a name this build no longer offers be ignored rather than
+ * handed to `ThemeColor` as a colour nothing declares.
+ */
+const PALETTE = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'brown', 'gray'] as const;
+
+type PaletteName = (typeof PALETTE)[number];
+
+/** The theme colour a palette name paints with, declared in contributes.colors. */
+function paletteColor(name: PaletteName): string {
+  return `taskRunnerUltimate.palette.${name}`;
+}
+
+function customColors(): Record<string, string> {
+  const stored = storage?.get<unknown>(COLORS_KEY);
+  return stored && typeof stored === 'object' && !Array.isArray(stored)
+    ? (stored as Record<string, string>)
+    : {};
+}
+
+/**
+ * The colour a ref was painted, if it still names one this build offers. Scripts
+ * and group headings share the store the way they share the titles one — their
+ * refs cannot collide, and one "Reset all colours" undoes both.
+ */
+function storedColor(ref: string | undefined): PaletteName | undefined {
+  const name = ref ? customColors()[ref] : undefined;
+  return PALETTE.find((entry) => entry === name);
+}
+
+/**
+ * What a row's colour is filed under: the ref its title is, and for the two
+ * groups that have no title to rename, the id they are built with.
+ *
+ * That is where colour parts company with the rename. A rename needs a name on
+ * disk to put back, so FAVORITES and OTHER TASKS cannot have one; a colour needs
+ * nothing but a row to sit on, and those two are as worth finding at a glance as
+ * any package is. Their ids are constants of ours — `group:favorites`,
+ * `group:foreign` — so a colour on either survives everything a scan can change.
+ *
+ * The same fallback `collapseRef` uses, and for the same reason. Package groups
+ * always carry a ref, so it is only ever those two that reach the id.
+ */
+function colorRef(node: TreeNode): string | undefined {
+  if (node.kind === 'group') {
+    return node.ref ?? node.id;
+  }
+  // A foreign task is somebody else's execution, alive only while it runs, so
+  // there is nothing stable to file a colour against.
+  return node.kind === 'script' ? scriptRef(node.script) : undefined;
+}
+
+/** The theme colour a row is painted with, or nothing if it was never painted. */
+function nodeColor(node: TreeNode): string | undefined {
+  const name = storedColor(colorRef(node));
+  return name ? paletteColor(name) : undefined;
+}
+
+/**
+ * Paints a row, or strips it back to the colour it would have had. `undefined`
+ * deletes the entry rather than storing a "default": an absent ref is what the
+ * fallbacks already read as, and it keeps the menu's count honest about how much
+ * there is to undo.
+ */
+async function setNodeColor(node: TreeNode | undefined, name: PaletteName | undefined): Promise<void> {
+  const ref = node ? colorRef(node) : undefined;
+  if (!ref) {
+    return;
+  }
+  const colors = { ...customColors() };
+  if (name) {
+    colors[ref] = name;
+  } else {
+    delete colors[ref];
+  }
+  await storage?.update(COLORS_KEY, colors);
   repaint();
 }
 
@@ -640,7 +740,7 @@ function openSettings(): void {
 
 /**
  * Everything the view can do that is not aimed at one row: the rescan, the
- * settings, and the three stores the menu can empty. Each of those empties whole,
+ * settings, and the four stores the menu can empty. Each of those empties whole,
  * so its entry says how much is in it before you pick it and asks once after —
  * a mis-click here costs every rename.
  *
@@ -652,6 +752,7 @@ async function showMenu(): Promise<void> {
   const titles = Object.keys(customTitles()).length;
   const orders = Object.values(manualOrders()).filter((refs) => refs.length > 0).length;
   const favorites = favoriteRefs().length;
+  const colors = Object.keys(customColors()).length;
 
   const stores = [
     {
@@ -671,6 +772,15 @@ async function showMenu(): Promise<void> {
       held: `${orders} ${orders === 1 ? 'list' : 'lists'} reordered`,
       confirm: 'Reset order',
       detail: 'Every list goes back to the order its manifest declares.',
+    },
+    {
+      key: COLORS_KEY,
+      icon: 'symbol-color',
+      name: 'Reset all colours',
+      count: colors,
+      held: `${colors} painted`,
+      confirm: 'Reset colours',
+      detail: 'Every painted task and package heading goes back to the colour its category gives it.',
     },
     {
       key: FAVORITES_KEY,
@@ -709,7 +819,7 @@ async function showMenu(): Promise<void> {
   await picked?.run?.();
 }
 
-/** One of the three stores behind the menu, emptied after a confirmation. */
+/** One of the four stores behind the menu, emptied after a confirmation. */
 async function emptyStore(store: {
   key: string;
   name: string;
@@ -1054,9 +1164,18 @@ function createTree(): vscode.Disposable[] {
   });
   treeView = view;
 
+  // Which colour a row wants is the first segment of the uri it hands over, so a
+  // repaint that changes the colour changes the uri with it. That is what makes
+  // repainting work at all: decorations are cached per uri, this provider fires no
+  // change event, and a colour carried by the uri is one the cache cannot serve
+  // stale. It goes in the path rather than the query because the cache is keyed by
+  // scheme, authority and path segments — two uris that differ only in their query
+  // are the same uri to it.
   const decorations = vscode.window.registerFileDecorationProvider({
-    provideFileDecoration: (uri) =>
-      uri.scheme === DECORATION_SCHEME ? { color: new vscode.ThemeColor(TITLE_COLOR) } : undefined,
+    provideFileDecoration: (uri) => {
+      const [color] = uri.scheme === DECORATION_SCHEME ? uri.path.slice(1).split('/') : [];
+      return color ? { color: new vscode.ThemeColor(color) } : undefined;
+    },
   });
 
   const collapse = view.onDidCollapseElement(({ element }) => rememberCollapse(element, true));
@@ -1161,6 +1280,16 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   return roots;
 }
 
+/**
+ * The resource a coloured row points at: the colour first, then something that
+ * tells this row from the others. Nothing of it is on screen — the row carries
+ * its own label, description and tooltip — so the path is free to be an identity
+ * for the decoration cache rather than a path anyone reads.
+ */
+function decorationUri(color: string, name: string): vscode.Uri {
+  return vscode.Uri.from({ scheme: DECORATION_SCHEME, path: `/${color}/${name}` });
+}
+
 function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
     // A heading is read in two registers, and the row spells each in its own way.
@@ -1206,9 +1335,16 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // has no colour of its own (only opacity), so a visible description would
     // be tinted too. The path therefore lives in the tooltip and the row shows
     // the title alone — that keeps the colour on the title and nothing else.
-    item.resourceUri = vscode.Uri.from({ scheme: DECORATION_SCHEME, path: `/${node.detail ?? node.label}` });
+    //
+    // A folder the user has painted wears that colour instead of the shared one,
+    // on the label and on the icon alike: the point of painting one is to find it
+    // in a column of headings that otherwise all look the same. FAVORITES and
+    // OTHER TASKS take one too — they are rows on the same list, whatever they
+    // cannot be renamed to.
+    const tint = nodeColor(node) ?? TITLE_COLOR;
+    item.resourceUri = decorationUri(tint, node.detail ?? node.label);
     if (node.icon) {
-      item.iconPath = new vscode.ThemeIcon(node.icon, new vscode.ThemeColor(TITLE_COLOR));
+      item.iconPath = new vscode.ThemeIcon(node.icon, new vscode.ThemeColor(tint));
     }
     item.id = node.id;
     // Only a heading that names something on disk can be renamed back to it, so
@@ -1235,7 +1371,17 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
   item.description = scriptDescription(node.script, node.inFavorites);
   item.tooltip = `${commandFor(node.script)}\n${node.script.location}`;
-  item.iconPath = iconFor(node.script, isRunning);
+  const tint = nodeColor(node);
+  item.iconPath = iconFor(node.script, isRunning, tint);
+  // A painted task carries the same decoration trick the headings do, which is
+  // the only way a tree label takes a colour at all. The description goes with it
+  // — the decoration lands on the whole resource label and `.label-description`
+  // has only an opacity of its own — which is the colour on the row rather than
+  // on a dot beside it, and is what painting one was for. Unpainted rows are left
+  // without a resourceUri, so nothing about them changes.
+  if (tint) {
+    item.resourceUri = decorationUri(tint, scriptRef(node.script));
+  }
   // Three independent axes in one value, matched a piece at a time by the
   // `when` clauses in contributes.menus.
   item.contextValue = `script:${isRunning ? 'running' : 'idle'}:${isFavorite(node.script) ? 'fav' : 'nofav'}`;
@@ -1312,14 +1458,23 @@ function userCategories(): CategoryRule[] {
   );
 }
 
-function iconFor(script: ScriptEntry, isRunning: boolean): vscode.ThemeIcon {
+/**
+ * A row's icon: its category's glyph, tinted.
+ *
+ * A colour picked from the context menu wins over the category's own and over
+ * `colorIcons` with it — the setting turns off a colour we guessed at, and this
+ * one the user asked for by name. It does not win over the spinner: a running
+ * row is answering "this one is busy", and that answer is the same green on
+ * every row for as long as it is the one worth finding.
+ */
+function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string): vscode.ThemeIcon {
   if (isRunning) {
     return runningIcon();
   }
   const category = categoryFor(script);
   const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
-  const color = category && colored ? new vscode.ThemeColor(category.color) : undefined;
-  return new vscode.ThemeIcon(category?.icon ?? 'play', color);
+  const color = tint ?? (category && colored ? category.color : undefined);
+  return new vscode.ThemeIcon(category?.icon ?? 'play', color ? new vscode.ThemeColor(color) : undefined);
 }
 
 /**
