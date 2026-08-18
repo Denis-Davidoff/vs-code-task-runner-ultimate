@@ -212,6 +212,46 @@ fs.writeFileSync(path.join(media, 'icon.png'), encodePng(renderIcon(), ICON_SIZE
 
 // --- manifest ---------------------------------------------------------------
 
+/*
+ * The colours the right-click menu can paint a row with — keep in step with
+ * PALETTE in src/extension.ts and with the taskRunnerUltimate.palette.* entries
+ * in contributes.colors, which are written by hand.
+ *
+ * A submenu entry is a command and takes no argument, so each colour needs one
+ * of its own; generating them is what keeps eleven commands, eleven menu entries
+ * and eleven palette exclusions saying the same thing.
+ *
+ * The swatch is part of the title because a context menu draws no icons at all —
+ * VS Code hands those menus to the platform, and `contributes.commands.icon` is
+ * dropped on the way. A character in the label is the one thing that survives, so
+ * the colour is spelled in the text rather than declared beside it.
+ *
+ * Seven of the ten are the coloured circles, which every platform has had since
+ * 2019. Teal and pink have no circle in Unicode at all and grey's is a white one,
+ * so those three take the nearest glyph that is the right colour — a shape the
+ * label is not relying on, since the name is next to it either way. The newer
+ * heart glyphs would have matched all ten exactly and are skipped on purpose:
+ * they are Unicode 15, and on a machine whose emoji font predates them the menu
+ * would show three empty boxes.
+ */
+const PALETTE = [
+  { name: 'red', swatch: '🔴' },
+  { name: 'orange', swatch: '🟠' },
+  { name: 'yellow', swatch: '🟡' },
+  { name: 'green', swatch: '🟢' },
+  { name: 'teal', swatch: '💠' },
+  { name: 'blue', swatch: '🔵' },
+  { name: 'purple', swatch: '🟣' },
+  { name: 'pink', swatch: '🌸' },
+  { name: 'brown', swatch: '🟤' },
+  { name: 'gray', swatch: '⚪' },
+];
+
+const COLOUR_SUBMENU = 'taskRunnerUltimate.color';
+const colourCommand = (name) => `taskRunnerUltimate.setColor.${name}`;
+const CLEAR_COLOUR = 'taskRunnerUltimate.clearColor';
+const titleCase = (name) => name[0].toUpperCase() + name.slice(1);
+
 const manifestPath = path.join(root, 'package.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
@@ -246,6 +286,15 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task Runner Manager', icon: '$(star-empty)' },
   { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task Runner Manager', icon: '$(star-full)' },
   { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task Runner Manager', icon: '$(edit)' },
+  // The swatch rides in the title; see PALETTE above for why it is not an icon.
+  // None of these reach the command palette (see commandPalette below), so the
+  // glyph is only ever read where it means something.
+  ...PALETTE.map(({ name, swatch }) => ({
+    command: colourCommand(name),
+    title: `${swatch} ${titleCase(name)}`,
+    category: 'Task Runner Manager',
+  })),
+  { command: CLEAR_COLOUR, title: 'Default', category: 'Task Runner Manager' },
   { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task Runner Manager', icon: '$(menu)' },
   {
     command: 'taskRunnerUltimate.stopAll',
@@ -267,6 +316,10 @@ const toolbarEntries = (whenPrefix) => [
     group: 'navigation@1',
     when: `${whenPrefix}taskRunnerUltimate.runningCount == ${entry.count}`,
   })),
+];
+
+manifest.contributes.submenus = [
+  { id: COLOUR_SUBMENU, label: 'Colour', icon: '$(symbol-color)' },
 ];
 
 manifest.contributes.menus = {
@@ -306,6 +359,24 @@ manifest.contributes.menus = {
     // group are labels of ours rather than names read off disk, and carry the
     // plain `group` value, so neither matches.
     { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^group:package$/` },
+    // Colour reaches further than a rename does: every row the tree draws itself
+    // takes one — tasks, package headings, FAVORITES and OTHER TASKS. A rename
+    // needs a name on disk to restore, which the last two do not have; a colour
+    // needs nothing but a row. Only `foreignTask` is left out, and the regex is
+    // what leaves it out.
+    //
+    // One entry, not one per kind of row, and that is load-bearing: a flyout is
+    // identified by its submenu id, so the same id contributed twice to the same
+    // menu is one submenu described two ways rather than two submenus. The two
+    // `editTitle` lines above get away with it because a command is its own
+    // action; a submenu is not.
+    { submenu: COLOUR_SUBMENU, group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group)/` },
+  ],
+  // The palette itself, in one group, with the way back to the default in a
+  // second so the menu draws a separator above it.
+  [COLOUR_SUBMENU]: [
+    ...PALETTE.map(({ name }, index) => ({ command: colourCommand(name), group: `1_palette@${index + 1}` })),
+    { command: CLEAR_COLOUR, group: '2_reset@1' },
   ],
   commandPalette: [
     ...badgeEntries.map((entry) => ({ command: entry.id, when: 'false' })),
@@ -319,6 +390,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.addFavorite', when: 'false' },
     { command: 'taskRunnerUltimate.removeFavorite', when: 'false' },
     { command: 'taskRunnerUltimate.editTitle', when: 'false' },
+    ...PALETTE.map(({ name }) => ({ command: colourCommand(name), when: 'false' })),
+    { command: CLEAR_COLOUR, when: 'false' },
   ],
 };
 

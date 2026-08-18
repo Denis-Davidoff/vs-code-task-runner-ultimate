@@ -20,6 +20,9 @@ restart without ever going looking for a terminal tab.**
 - ✏️ **[Rename any row, and any heading](#renaming-a-row)** — `dev` becomes `API server`, and the
   group titled `packages/services/api-gateway` becomes `GATEWAY`. Display only: the project's
   manifest is never edited, and the real name stays visible beside it and searchable.
+- 🖍️ **[Paint a row](#painting-a-row)** — right-click → **Colour** → one of ten, on a task or on a
+  whole folder, each swatch shown in the menu in its own colour. The list stops being one colour of
+  text and starts being a map of what is yours, what is loud and what you never touch.
 - ⭐ **[Favorites](#favorites)** — star the two or three scripts you actually run and they pin to a
   group at the very top, above everything, without leaving the package they belong to.
 - ↕️ **[Drag rows into the order you want](#reordering-rows)** — inside a package or inside
@@ -44,6 +47,8 @@ them keeps its own in a `Makefile.toml`, the Python one in `pyproject.toml`, and
 alive in a tab you can no longer find, and running anything by hand means getting the directory
 *and* the tool right first. Task Runner Manager collapses all of that into one list, and gives you
 three ways to reach it.
+
+Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?itemName=DenysDavydov.task-runner-ultimate
 
 ### ▶ in the toolbar of every file
 
@@ -92,6 +97,8 @@ monorepo.
   of the tree, above everything, without leaving the manifest they belong to.
 - **Rename any row, and any heading** — `dev` becomes `API server`, `@acme/api-gateway` becomes
   `GATEWAY`. Display only: nothing on disk is renamed, and the real name stays findable.
+- **Paint any row, and any folder** — ten colours in a right-click submenu, each shown in its own
+  colour, remembered per workspace, over the colour the task's category would have had.
 - **A live badge** — the number of running tasks, on the toolbar icon, the panel and the status bar.
 - **Knows your runner** — npm, yarn, pnpm, bun and deno, detected per package, overridable.
 - **Real tasks, not typed-out terminal commands** — running state, stop and restart are reliable, and
@@ -244,10 +251,11 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
 | **Reset all titles** | Every [renamed](#renaming-a-row) row and group heading goes back to the name its manifest gives it. |
 | **Reset sort order** | Every list goes back to the order its manifest declares, undoing [the drags](#reordering-rows). |
+| **Reset all colours** | Every [painted](#painting-a-row) row and group heading goes back to the colour its category gives it. |
 | **Remove favorites** | Empties FAVORITES. The tasks stay where they are, in their own packages. |
 
-Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `5 starred` —
-and asks once before it does it. Refresh is also in the command palette under
+Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `4 painted`,
+`5 starred` — and asks once before it does it. Refresh is also in the command palette under
 **Task Runner Manager: Refresh Scripts**.
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
@@ -358,27 +366,80 @@ read off a manifest, so there is nothing to restore them to.
 Both kinds of title live in the same store, so **Reset all titles** in [the menu](#the-menu) undoes
 scripts and headings together.
 
+### Painting a row
+
+Right-click any row → **Colour**, and pick one of ten: 🔴 red, 🟠 orange, 🟡 yellow, 🟢 green,
+💠 teal, 🔵 blue, 🟣 purple, 🌸 pink, 🟤 brown or ⚪ grey. Every task takes one, and so does every
+folder in the tree — package headings, FAVORITES and OTHER TASKS alike. Each entry carries its own
+colour in the menu, so the list is picked from by eye rather than read.
+
+The row takes the colour immediately — the icon, the label and the dimmed text beside it, which keeps
+the opacity it always had — so a painted row reads as one thing rather than a tinted dot beside grey
+text.
+
+What it is for is the thing a category cannot know. The icons already say what a task *is* — a beaker
+for tests, a rocket for a release — and they say it the same way in every project. A colour says what
+this task is to *you*: the deploy nobody may run by accident in red, the one service you actually
+work on in green, the four packages you never touch in grey. A heading painted the same colour as the
+rows you care about inside it turns a long sidebar into something you scan rather than read.
+
+The colours are picked to hold up in both themes: each is declared as a real theme colour with a
+light, a dark and two high-contrast variants, so a painted row stays legible when the theme changes
+under it. They can be overridden like any other, in `workbench.colorCustomizations`, under
+`taskRunnerUltimate.palette.red` and its nine siblings.
+
+**Default** in the same submenu takes the colour back off. A task then returns to its category's
+colour — the green ▶, the red beaker — and a heading to the shared title colour every other heading
+wears.
+
+Three things a colour deliberately does not do:
+
+- It does not survive a run. A running row shows the same green spinner it always has, painted or
+  not: while a task is alive, "this one is busy" is the one thing the icon is being asked, and it has
+  to answer it the same way on every row.
+- It does not follow the row into the dropdown. VS Code drops colours from quick-pick items, so the
+  dropdown keeps the glyph and loses the tint — there is no API to keep it.
+- It does not turn off with `colorIcons`. That setting drops the colours *we* guessed at from the
+  task's name; a colour you picked by hand is not a guess, so it stays.
+
+Painting a folder paints that row only — the tasks under it keep whatever they have. Like the
+titles, colours are stored per workspace against the same refs, so **Reset all colours** in
+[the menu](#the-menu) clears tasks and folders together.
+
+This is the one thing FAVORITES and **OTHER TASKS** can have that a rename is not: a rename needs a
+name on disk to put back and those two are labels of this extension's own, while a colour needs
+nothing but a row to sit on. The only rows without it are the tasks under **OTHER TASKS** — they are
+somebody else's executions, alive only while they run, so there is nothing stable to remember a
+colour against.
+
+The swatches are in the menu text rather than beside it because a context menu draws no icons at all:
+VS Code hands those menus to the platform, which has no place to put one. Seven of the ten are the
+coloured circles; teal, pink and grey have no circle in Unicode, so they take the nearest glyph in
+the right colour. The newer heart glyphs would have matched all ten and are skipped on purpose —
+they are Unicode 15, and an older emoji font would draw three empty boxes instead.
+
 ### Reaching the row commands
 
-**Add to Favorites**, **Remove from Favorites** and **Edit Title…** all act on the row they were
-invoked from, so they live where there is a row to invoke them on:
+**Add to Favorites**, **Remove from Favorites**, **Edit Title…** and **Colour** all act on the row
+they were invoked from, so they live where there is a row to invoke them on:
 
 | Command | Where |
 | --- | --- |
 | Add to Favorites | ☆ inline on hover, and right-click |
 | Remove from Favorites | ★ inline on hover, and right-click |
 | Edit Title… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
+| Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
 
-All three are deliberately hidden from the command palette, which has no row to hand them. The
+All of them are deliberately hidden from the command palette, which has no row to hand them. The
 palette keeps the five that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
 **Stop All Running Tasks** and **Restart All Running Tasks**.
 
-### Where favorites, titles and order are stored
+### Where favorites, titles, colours and order are stored
 
 In VS Code's own workspace storage (`ExtensionContext.workspaceState`), under the keys `favorites`,
-`titles` and `order` — not in your `package.json`, and not in `.vscode/settings.json`. That storage
-is already scoped to this extension and this workspace, so no key can collide with anything and none
-of them show up in a diff. [The menu](#the-menu) empties any one of the three.
+`titles`, `colors` and `order` — not in your `package.json`, and not in `.vscode/settings.json`. That
+storage is already scoped to this extension and this workspace, so no key can collide with anything
+and none of them show up in a diff. [The menu](#the-menu) empties any one of the four.
 
 Starring a script is a personal note about a file the project owns, so the alternatives both have a
 cost: the manifest is shared with everyone who clones the repo, and a setting would rewrite
@@ -393,7 +454,8 @@ folder does not.
 A renamed heading is keyed by the same string without the `::name` half —
 `my-app/packages/api/package.json` — which is also the scope a drag reorders inside. Since no
 manifest path ends in `::` plus a name, headings and scripts share the `titles` key without any
-chance of one shadowing the other.
+chance of one shadowing the other. Colours are filed under those same two kinds of ref, in a store of
+their own, and hold the colour's name — `green` — rather than the theme colour id behind it.
 
 A favorite whose manifest is temporarily out of the workspace is hidden, not forgotten: it stays in
 storage and comes back with its folder. Deleting the script for real leaves a dead entry that costs
