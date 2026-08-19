@@ -173,6 +173,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.addFavorite', (node?: TreeNode) => setFavorite(node, true)),
     vscode.commands.registerCommand('taskRunnerUltimate.removeFavorite', (node?: TreeNode) => setFavorite(node, false)),
     vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
+    // The two eyes on a package heading, one edit to one group each, so they take
+    // the row they were clicked on and nothing else. Reordering has no command of
+    // its own: a heading is moved by dragging it, which is the gesture the rows
+    // inside it already answer to.
+    vscode.commands.registerCommand('taskRunnerUltimate.hideGroup', (node?: TreeNode) => setGroupHidden(node, true)),
+    vscode.commands.registerCommand('taskRunnerUltimate.showGroup', (node?: TreeNode) => setGroupHidden(node, false)),
     // One command per colour: a submenu entry is a command, and there is no way
     // to hand it an argument from contributes.menus. The list is the palette's,
     // so the two can never drift apart.
@@ -313,6 +319,7 @@ function keyForTask(task: vscode.Task): string | undefined {
 const FAVORITES_KEY = 'favorites';
 const TITLES_KEY = 'titles';
 const ORDER_KEY = 'order';
+const GROUP_ORDER_KEY = 'groupOrder';
 const COLLAPSED_KEY = 'collapsed';
 const COLORS_KEY = 'colors';
 
@@ -692,6 +699,119 @@ function orderedScripts(scripts: ScriptEntry[]): ScriptEntry[] {
   return result;
 }
 
+/** The headings themselves as a drag scope — a drag that moves whole groups. */
+const GROUPS_SCOPE = '::groups';
+
+/**
+ * The manifest groups in the order the user put them in, top to bottom. A flat
+ * list rather than a map: there is only ever one order of headings, where the
+ * scripts have one per heading.
+ */
+function groupOrder(): string[] {
+  const stored = storage?.get<unknown>(GROUP_ORDER_KEY);
+  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+}
+
+/**
+ * The scan with the headings in the order the user put them in. Each group moves
+ * as one block, so the scripts inside it keep the order the pass above gave them.
+ *
+ * A group the stored order has never seen — a package just added to the
+ * workspace — follows the same rule a new script does: it keeps the neighbour the
+ * scan gave it, sorting in right below the last group above it that the order
+ * does know, rather than appearing at the bottom of a tree the user last touched
+ * weeks ago.
+ */
+function orderedGroups(scripts: ScriptEntry[]): ScriptEntry[] {
+  const order = groupOrder();
+  if (order.length === 0) {
+    return scripts;
+  }
+  const rank = new Map(order.map((ref, index) => [ref, index]));
+  let anchor = -1;
+  const blocks = [...groupSlots(scripts).entries()].map(([scope, indices], position) => {
+    const known = rank.get(scope);
+    if (known !== undefined) {
+      anchor = known;
+    }
+    return { indices, position, rank: known ?? anchor, unknown: known === undefined ? 1 : 0 };
+  });
+  blocks.sort((a, b) => a.rank - b.rank || a.unknown - b.unknown || a.position - b.position);
+  return blocks.flatMap((block) => block.indices.map((slot) => scripts[slot]));
+}
+
+/**
+ * The refs of every group the scan found, top to bottom, in the saved order —
+ * hidden ones included. A move reads and rewrites this list whole, so a heading
+ * parked in HIDDEN keeps the slot it will come back to.
+ */
+async function groupScopes(): Promise<string[]> {
+  return [...groupSlots(await savedOrder()).keys()];
+}
+
+/**
+ * Writes the order of the headings. Refs the store holds that are not on this
+ * list keep both their place and their existence — the same rule the favorites
+ * follow, and for the same reason: a group behind a closed workspace folder is
+ * absent, not deleted. Groups the store has never seen are appended, since there
+ * is no slot of theirs to write over.
+ */
+async function saveGroupOrder(refs: string[]): Promise<void> {
+  const queue = [...refs];
+  const listed = new Set(refs);
+  const merged = groupOrder().map((ref) => (listed.has(ref) ? (queue.shift() ?? ref) : ref));
+  await storage?.update(GROUP_ORDER_KEY, [...merged, ...queue]);
+}
+
+// --- hidden groups -----------------------------------------------------------
+
+/**
+ * The headings the user has put away, and the id of the group they are put away
+ * in. Hiding is not filtering: the packages are still scanned, still run, and
+ * still show up in the dropdown — what the eye buys is a tree that stops naming
+ * the half of a monorepo nobody on this machine works in.
+ */
+const HIDDEN_KEY = 'hidden';
+const HIDDEN_GROUP_ID = 'group:hidden';
+
+/** The colour a put-away heading wears: the theme's own word for "not now". */
+const HIDDEN_COLOR = 'disabledForeground';
+
+function hiddenRefs(): string[] {
+  const stored = storage?.get<unknown>(HIDDEN_KEY);
+  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+}
+
+/**
+ * Puts headings away, or takes them back out. Refs are kept in the order they
+ * were hidden in, so HIDDEN reads as the pile it is; where a group lands when it
+ * comes back is the business of the saved order, which hiding never touched.
+ */
+async function setGroupsHidden(refs: string[], hidden: boolean): Promise<void> {
+  const stored = hiddenRefs();
+  const next = hidden
+    ? [...stored, ...refs.filter((ref) => !stored.includes(ref))]
+    : stored.filter((ref) => !refs.includes(ref));
+  // Nothing added and nothing taken away: a group hidden twice, or brought back
+  // by a drag that started outside HIDDEN. Neither is a change to write or a
+  // reason to redraw the tree.
+  if (next.length === stored.length) {
+    clearHint();
+    return;
+  }
+  await storage?.update(HIDDEN_KEY, next);
+  clearHint();
+  repaint();
+}
+
+/** The eye on a group row, and the one on a row inside HIDDEN. */
+async function setGroupHidden(node: TreeNode | undefined, hidden: boolean): Promise<void> {
+  const ref = node?.kind === 'group' ? node.ref : undefined;
+  if (ref) {
+    await setGroupsHidden([ref], hidden);
+  }
+}
+
 // --- pinned running tasks ----------------------------------------------------
 
 /**
@@ -746,7 +866,7 @@ function pinRunning(scripts: ScriptEntry[]): ScriptEntry[] {
  * is the order a drag reads and rewrites.
  */
 async function savedOrder(): Promise<ScriptEntry[]> {
-  return orderedScripts(await collectScripts());
+  return orderedGroups(orderedScripts(await collectScripts()));
 }
 
 /**
@@ -815,7 +935,7 @@ function openSettings(): void {
 
 /**
  * Everything the view can do that is not aimed at one row: the rescan, the
- * settings, and the four stores the menu can empty. Each of those empties whole,
+ * settings, and the stores the menu can empty. Each of those empties whole,
  * so its entry says how much is in it before you pick it and asks once after —
  * a mis-click here costs every rename.
  *
@@ -828,10 +948,11 @@ async function showMenu(): Promise<void> {
   const orders = Object.values(manualOrders()).filter((refs) => refs.length > 0).length;
   const favorites = favoriteRefs().length;
   const colors = Object.keys(customColors()).length;
+  const hidden = hiddenRefs().length;
 
   const stores = [
     {
-      key: TITLES_KEY,
+      keys: [TITLES_KEY],
       icon: 'discard',
       name: 'Reset all titles',
       count: titles,
@@ -840,16 +961,27 @@ async function showMenu(): Promise<void> {
       detail: 'Every renamed task and package heading goes back to the name its manifest gives it.',
     },
     {
-      key: ORDER_KEY,
+      // One entry for the two orders behind it: dragging a task and dragging the
+      // heading it sits under are one thing to a user putting the tree back.
+      keys: [ORDER_KEY, GROUP_ORDER_KEY],
       icon: 'list-ordered',
       name: 'Reset sort order',
-      count: orders,
+      count: orders + (groupOrder().length > 0 ? 1 : 0),
       held: `${orders} ${orders === 1 ? 'list' : 'lists'} reordered`,
       confirm: 'Reset order',
-      detail: 'Every list goes back to the order its manifest declares.',
+      detail: 'Every list, and the packages themselves, go back to the order the manifests declare.',
     },
     {
-      key: COLORS_KEY,
+      keys: [HIDDEN_KEY],
+      icon: 'eye',
+      name: 'Show hidden packages',
+      count: hidden,
+      held: `${hidden} hidden`,
+      confirm: 'Show all',
+      detail: 'The HIDDEN group disappears and every package in it comes back to its own place in the tree.',
+    },
+    {
+      keys: [COLORS_KEY],
       icon: 'symbol-color',
       name: 'Reset all colours',
       count: colors,
@@ -858,7 +990,7 @@ async function showMenu(): Promise<void> {
       detail: 'Every painted task and package heading goes back to the colour its category gives it.',
     },
     {
-      key: FAVORITES_KEY,
+      keys: [FAVORITES_KEY],
       icon: 'star-empty',
       name: 'Remove favorites',
       count: favorites,
@@ -894,9 +1026,9 @@ async function showMenu(): Promise<void> {
   await picked?.run?.();
 }
 
-/** One of the four stores behind the menu, emptied after a confirmation. */
+/** One of the stores behind the menu, emptied after a confirmation. */
 async function emptyStore(store: {
-  key: string;
+  keys: string[];
   name: string;
   count: number;
   confirm: string;
@@ -917,7 +1049,9 @@ async function emptyStore(store: {
   }
   // `undefined` deletes the key outright, so the next read falls back to the
   // empty default instead of finding an empty object left behind.
-  await storage?.update(store.key, undefined);
+  for (const key of store.keys) {
+    await storage?.update(key, undefined);
+  }
   repaint();
 }
 
@@ -958,6 +1092,12 @@ type TreeNode =
        * whose file has changed.
        */
       manifest?: vscode.Uri;
+      /**
+       * Whether the row is a heading the user put away — the ones under HIDDEN,
+       * and HIDDEN itself. It is what greys the label and what swaps the eye on
+       * the row for the one that brings it back.
+       */
+      hidden?: boolean;
       children: TreeNode[];
     }
   | { kind: 'script'; script: ScriptEntry; inFavorites?: boolean }
@@ -1070,6 +1210,30 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
   dropMimeTypes: DRAG_MIMES,
 
   handleDrag(source, transfer) {
+    // A heading dragged is a heading moved, which is a different edit from a task
+    // dragged: it rewrites the order of the groups instead of the order inside one.
+    // The two never mix in one gesture — the row the drag started on decides which
+    // it is, and rows of the other kind travelling with it are left where they are.
+    if (source[0]?.kind === 'group') {
+      const groups = source.flatMap((node) => (node.kind === 'group' && node.ref ? [node] : []));
+      const first = groups[0];
+      if (!first) {
+        return;
+      }
+      const refs = groups.flatMap((node) => (node.ref ? [node.ref] : []));
+      const payload = new vscode.DataTransferItem(JSON.stringify({ scope: GROUPS_SCOPE, refs }));
+      for (const mime of DRAG_MIMES) {
+        transfer.set(mime, payload);
+      }
+      const what = refs.length > 1 ? `${refs.length} packages` : `"${groupHeading(first)}"`;
+      hint(
+        first.hidden
+          ? `$(move) Moving ${what} — drop on any package outside HIDDEN to bring it back`
+          : `$(move) Moving ${what} — drop on another package to reorder, or on HIDDEN to put it away`,
+      );
+      return;
+    }
+
     const dragged = source.filter((node): node is TreeNode & { kind: 'script' } => node.kind === 'script');
     const scope = dragged.length > 0 ? dragScope(dragged[0]) : undefined;
     if (!scope || !dragged[0]) {
@@ -1113,6 +1277,11 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
       return;
     }
 
+    if (scope === GROUPS_SCOPE) {
+      await dropGroups(dragged, target);
+      return;
+    }
+
     const destination = dragScope(target);
     if (destination !== scope) {
       // Onto FAVORITES from anywhere: star it, and leave its own row where it is.
@@ -1146,6 +1315,72 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     repaint();
   },
 };
+
+/**
+ * A dropped heading, in one of two gestures. On another heading it is a reorder;
+ * on HIDDEN, or on anything already in it, it is a put-away — and a heading
+ * dragged out of HIDDEN onto a visible one is both at once, which is the way back
+ * that does not need the eye.
+ *
+ * A task row is a legal target as well: it names the heading it sits under, and
+ * aiming at a package by one of its tasks is what a half-open tree offers.
+ */
+async function dropGroups(dragged: string[], target: TreeNode): Promise<void> {
+  if (target.kind === 'group' && target.id === HIDDEN_GROUP_ID) {
+    await setGroupsHidden(dragged, true);
+    return;
+  }
+
+  const buried = new Set(hiddenRefs());
+  const anchor = anchorGroup(target);
+  if (!anchor) {
+    hint('$(circle-slash) Not a drop target — a package moves between packages, or onto HIDDEN');
+    return;
+  }
+  if (buried.has(anchor)) {
+    await setGroupsHidden(dragged, true);
+    return;
+  }
+
+  const current = await groupScopes();
+  const moved = dragged.filter((ref) => current.includes(ref));
+  // Dropped on itself, or on a heading travelling with it: nothing to work out.
+  if (moved.length === 0 || moved.includes(anchor)) {
+    clearHint();
+    return;
+  }
+  const rest = current.filter((ref) => !moved.includes(ref));
+  // The same rule a task drop follows: the dragged rows take the target's place.
+  const at = Math.min(current.indexOf(anchor), rest.length);
+  await saveGroupOrder([...rest.slice(0, at), ...moved, ...rest.slice(at)]);
+  // Landing outside HIDDEN is what brings a put-away heading back, and it comes
+  // back where it was dropped rather than where it was hidden from.
+  await setGroupsHidden(
+    moved.filter((ref) => buried.has(ref)),
+    false,
+  );
+  clearHint();
+  repaint();
+}
+
+/** The heading a drop lands on: the row itself, or the one a task row sits under. */
+function anchorGroup(target: TreeNode): string | undefined {
+  if (target.kind === 'group') {
+    return target.ref;
+  }
+  return target.kind === 'script' && !target.inFavorites ? groupRef(target.script) : undefined;
+}
+
+/**
+ * The heading a group row shows, for a message that has to name one. The same two
+ * halves `treeItemFor` spells out, minus the case and the path: a sentence in the
+ * status bar is not a row in a column of headings.
+ */
+function groupHeading(node: TreeNode & { kind: 'group' }): string {
+  const custom = node.ref ? storedTitle(node.ref) : undefined;
+  const named = [node.project, node.place].filter(Boolean).join(' ');
+  return custom ?? (named || node.label);
+}
 
 /** The name a scope goes by on screen, for a message that has to name one. */
 function scopeName(scope: string): string {
@@ -1222,9 +1457,24 @@ function collapseRef(node: TreeNode): string | undefined {
   return node.kind === 'group' ? (node.ref ?? node.id) : undefined;
 }
 
+/**
+ * Whether a group is drawn open the first time it is seen. Everything is, bar
+ * HIDDEN: it is the one group whose point is to be out of the way, and the store
+ * holds its exception the other way round — a ref present there means the user
+ * opened it, not that they shut it. One store, one meaning per group, and the
+ * default each group wants.
+ */
+function startsOpen(node: TreeNode): boolean {
+  return !(node.kind === 'group' && node.id === HIDDEN_GROUP_ID);
+}
+
 function isCollapsed(node: TreeNode): boolean {
   const ref = collapseRef(node);
-  return ref !== undefined && foldedRefs().has(ref);
+  if (ref === undefined) {
+    return false;
+  }
+  const stored = foldedRefs().has(ref);
+  return startsOpen(node) ? stored : !stored;
 }
 
 /**
@@ -1241,15 +1491,18 @@ function rememberCollapse(node: TreeNode, collapsed: boolean): void {
     return;
   }
   const refs = foldedRefs();
+  // What the store has to hold for this row to come back in the state it is in —
+  // the fold for a group that starts open, the unfold for the one that does not.
+  const remember = startsOpen(node) ? collapsed : !collapsed;
   // The tree also reports the state it was handed, so an expand event arrives for
   // every group drawn open — on the first render and again after any repaint that
   // redraws one. Writing only a change keeps a repaint of a wide workspace from
   // turning into one storage write per heading, all of them saying what the store
   // already said.
-  if (collapsed === refs.has(ref)) {
+  if (remember === refs.has(ref)) {
     return;
   }
-  if (collapsed) {
+  if (remember) {
     refs.add(ref);
   } else {
     refs.delete(ref);
@@ -1376,9 +1629,16 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     }
   }
 
+  // A heading the user put away leaves the list it was in and goes to the pile at
+  // the bottom, taking its tasks with it. It keeps its slot in the saved order all
+  // the while, so the eye that brings it back puts it back where it was.
+  const buried = new Set(hiddenRefs());
+  const shown = groups.filter((group) => !(group.node.ref && buried.has(group.node.ref)));
+  const away = groups.filter((group) => group.node.ref && buried.has(group.node.ref));
+
   const roots: TreeNode[] = [
-    ...groups.filter((group) => group.hasRunning).map((group) => group.node),
-    ...groups.filter((group) => !group.hasRunning).map((group) => group.node),
+    ...shown.filter((group) => group.hasRunning).map((group) => group.node),
+    ...shown.filter((group) => !group.hasRunning).map((group) => group.node),
   ];
 
   // Tasks that are not backed by a manifest have no group of their own.
@@ -1409,6 +1669,21 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       // right: the drag rewrites the starred list instead of a manifest's order.
       scope: FAVORITES_SCOPE,
       children: favorites.map((script): TreeNode => ({ kind: 'script', script, inFavorites: true })),
+    });
+  }
+
+  // And the pile itself, last on the list and shut by default: a group whose
+  // point is to be out of the way has not moved out of the way if it opens
+  // itself. It is a drop target too — dragging a heading onto it puts it away,
+  // and dragging one back out onto any other heading brings it back.
+  if (away.length > 0) {
+    roots.push({
+      kind: 'group',
+      id: HIDDEN_GROUP_ID,
+      label: `HIDDEN (${away.length})`,
+      icon: 'eye-closed',
+      hidden: true,
+      children: away.map((group) => ({ ...group.node, hidden: true })),
     });
   }
 
@@ -1482,7 +1757,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // in a column of headings that otherwise all look the same. FAVORITES and
     // OTHER TASKS take one too — they are rows on the same list, whatever they
     // cannot be renamed to.
-    const tint = nodeColor(node) ?? TITLE_COLOR;
+    const tint = nodeColor(node) ?? (node.hidden ? HIDDEN_COLOR : TITLE_COLOR);
     item.resourceUri = decorationUri(tint, node.detail ?? node.label);
     if (node.icon) {
       item.iconPath = new vscode.ThemeIcon(node.icon, new vscode.ThemeColor(tint));
@@ -1490,7 +1765,9 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     item.id = node.id;
     // Only a heading that names something on disk can be renamed back to it, so
     // the two kinds of group are told apart for the `when` clause that offers it.
-    item.contextValue = node.ref ? 'group:package' : 'group';
+    // A put-away heading is told apart from the rest as well: the two eyes are
+    // one button in two states, and only one of them can be on a row at a time.
+    item.contextValue = node.ref ? (node.hidden ? 'group:package:hidden' : 'group:package') : 'group';
     return item;
   }
 

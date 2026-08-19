@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -242,6 +242,18 @@
         "title": "Edit Title…",
         "category": "Task & Script Explorer",
         "icon": "$(edit)"
+      },
+      {
+        "command": "taskRunnerUltimate.hideGroup",
+        "title": "Hide Package",
+        "category": "Task & Script Explorer",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "taskRunnerUltimate.showGroup",
+        "title": "Show Package",
+        "category": "Task & Script Explorer",
+        "icon": "$(eye)"
       },
       {
         "command": "taskRunnerUltimate.openScript",
@@ -516,7 +528,7 @@
         {
           "command": "taskRunnerUltimate.openManifest",
           "group": "0_open@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?$/"
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
@@ -541,12 +553,27 @@
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?$/"
         },
         {
           "submenu": "taskRunnerUltimate.color",
           "group": "2_modify@2",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group)/"
+        },
+        {
+          "command": "taskRunnerUltimate.showGroup",
+          "group": "inline@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden$/"
+        },
+        {
+          "command": "taskRunnerUltimate.hideGroup",
+          "group": "2_modify@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package$/"
+        },
+        {
+          "command": "taskRunnerUltimate.showGroup",
+          "group": "2_modify@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden$/"
         }
       ],
       "taskRunnerUltimate.color": [
@@ -666,6 +693,14 @@
         },
         {
           "command": "taskRunnerUltimate.editTitle",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.hideGroup",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.showGroup",
           "when": "false"
         },
         {
