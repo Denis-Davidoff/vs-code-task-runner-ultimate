@@ -774,7 +774,18 @@ async function saveGroupOrder(refs: string[]): Promise<void> {
 const HIDDEN_KEY = 'hidden';
 const HIDDEN_GROUP_ID = 'group:hidden';
 
-/** The colour a put-away heading wears: the theme's own word for "not now". */
+/**
+ * The colour the pile itself wears: the theme's own word for "not now", open or
+ * shut alike. The row means the same thing in both states, and a heading that
+ * changes colour when you click its arrow reads as a second thing having
+ * happened.
+ *
+ * It stops at that one row. The headings inside are drawn like any other package
+ * — the pile is already saying they are put away, and greying them too made the
+ * one place you go looking for a package you parked the hardest place in the
+ * tree to read. A heading you painted keeps its colour there as well, which is
+ * what painting one was for.
+ */
 const HIDDEN_COLOR = 'disabledForeground';
 
 function hiddenRefs(): string[] {
@@ -1088,9 +1099,10 @@ type TreeNode =
        */
       manifest?: vscode.Uri;
       /**
-       * Whether the row is a heading the user put away — the ones under HIDDEN,
-       * and HIDDEN itself. It is what greys the label and what swaps the eye on
-       * the row for the one that brings it back.
+       * Whether the row is a heading the user put away — the ones under the pile,
+       * and the pile itself. It is what swaps the eye on the row for the one that
+       * brings it back. The grey belongs to the pile's own row and is decided by
+       * its id, not by this: see `HIDDEN_COLOR`.
        */
       hidden?: boolean;
       children: TreeNode[];
@@ -1754,7 +1766,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // on the label and on the icon alike: the point of painting one is to find it
     // in a column of headings that otherwise all look the same. OTHER TASKS takes
     // one too — it is a row on the same list, whatever it cannot be renamed to.
-    const tint = nodeColor(node) ?? (node.hidden ? HIDDEN_COLOR : TITLE_COLOR);
+    const tint = nodeColor(node) ?? (node.id === HIDDEN_GROUP_ID ? HIDDEN_COLOR : TITLE_COLOR);
     item.resourceUri = decorationUri(tint, node.detail ?? node.label);
     if (node.icon) {
       item.iconPath = new vscode.ThemeIcon(node.icon, new vscode.ThemeColor(tint));
