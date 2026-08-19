@@ -18,15 +18,16 @@ restart without ever going looking for a terminal tab.**
   just the ones called "test". <kbd>Enter</kbd> toggles a task, <kbd>Shift</kbd>+<kbd>Enter</kbd>
   restarts it.
 - ✏️ **[Rename any row, and any heading](#renaming-a-row)** — `dev` becomes `API server`, and the
-  group titled `packages/services/api-gateway` becomes `GATEWAY`. Display only: the project's
+  group titled `@acme/api-gateway` becomes `Gateway`. Display only: the project's
   manifest is never edited, and the real name stays visible beside it and searchable.
 - 🖍️ **[Paint a row](#painting-a-row)** — right-click → **Colour** → one of ten, on a task or on a
   whole folder, each swatch shown in the menu in its own colour. The list stops being one colour of
   text and starts being a map of what is yours, what is loud and what you never touch.
-- ⭐ **[Favorites](#favorites)** — star the two or three scripts you actually run and they pin to a
-  group at the very top, above everything, without leaving the package they belong to.
-- ↕️ **[Drag rows into the order you want](#reordering-rows)** — inside a package or inside
-  FAVORITES. The order is remembered per workspace and the manifests are never edited.
+- ⭐ **[Favorites](#favorites)** — star the two or three scripts you actually run and they sit as
+  loose rows at the very top of the tree, above everything, with no heading to open first and
+  without leaving the package they belong to.
+- ↕️ **[Drag rows into the order you want](#reordering-rows)** — inside a package, or among the
+  starred rows. The order is remembered per workspace and the manifests are never edited.
 - 🎨 **Colour and an icon per task** — ▶ for dev servers, a beaker for tests, a rocket for releases,
   a database for migrations, decided by what the task really runs — and [your own rules](#settings)
   come first.
@@ -100,10 +101,10 @@ monorepo.
   at the line the task is on, in all nine ecosystems; on a heading, **Open Manifest File** opens the
   file itself.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
-- **Favorites** — star the two or three tasks you actually run and they pin to a group at the top
-  of the tree, above everything, without leaving the manifest they belong to.
+- **Favorites** — star the two or three tasks you actually run and they pin to the very top of the
+  tree, above everything, without leaving the manifest they belong to.
 - **Rename any row, and any heading** — `dev` becomes `API server`, `@acme/api-gateway` becomes
-  `GATEWAY`. Display only: nothing on disk is renamed, and the real name stays findable.
+  `Gateway`. Display only: nothing on disk is renamed, and the real name stays findable.
 - **Paint any row, and any folder** — ten colours in a right-click submenu, each shown in its own
   colour, remembered per workspace, over the colour the task's category would have had.
 - **A live badge** — the number of running tasks, on the toolbar icon, the panel and the status bar.
@@ -201,9 +202,9 @@ there is the activity bar view, plus the status bar entry and the keyboard short
 
 ### The Task & Script Explorer view
 
-The activity bar icon opens a tree with the same content as the dropdown, in this order: **FAVORITES**
-first, then **OTHER TASKS** — anything running that this extension did not start — then one group per
-manifest. Groups with something running float above the idle ones, so whatever is alive is on screen
+The activity bar icon opens a tree with the same content as the dropdown, in this order: the
+[starred tasks](#favorites) first, as loose rows with no heading over them, then **OTHER TASKS** —
+anything running that this extension did not start — then one group per manifest. Groups with something running float above the idle ones, so whatever is alive is on screen
 without scrolling; inside a group nothing moves — a running task spins in the place it has always
 had, because a row that jumps when you start it is a row you have to find again to stop it. Set
 `taskRunnerUltimate.pinRunningTasks` to `true` if you would rather have the opposite: running tasks
@@ -237,27 +238,40 @@ Every group starts expanded, and one you fold shut stays shut — through a repa
 restart. Like the stars and the renames, the folds live in the workspace's own storage, so they are
 per-workspace and per-machine and never reach `git status`.
 
-Every heading is read in the same three parts:
+Every heading is read in the same two parts — **name, bullet, path**:
 
 ```
-ACME PLATFORM api-gateway • packages/services/api-gateway
+acme-platform • package.json
+@acme/api-gateway • packages/services/api-gateway
+@acme/frontend • apps/web
+engine • crates/engine
 ```
 
-The project comes first, in upper case with `-` and `_` opened up into spaces — the name the root
-manifest gives itself (`name` in a `package.json`, `[package] name` in a `Cargo.toml`, `module` in a
-`go.mod`), or the workspace folder's own name when the root names nothing. It is the same on every
-group in that project, FAVORITES and OTHER TASKS included, so the sidebar has one masthead rather
-than one per row. Then the folder the manifest sits in, spelled exactly as it is on disk — `webUI`
-stays `webUI`. Then, after the bullet, the path to it, also as it is on disk, so it can be pasted
-into a terminal. A manifest at the root of its project has neither part: the project name has
-already said where it is.
+The name comes first: what the package calls itself — `name` in a `package.json`, `[package] name`
+in a `Cargo.toml`, `module` in a `go.mod`. That is the name the package is known by everywhere else
+— in an import, in a `pnpm --filter`, in the starred rows at the top of the tree — and it is not
+always the folder it lives in: `@acme/frontend` checked out at `apps/web` reads as itself, not as
+`web`. A manifest that names nothing — a Makefile, a justfile, a `package.json` with no `name` —
+falls back to the folder it sits in, and to the file name where that folder holds another manifest
+as well, since there the file name is the only half that tells the two groups apart.
 
-Where one folder holds several manifests the path after the bullet ends in the file name —
-`services/api/Cargo.toml` beside `services/api/Makefile` — because the folder alone would name all
-three groups the same. And any heading can be [renamed](#renaming-a-group-heading) when what it says
-is longer than the sidebar has room for.
+Then, after the bullet, the path to it, so it can be pasted into a terminal. In a multi-root
+workspace the path begins with the workspace folder, which is what keeps two packages of the same
+name in two projects apart.
 
-Every group heading carries an icon for what it is: ★ for FAVORITES, ∿ for the tasks this extension
+The project is not repeated on every row. It opened every heading once and in a monorepo that meant
+printing one word down the whole sidebar — a masthead that is on every row is not a masthead. It is
+still named once, on the row of the manifest it came from: the project's root package is a group
+like any other.
+
+Nothing in the row is re-cased. `acme-platform`, `webUI` and `iOS` are decisions somebody made, in a
+manifest or on disk, and a heading that tidied them up would disagree with the project about what it
+is called — and the path after the bullet would stop being one you can paste into a terminal.
+
+Any heading can be [renamed](#renaming-a-group-heading) when what it says is longer than the sidebar
+has room for.
+
+Every group heading carries an icon for what it is: ∿ for the tasks this extension
 did not start, and a stack (≣) for a package — the pile of tasks the heading opens into. The rows
 underneath are the ones that vary, each with its own colour and glyph, so the headings stay one
 quiet shape down the left edge instead of competing with them.
@@ -278,7 +292,7 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | **Reset all titles** | Every [renamed](#renaming-a-row) row and group heading goes back to the name its manifest gives it. |
 | **Reset sort order** | Every list goes back to the order its manifest declares, undoing [the drags](#reordering-rows). |
 | **Reset all colours** | Every [painted](#painting-a-row) row and group heading goes back to the colour its category gives it. |
-| **Remove favorites** | Empties FAVORITES. The tasks stay where they are, in their own packages. |
+| **Remove favorites** | Unstars everything, so the rows at the top disappear. The tasks stay where they are, in their own packages. |
 
 Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `4 painted`,
 `5 starred` — and asks once before it does it. Refresh is also in the command palette under
@@ -290,27 +304,32 @@ do "what the toolbar icon does". If you would rather have the dropdown anyway, s
 
 ### Favorites
 
-The ☆ on a row — hover it, right-click → **Add to Favorites**, or [drag the row onto
-FAVORITES](#reordering-rows) — pins that script to a **FAVORITES** group at the very top of the tree,
-above even the packages that have something running. In a monorepo the two or three scripts you
-actually use stop being buried under twenty you never touch.
+The ☆ on a row — hover it, right-click → **Add to Favorites**, or [drag the row onto another starred
+row](#reordering-rows) — pins that script to the very top of the tree, above even the packages that
+have something running. In a monorepo the two or three scripts you actually use stop being buried
+under twenty you never touch.
 
-A favorite is a second way in, not a move: the script stays in its own package group as well. Since
-it is listed away from that group heading, the FAVORITES row says where it came from — the package's
-name, or the manifest path for a package that has none:
+There is no folder over them. A heading above the two or three tasks you run all day is a fold to
+open before you can click them, so the starred rows sit loose at the root, already in reach:
 
 ```
-FAVORITES
   ▶ dev      api · vite dev
   ▶ dev      web · next dev
   🧪 test    api · vitest run
+@acme/frontend • apps/web ────────────
+  ▶ build    next build
 ```
+
+A favorite is a second way in, not a move: the script stays in its own package group as well. Since
+the starred row is listed away from that group heading, it says where it came from in its dimmed
+text — the package's name, or the manifest path for a package that has none. That is also what tells
+the two rows apart at a glance.
 
 Click ★ to unpin. Order is the order you starred things in — new stars go to the bottom, so the list
 stays where you put it — and it can be [dragged](#reordering-rows) into any other order.
 
-In the tree a starred script appears twice, and the two rows are independent: running it from
-FAVORITES and running it from its package group are the same task, and both rows spin. The dropdown
+In the tree a starred script appears twice, and the two rows are independent: running it from the top
+of the list and running it from its package group are the same task, and both rows spin. The dropdown
 puts it at the top too, but lists it **once** — flattened into a single list, a second copy four rows
 down reads as a duplicate rather than as a shortcut, so the row is lifted out of its package and
 says where it came from instead.
@@ -321,11 +340,12 @@ Drag a row in the tree to put it where you want it. A manifest lists its tasks i
 were written in, which is rarely the order you use them in — so `dev` can sit at the top of its
 package even if it is the eleventh script in the `package.json`.
 
-Dropping on a group heading sends the row to the end of that group. FAVORITES is a list of its own
-and reorders the same way.
+Dropping on a group heading sends the row to the end of that group. The starred rows at the top are a
+list of their own and reorder the same way.
 
-**Dropping a task on FAVORITES stars it**, at the row it lands on — the same thing clicking ☆ does,
-so the task keeps the place it has in its own package. It is an addition, not a move.
+**Dropping a task on a starred row stars it too**, in the slot it lands on — the same thing clicking
+☆ does, so the task keeps the place it has in its own package. It is an addition, not a move. With
+nothing starred yet there is no row to aim at; ☆ on the row itself is always there.
 
 Every other cross-group drop does nothing: the tree's groups are the manifests on disk, and no
 gesture in a sidebar moves a script from one `package.json` to another. VS Code owns the drop cursor
@@ -359,19 +379,19 @@ The name in the manifest is never touched — this is a label on your side of th
 to the project's `package.json`. The renamed script stays findable by its real name in the dropdown,
 which matches on that dimmed text too. Clear the input box to get the original name back.
 
-The rename follows the script everywhere it is listed: the dropdown, the FAVORITES group and its own
-package group all show the new title. The task terminal keeps the real name, since that is the one
+The rename follows the script everywhere it is listed: the dropdown, the starred row at the top and
+its own package group all show the new title. The task terminal keeps the real name, since that is the one
 the package manager is given.
 
 #### Renaming a group heading
 
-The same **Edit Title…** on a group heading renames the package instead. A deep monorepo spends the
-row on saying where it is twice over — the project, the folder, and the path to it — and a title of
-your own stands in for everything before the bullet:
+The same **Edit Title…** on a group heading renames the package instead. A scoped name in a deep
+monorepo spends the row on saying where it is twice over, and a title of your own stands in for
+everything before the bullet:
 
 ```
-ACME PLATFORM api-gateway • packages/services/api-gateway
-GATEWAY • packages/services/api-gateway
+@acme/api-gateway • packages/services/api-gateway
+Gateway • packages/services/api-gateway
 ```
 
 It is the same kind of label as a renamed script: the `package.json` keeps its `name`, the folder
@@ -382,11 +402,10 @@ in the dimmed text beside the label: a heading is tinted whole, description incl
 name lives in the tooltip rather than on the row.
 
 The new title is used wherever the group is named — the tree heading, the dropdown's separator, the
-package a FAVORITES row says it came from, and the status-bar message while a row is being dragged.
-A title typed by hand is upper-cased but not otherwise touched: `-` and `_` are opened up into
-spaces in a name read off disk, where nobody chose them, and left alone in one you typed.
+package a starred row says it came from, and the status-bar message while a row is being dragged.
+A title typed by hand is shown exactly as it was typed, like everything else on the row.
 
-FAVORITES and **OTHER TASKS** cannot be renamed — they are this extension's own labels, not names
+**OTHER TASKS** and **HIDDEN** cannot be renamed — they are this extension's own labels, not names
 read off a manifest, so there is nothing to restore them to.
 
 Both kinds of title live in the same store, so **Reset all titles** in [the menu](#the-menu) undoes
@@ -396,7 +415,7 @@ scripts and headings together.
 
 Right-click any row → **Colour**, and pick one of ten: 🔴 red, 🟠 orange, 🟡 yellow, 🟢 green,
 💠 teal, 🔵 blue, 🟣 purple, 🌸 pink, 🟤 brown or ⚪ grey. Every task takes one, and so does every
-folder in the tree — package headings, FAVORITES and OTHER TASKS alike. Each entry carries its own
+folder in the tree — package headings and OTHER TASKS alike. Each entry carries its own
 colour in the menu, so the list is picked from by eye rather than read.
 
 The row takes the colour immediately — the icon, the label and the dimmed text beside it, which keeps
@@ -432,8 +451,8 @@ Painting a folder paints that row only — the tasks under it keep whatever they
 titles, colours are stored per workspace against the same refs, so **Reset all colours** in
 [the menu](#the-menu) clears tasks and folders together.
 
-This is the one thing FAVORITES and **OTHER TASKS** can have that a rename is not: a rename needs a
-name on disk to put back and those two are labels of this extension's own, while a colour needs
+This is the one thing **OTHER TASKS** can have that a rename is not: a rename needs a
+name on disk to put back and that one is a label of this extension's own, while a colour needs
 nothing but a row to sit on. The only rows without it are the tasks under **OTHER TASKS** — they are
 somebody else's executions, alive only while they run, so there is nothing stable to remember a
 colour against.
@@ -455,7 +474,7 @@ so they live where there is a row to invoke them on:
 | Add to Favorites | ☆ inline on hover, and right-click |
 | Remove from Favorites | ★ inline on hover, and right-click |
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
-| Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; FAVORITES and OTHER TASKS name no file and do not offer it |
+| Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; OTHER TASKS names no file and does not offer it |
 | Show Terminal | right-click only, on a running row — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
 | Edit Title… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
@@ -474,7 +493,7 @@ and none of them show up in a diff. [The menu](#the-menu) empties any one of the
 Starring a script is a personal note about a file the project owns, so the alternatives both have a
 cost: the manifest is shared with everyone who clones the repo, and a setting would rewrite
 `settings.json` on every click. Workspace storage keeps it out of both, at the price of it being
-per-workspace and per-machine — a second computer starts with an empty FAVORITES.
+per-workspace and per-machine — a second computer starts with nothing starred.
 
 Scripts are matched back by the workspace folder's name plus the manifest path inside it plus the
 script name — `my-app/packages/api/package.json::dev` — rather than by absolute path. Moving the

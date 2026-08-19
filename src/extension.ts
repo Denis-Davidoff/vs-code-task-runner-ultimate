@@ -312,8 +312,8 @@ function keyForTask(task: vscode.Task): string | undefined {
  * show up in its diff. They go to the workspace's own storage instead:
  * per-workspace, per-machine, invisible to git, and disposed with the workspace.
  *
- * The trade-off is that neither travels: a second machine starts with an empty
- * FAVORITES, and a team cannot share one. Moving either to a setting would buy
+ * The trade-off is that neither travels: a second machine starts with nothing
+ * starred, and a team cannot share a list. Moving either to a setting would buy
  * that at the cost of rewriting settings.json on every click of a star.
  */
 const FAVORITES_KEY = 'favorites';
@@ -418,8 +418,8 @@ function displayName(script: ScriptEntry): string {
 /** The rename dialog, for a script row and for a group heading alike. */
 async function editTitle(node: TreeNode | undefined): Promise<void> {
   if (node?.kind === 'group') {
-    // Favorites and the foreign-task group are labels of ours, not names read
-    // off disk, so they carry no ref and there is nothing to restore a rename to.
+    // The foreign-task and hidden groups are labels of ours, not names read off
+    // disk, so they carry no ref and there is nothing to restore a rename to.
     await renameRef(node.ref, node.label, 'package');
   } else if (node?.kind === 'script') {
     await renameRef(scriptRef(node.script), node.script.name, 'task');
@@ -445,7 +445,7 @@ async function editTitle(node: TreeNode | undefined): Promise<void> {
  * anything else.
  */
 async function openManifest(node: TreeNode | undefined): Promise<void> {
-  // FAVORITES and OTHER TASKS are groups of ours rather than files, and carry no
+  // OTHER TASKS and HIDDEN are groups of ours rather than files, and carry no
   // manifest — the `when` clauses keep them out of the menu, and this keeps them
   // out of the command.
   const source: { file: vscode.Uri; where: string; task?: ScriptEntry } | undefined =
@@ -576,13 +576,13 @@ function storedColor(ref: string | undefined): PaletteName | undefined {
  * groups that have no title to rename, the id they are built with.
  *
  * That is where colour parts company with the rename. A rename needs a name on
- * disk to put back, so FAVORITES and OTHER TASKS cannot have one; a colour needs
- * nothing but a row to sit on, and those two are as worth finding at a glance as
- * any package is. Their ids are constants of ours — `group:favorites`,
- * `group:foreign` — so a colour on either survives everything a scan can change.
+ * disk to put back, so OTHER TASKS cannot have one; a colour needs nothing but a
+ * row to sit on, and that one is as worth finding at a glance as any package is.
+ * Its id is a constant of ours — `group:foreign` — so a colour on it survives
+ * everything a scan can change.
  *
  * The same fallback `collapseRef` uses, and for the same reason. Package groups
- * always carry a ref, so it is only ever those two that reach the id.
+ * always carry a ref, so it is only ever that one that reaches the id.
  */
 function colorRef(node: TreeNode): string | undefined {
   if (node.kind === 'group') {
@@ -622,7 +622,7 @@ async function setNodeColor(node: TreeNode | undefined, name: PaletteName | unde
 
 // --- manual order ------------------------------------------------------------
 
-/** The Favorites group as a drag scope. No manifest ref can collide: they all
+/** The starred rows as a drag scope. No manifest ref can collide: they all
  * start with a folder or scheme name, never with the separator. */
 const FAVORITES_SCOPE = '::favorites';
 
@@ -833,9 +833,10 @@ function liftRunning(scripts: ScriptEntry[]): ScriptEntry[] {
 }
 
 /**
- * The lift for a list that is already one group whole — FAVORITES, in both
- * surfaces. The per-package pass below cannot serve it: FAVORITES draws from
- * every manifest at once, so its rows sit in slots that pass would keep apart.
+ * The lift for a list that is already one block whole — the starred rows, in
+ * both surfaces. The per-package pass below cannot serve it: the starred list
+ * draws from every manifest at once, so its rows sit in slots that pass would
+ * keep apart.
  */
 function runningFirst(scripts: ScriptEntry[]): ScriptEntry[] {
   return pinsRunning() ? liftRunning(scripts) : scripts;
@@ -897,7 +898,7 @@ async function saveOrder(scope: string, refs: string[]): Promise<void> {
     await storage?.update(ORDER_KEY, { ...manualOrders(), [scope]: refs });
     return;
   }
-  // FAVORITES is its own order, so a drag there rewrites the starred list itself.
+  // The starred rows are their own order, so a drag there rewrites the list itself.
   // Refs that resolve to nothing keep both their place and their existence: they
   // may belong to a closed folder, and this is a reorder, not an unstar.
   const queue = [...refs];
@@ -996,7 +997,7 @@ async function showMenu(): Promise<void> {
       count: favorites,
       held: `${favorites} starred`,
       confirm: 'Remove favorites',
-      detail: 'The FAVORITES group disappears. The tasks themselves stay in their packages.',
+      detail: 'The starred rows at the top disappear. The tasks themselves stay in their packages.',
     },
   ];
 
@@ -1066,14 +1067,8 @@ type TreeNode =
       detail?: string;
       folder?: string;
       /**
-       * The project the group belongs to, upper-cased for the row. Every manifest
-       * in a workspace folder is filed under the same one, so a heading says which
-       * project it is part of before it says which corner of it.
-       */
-      project?: string;
-      /**
-       * The folder the manifest sits in, spelled as it is on disk. Empty for a
-       * manifest at the root of its project, where the project name has said it.
+       * What the package calls itself — `name` in its manifest. The half of the
+       * heading before the bullet, and the half a rename replaces.
        */
       place?: string;
       icon?: string;
@@ -1150,7 +1145,7 @@ const DRAG_MIMES = [
   'application/vnd.code.tree.taskrunnerultimate.explorer',
 ];
 
-/** The list a script row belongs to: its own package, or FAVORITES. */
+/** The list a script row belongs to: its own package, or the starred rows. */
 function dragScope(node: TreeNode): string | undefined {
   if (node.kind === 'group') {
     return node.scope;
@@ -1197,9 +1192,10 @@ async function draggedPayload(transfer: vscode.DataTransfer): Promise<string | u
 }
 
 /**
- * Dragging, in two gestures. Inside one list a drag reorders it. Onto FAVORITES
- * a drag stars the row, which is an addition rather than a move — the script
- * keeps the place it has in its own package, exactly as clicking ☆ leaves it.
+ * Dragging, in two gestures. Inside one list a drag reorders it. Onto one of the
+ * starred rows at the top a drag stars it too, which is an addition rather than
+ * a move — the script keeps the place it has in its own package, exactly as
+ * clicking ☆ leaves it.
  *
  * What is left over is a script dropped on a package that does not declare it,
  * and that one cannot be honoured at all: the groups are the manifests on disk,
@@ -1248,11 +1244,10 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     }
 
     const what = refs.length > 1 ? `${refs.length} tasks` : `"${displayName(dragged[0].script)}"`;
-    const where = scope === FAVORITES_SCOPE ? 'FAVORITES' : packageTitle(dragged[0].script);
     hint(
       scope === FAVORITES_SCOPE
-        ? `$(move) Moving ${what} — drop inside FAVORITES to reorder it`
-        : `$(move) Moving ${what} — drop inside ${where} to reorder, or on FAVORITES to star it`,
+        ? `$(move) Moving ${what} — drop on another starred task to reorder the top of the list`
+        : `$(move) Moving ${what} — drop inside ${packageTitle(dragged[0].script)} to reorder, or on a starred task to star it`,
     );
   },
 
@@ -1284,13 +1279,15 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
 
     const destination = dragScope(target);
     if (destination !== scope) {
-      // Onto FAVORITES from anywhere: star it, and leave its own row where it is.
+      // Onto a starred row from anywhere: star it, and leave its own row where
+      // it is. With no starred row on screen there is nothing to aim at, and ☆
+      // on the row itself is the gesture that is always there.
       if (destination === FAVORITES_SCOPE) {
         await starDropped(dragged, target.kind === 'script' ? scriptRef(target.script) : undefined);
       } else if (scope === FAVORITES_SCOPE) {
-        hint('$(circle-slash) Not a drop target — a favorite only moves inside FAVORITES. Click ★ to unstar it');
+        hint('$(circle-slash) Not a drop target — a starred task only moves among the starred rows. Click ★ to unstar it');
       } else {
-        hint(`$(circle-slash) Not a drop target — a task only moves inside ${scopeName(scope)}, or onto FAVORITES`);
+        hint(`$(circle-slash) Not a drop target — a task only moves inside ${scopeName(scope)}, or onto a starred task`);
       }
       return;
     }
@@ -1378,14 +1375,13 @@ function anchorGroup(target: TreeNode): string | undefined {
  */
 function groupHeading(node: TreeNode & { kind: 'group' }): string {
   const custom = node.ref ? storedTitle(node.ref) : undefined;
-  const named = [node.project, node.place].filter(Boolean).join(' ');
-  return custom ?? (named || node.label);
+  return custom ?? (node.place || node.label);
 }
 
 /** The name a scope goes by on screen, for a message that has to name one. */
 function scopeName(scope: string): string {
   if (scope === FAVORITES_SCOPE) {
-    return 'FAVORITES';
+    return 'the starred rows';
   }
   // A renamed group is named by its heading; an untouched one has no title of
   // its own here, and its ref is the manifest path the heading also shows.
@@ -1393,15 +1389,15 @@ function scopeName(scope: string): string {
 }
 
 /**
- * Stars what was dropped on FAVORITES, at the row it was dropped on. Starring is
- * an addition, not a move: the script keeps its place in its own package, which
- * is the same thing clicking ☆ does.
+ * Stars what was dropped on a starred row, at the row it was dropped on.
+ * Starring is an addition, not a move: the script keeps its place in its own
+ * package, which is the same thing clicking ☆ does.
  */
 async function starDropped(refs: string[], anchor: string | undefined): Promise<void> {
   const stored = favoriteRefs();
   const added = refs.filter((ref) => !stored.includes(ref));
   if (added.length === 0) {
-    hint('$(star-full) Already in FAVORITES');
+    hint('$(star-full) Already starred');
     return;
   }
 
@@ -1450,8 +1446,8 @@ function foldedRefs(): Set<string> {
 /**
  * Storage identity of a heading. The manifest ref is preferred for the same
  * reason `scriptRef` prefers it over the absolute URI: a workspace moved to
- * another path on disk keeps its folds. FAVORITES and OTHER TASKS have no
- * manifest, and fall back to the id, which is a constant of ours.
+ * another path on disk keeps its folds. OTHER TASKS has no manifest, and falls
+ * back to the id, which is a constant of ours.
  */
 function collapseRef(node: TreeNode): string | undefined {
   return node.kind === 'group' ? (node.ref ?? node.id) : undefined;
@@ -1591,7 +1587,6 @@ function createTree(): vscode.Disposable[] {
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const groups: Array<{ node: TreeNode & { kind: 'group' }; hasRunning: boolean }> = [];
   const byManifest = new Map<string, (typeof groups)[number]>();
-  const projects = projectNames(scripts);
   const crowded = crowdedFolders(scripts);
 
   for (const script of scripts) {
@@ -1609,8 +1604,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
           label: manifestTitle(script),
           detail: packagePath(script),
           folder: shared ? packagePath(script) : packageFolder(script),
-          project: projectHeading(projects.get(projectKey(script)) ?? manifestTitle(script)),
-          place: path.posix.basename(script.directory),
+          place: packageHeading(script, shared),
           icon: GROUP_ICON,
           scope: groupRef(script),
           ref: groupRef(script),
@@ -1656,21 +1650,19 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   }
 
   // Favorites sit above everything, including running groups: a pinned list is
-  // only worth pinning if it does not move. The scripts stay in their own group
-  // as well — this is a second way in, not a way out of the package it lives in.
+  // only worth pinning if it does not move. They are rows at the root rather
+  // than a group of their own — a heading over the two or three tasks you run
+  // all day is a fold to open before you can click them, and the shortest list
+  // in the tree is the one that least needs a lid.
+  //
+  // The scripts stay in their own package group as well: this is a second way
+  // in, not a way out of the package it lives in. What tells the two rows apart
+  // is the dimmed text, which on a starred row names the package it came from.
+  //
+  // Starring already writes an order, so these rows are draggable in their own
+  // right: the drag rewrites the starred list instead of a manifest's order.
   const favorites = runningFirst(favoriteScripts(scripts));
-  if (favorites.length > 0) {
-    roots.unshift({
-      kind: 'group',
-      id: 'group:favorites',
-      label: 'FAVORITES',
-      icon: 'star-full',
-      // Starring already writes an order, so FAVORITES is draggable in its own
-      // right: the drag rewrites the starred list instead of a manifest's order.
-      scope: FAVORITES_SCOPE,
-      children: favorites.map((script): TreeNode => ({ kind: 'script', script, inFavorites: true })),
-    });
-  }
+  roots.unshift(...favorites.map((script): TreeNode => ({ kind: 'script', script, inFavorites: true })));
 
   // And the pile itself, last on the list and shut by default: a group whose
   // point is to be out of the way has not moved out of the way if it opens
@@ -1704,21 +1696,27 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
     // A heading is read in two registers, and the row spells each in its own way.
     //
-    // The project comes first, upper-cased with `-` and `_` opened up into the
-    // spaces they stand in for: it is a title, not a path, and upper case is what
-    // makes it read as the masthead every group under it belongs to. FAVORITES and
-    // OTHER TASKS are labels of ours and already spelled that way.
+    // The package's own name first, then after the bullet the path it lives at —
+    // the name to look for and the place to find it, in that order, because the
+    // name is the half being looked for and the path is the longer one.
     //
-    // What follows is disk. The folder the manifest sits in keeps the case it has
-    // on disk — `@acme/web-ui` and `iOS` are decisions, and a case that walks over
-    // them makes the tree disagree with the disk about what things are called.
+    // The project it belongs to is deliberately not repeated here. It used to
+    // open every heading, which in a monorepo means printing one word down the
+    // whole sidebar; a masthead that is on every row is not a masthead. It is
+    // still named once, on the row of the manifest it came from — the project's
+    // root package is a group like any other — and the path after the bullet
+    // carries the workspace folder whenever more than one is open.
     //
-    // A title typed by hand stands in for both parts, and is upper-cased with them:
-    // it is a heading in the same column as the rest, and `-` and `_` are left in
-    // it because a name typed by hand chose them.
+    // Nothing in the row is re-cased: `acme-platform`, `@acme/webUI` and `iOS`
+    // are decisions somebody made, in a manifest or on disk, and a pass that
+    // walks over them makes the tree disagree with the project about what it is
+    // called.
+    //
+    // A title typed by hand stands in for the name and is shown exactly as it
+    // was typed — the case and the `-` and `_` in it are choices somebody made
+    // at the prompt, and none of them are ours to redo.
     const custom = node.ref ? storedTitle(node.ref) : undefined;
-    const named = [node.project, node.place].filter(Boolean).join(' ');
-    const title = custom ? custom.toUpperCase() : named || node.label;
+    const title = custom ?? (node.place || node.label);
     // The folder is part of the label rather than a description on purpose: the
     // decoration below tints the whole label, so a joined title keeps one colour
     // across the row instead of a tinted title beside a dimmed path.
@@ -1754,9 +1752,8 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     //
     // A folder the user has painted wears that colour instead of the shared one,
     // on the label and on the icon alike: the point of painting one is to find it
-    // in a column of headings that otherwise all look the same. FAVORITES and
-    // OTHER TASKS take one too — they are rows on the same list, whatever they
-    // cannot be renamed to.
+    // in a column of headings that otherwise all look the same. OTHER TASKS takes
+    // one too — it is a row on the same list, whatever it cannot be renamed to.
     const tint = nodeColor(node) ?? (node.hidden ? HIDDEN_COLOR : TITLE_COLOR);
     item.resourceUri = decorationUri(tint, node.detail ?? node.label);
     if (node.icon) {
@@ -1782,9 +1779,9 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
 
   const isRunning = running.has(node.script.key);
   const item = new vscode.TreeItem(displayName(node.script));
-  // A starred script is on screen twice, under FAVORITES and in its own group.
-  // Without ids of its own the tree cannot tell the two rows apart, and the
-  // selection would jump between them. Built from the absolute `key` rather than
+  // A starred script is on screen twice, at the top of the list and in its own
+  // group. Without ids of its own the tree cannot tell the two rows apart, and
+  // the selection would jump between them. Built from the absolute `key` rather than
   // the storage ref, which trades uniqueness for portability.
   item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
   item.description = scriptDescription(node.script, node.inFavorites);
@@ -1815,8 +1812,8 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
  * Dimmed text after the label, in the tree and in the picker alike. The command
  * is always in it; the rest adds back whatever the label stopped saying — the
  * real script name once the row has been renamed, and the package it belongs to
- * once it is listed under FAVORITES, away from the group heading that would
- * otherwise answer that.
+ * once it is pinned at the top of the list, away from the group heading that
+ * would otherwise answer that.
  *
  * Keeping the manifest's own name here is also what leaves a renamed script
  * findable by it: the picker matches on the description too.
@@ -1907,46 +1904,6 @@ function runningIcon(): vscode.ThemeIcon {
 }
 
 /**
- * A project's name dressed as a heading: `-` and `_` opened up into the spaces
- * they stand in for, and the whole of it upper-cased — `my-app` reads as
- * `MY APP`.
- *
- * Upper case is what separates the two halves of a heading. The project is a
- * title we chose the spelling of, so re-casing it costs nothing; everything after
- * it is a name on disk, and is left exactly as the disk spells it.
- */
-function projectHeading(name: string): string {
-  return name.replace(/[-_]+/g, ' ').toUpperCase();
-}
-
-/**
- * The project every manifest in a workspace folder is filed under, keyed by that
- * folder: the name its root manifest gives itself, else the folder's own name on
- * disk. Keyed rather than resolved per script because only the whole scan can say
- * what a folder's root manifest was.
- *
- * The root manifest wins because it is the name the project is known by — the
- * repository directory is often a checkout path (`vs-code-task-list` for a
- * `task-runner-ultimate`), and the manifest is where the project says its name
- * itself. The folder is the fallback for a project whose root names nothing, or
- * has no manifest at all because everything it runs is nested.
- */
-function projectNames(scripts: ScriptEntry[]): Map<string, string> {
-  const names = new Map<string, string>();
-  const named = new Set<string>();
-  for (const script of scripts) {
-    const key = projectKey(script);
-    if (script.directory === '' && script.packageName && !named.has(key)) {
-      names.set(key, script.packageName);
-      named.add(key);
-    } else if (!names.has(key)) {
-      names.set(key, workspaceFolderOf(script)?.name ?? path.posix.basename(manifestFolder(script)));
-    }
-  }
-  return names;
-}
-
-/**
  * The manifests that share a folder with another one, as folder paths. A Rust
  * service with a Cargo.toml, a Makefile and a justfile side by side is one
  * folder and three groups, and a heading naming the folder alone would name all
@@ -1963,19 +1920,34 @@ function crowdedFolders(scripts: ScriptEntry[]): Set<string> {
   return new Set([...manifests].filter(([, seen]) => seen.size > 1).map(([folder]) => folder));
 }
 
-/** The workspace folder a manifest was scanned out of, if it is still open. */
-function workspaceFolderOf(script: ScriptEntry): vscode.WorkspaceFolder | undefined {
-  return vscode.workspace.getWorkspaceFolder(script.manifest);
-}
-
-/** Which project a manifest belongs to: its workspace folder, when it has one. */
-function projectKey(script: ScriptEntry): string {
-  return workspaceFolderOf(script)?.uri.toString() ?? manifestFolder(script);
-}
-
 /** Absolute path of the folder a manifest sits in. */
 function manifestFolder(script: ScriptEntry): string {
   return path.posix.dirname(script.manifest.path);
+}
+
+/**
+ * The half of a heading between the colon and the bullet: what the package calls
+ * itself, which is `name` in its `package.json`, `[package] name` in its
+ * `Cargo.toml`, `module` in its `go.mod`.
+ *
+ * That is the name the package is known by everywhere else — in an import, in a
+ * `pnpm --filter`, in the starred rows at the top of the tree — and it is not
+ * always the folder it lives in: `@acme/frontend` checked out at `apps/web` was
+ * a heading reading `web` until the name itself moved into the row. The folder
+ * has not gone anywhere; it is the path after the bullet, where it can be pasted
+ * into a terminal.
+ *
+ * A manifest that names nothing — a Makefile, a justfile, a `package.json`
+ * without a `name` — falls back to the folder it sits in, which says more than
+ * `package.json` would. Unless the folder holds another manifest as well: there
+ * the file name is the only half that tells the two groups apart.
+ */
+function packageHeading(script: ScriptEntry, shared: boolean): string {
+  if (script.packageName) {
+    return script.packageName;
+  }
+  const folder = path.posix.basename(script.directory);
+  return shared || !folder ? path.posix.basename(script.manifest.path) : folder;
 }
 
 /**
@@ -2246,8 +2218,8 @@ async function showScriptPicker(): Promise<void> {
 const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemKind.Separator });
 
 /**
- * The tree's shape, flattened into separators and rows: FAVORITES, then the
- * tasks that came from outside a manifest, then one block per package — the
+ * The tree's shape, flattened into separators and rows: the starred tasks, then
+ * the tasks that came from outside a manifest, then one block per package — the
  * packages with something running first, and inside each of them the same order
  * the tree uses. Two surfaces showing the same list in two different orders is two
  * things to learn instead of one.
@@ -2258,10 +2230,11 @@ const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemK
  * stopped from here would keep the top slot it no longer earns.
  *
  * It departs from the tree in one place. The tree lists a starred script twice,
- * in FAVORITES and in its own package, because the two rows sit in different
- * collapsible groups; flattened, that reads as a duplicate. So here a script has
- * exactly one row, and a starred one is lifted out of its package — its
- * FAVORITES row names the package instead, which is what the tree does too.
+ * at the top and in its own package, because there the second one sits inside a
+ * package heading that says what it is doing there; flattened under a separator,
+ * that reads as a duplicate. So here a script has exactly one row, and a starred
+ * one is lifted out of its package — its starred row names the package instead,
+ * which is what the tree does too.
  */
 function buildItems(saved: ScriptEntry[]): Item[] {
   const scripts = pinRunning(saved);
@@ -2325,8 +2298,8 @@ function buildItems(saved: ScriptEntry[]): Item[] {
 
 /**
  * One script row. Under Favorites it also says which package it came from, the
- * same way the tree's FAVORITES rows do — listed away from a package heading,
- * the row has to answer that itself.
+ * same way the tree's starred rows do — listed away from a package heading, the
+ * row has to answer that itself.
  *
  * The icon is written into the label as `$(id)` rather than passed as `iconPath`,
  * which looks like the worse of the two and is not:
