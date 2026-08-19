@@ -405,7 +405,7 @@ The new title is used wherever the group is named — the tree heading, the drop
 package a starred row says it came from, and the status-bar message while a row is being dragged.
 A title typed by hand is shown exactly as it was typed, like everything else on the row.
 
-**OTHER TASKS** and **HIDDEN** cannot be renamed — they are this extension's own labels, not names
+**OTHER TASKS** and **hidden** cannot be renamed — they are this extension's own labels, not names
 read off a manifest, so there is nothing to restore them to.
 
 Both kinds of title live in the same store, so **Reset all titles** in [the menu](#the-menu) undoes

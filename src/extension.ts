@@ -979,7 +979,7 @@ async function showMenu(): Promise<void> {
       count: hidden,
       held: `${hidden} hidden`,
       confirm: 'Show all',
-      detail: 'The HIDDEN group disappears and every package in it comes back to its own place in the tree.',
+      detail: 'The hidden group disappears and every package in it comes back to its own place in the tree.',
     },
     {
       keys: [COLORS_KEY],
@@ -1224,8 +1224,8 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
       const what = refs.length > 1 ? `${refs.length} packages` : `"${groupHeading(first)}"`;
       hint(
         first.hidden
-          ? `$(move) Moving ${what} — drop on any package outside HIDDEN to bring it back`
-          : `$(move) Moving ${what} — drop on another package to reorder, or on HIDDEN to put it away`,
+          ? `$(move) Moving ${what} — drop on any package outside hidden to bring it back`
+          : `$(move) Moving ${what} — drop on another package to reorder, or on hidden to put it away`,
       );
       return;
     }
@@ -1331,7 +1331,7 @@ async function dropGroups(dragged: string[], target: TreeNode): Promise<void> {
   const buried = new Set(hiddenRefs());
   const anchor = anchorGroup(target);
   if (!anchor) {
-    hint('$(circle-slash) Not a drop target — a package moves between packages, or onto HIDDEN');
+    hint('$(circle-slash) Not a drop target — a package moves between packages, or onto hidden');
     return;
   }
   if (buried.has(anchor)) {
@@ -1672,7 +1672,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     roots.push({
       kind: 'group',
       id: HIDDEN_GROUP_ID,
-      label: `HIDDEN (${away.length})`,
+      label: `hidden (${away.length})`,
       icon: 'eye-closed',
       hidden: true,
       children: away.map((group) => ({ ...group.node, hidden: true })),
