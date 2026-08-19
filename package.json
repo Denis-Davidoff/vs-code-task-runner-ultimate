@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -924,10 +924,10 @@
         "id": "taskRunnerUltimate.sourceTitleForeground",
         "description": "Colour of the source titles (package / manifest names) in the Task & Script Explorer view.",
         "defaults": {
-          "dark": "#D7BA7D",
-          "light": "#B58900",
-          "highContrast": "#F0C674",
-          "highContrastLight": "#8F6A00"
+          "dark": "#FFFFFF",
+          "light": "#000000",
+          "highContrast": "#FFFFFF",
+          "highContrastLight": "#000000"
         }
       },
       {
