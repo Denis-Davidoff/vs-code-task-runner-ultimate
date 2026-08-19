@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -85,7 +85,8 @@
     "workspaceContains:**/mise.toml",
     "workspaceContains:**/.mise.toml",
     "onTaskType:taskRunnerUltimate",
-    "onView:taskRunnerUltimate.tree"
+    "onView:taskRunnerUltimate.tree",
+    "onView:taskRunnerUltimate.explorer"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -463,89 +464,89 @@
         {
           "command": "taskRunnerUltimate.restartAll",
           "group": "navigation@1",
-          "when": "view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && taskRunnerUltimate.runningCount > 0"
         },
         {
           "command": "taskRunnerUltimate.stopAll",
           "group": "navigation@2",
-          "when": "view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && taskRunnerUltimate.runningCount > 0"
         },
         {
           "command": "taskRunnerUltimate.show",
           "group": "navigation@3",
-          "when": "view == taskRunnerUltimate.tree"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/"
         },
         {
           "command": "taskRunnerUltimate.menu",
           "group": "navigation@4",
-          "when": "view == taskRunnerUltimate.tree"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/"
         }
       ],
       "view/item/context": [
         {
           "command": "taskRunnerUltimate.addFavorite",
           "group": "inline@0",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:.+:nofav$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:nofav$/"
         },
         {
           "command": "taskRunnerUltimate.removeFavorite",
           "group": "inline@0",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:.+:fav$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:fav$/"
         },
         {
           "command": "taskRunnerUltimate.runItem",
           "group": "inline@1",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:idle:/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:idle:/"
         },
         {
           "command": "taskRunnerUltimate.restartItem",
           "group": "inline@1",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^(script:running:|foreignTask$)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
         },
         {
           "command": "taskRunnerUltimate.stopItem",
           "group": "inline@2",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^(script:running:|foreignTask$)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
         },
         {
           "command": "taskRunnerUltimate.openScript",
           "group": "0_open@1",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:/"
         },
         {
           "command": "taskRunnerUltimate.openManifest",
           "group": "0_open@1",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^group:package$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package$/"
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
           "group": "0_open@2",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^(script:running:|foreignTask$)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
         },
         {
           "command": "taskRunnerUltimate.addFavorite",
           "group": "1_favorites@1",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:.+:nofav$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:nofav$/"
         },
         {
           "command": "taskRunnerUltimate.removeFavorite",
           "group": "1_favorites@1",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:.+:fav$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:fav$/"
         },
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^script:/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:/"
         },
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^group:package$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package$/"
         },
         {
           "submenu": "taskRunnerUltimate.color",
           "group": "2_modify@2",
-          "when": "view == taskRunnerUltimate.tree && viewItem =~ /^(script|group)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group)/"
         }
       ],
       "taskRunnerUltimate.color": [
@@ -770,6 +771,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show the scripts icon (with the running-task badge) in the editor title bar."
+        },
+        "taskRunnerUltimate.showInFileExplorer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also show the task list as a section at the bottom of the File Explorer."
         },
         "taskRunnerUltimate.openDropdownFromActivityBar": {
           "type": "boolean",
@@ -1145,6 +1151,16 @@
           "name": "Task & Script Explorer",
           "icon": "media/activity-bar.svg",
           "contextualTitle": "Task & Script Explorer"
+        }
+      ],
+      "explorer": [
+        {
+          "id": "taskRunnerUltimate.explorer",
+          "name": "Task & Script Explorer",
+          "icon": "media/activity-bar.svg",
+          "contextualTitle": "Task & Script Explorer",
+          "when": "config.taskRunnerUltimate.showInFileExplorer",
+          "visibility": "collapsed"
         }
       ]
     }

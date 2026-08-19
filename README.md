@@ -180,6 +180,7 @@ pins it, and `none` hides them entirely.
 | --- | --- |
 | Editor title bar (top right) | The badged icon. Toggle with `taskRunnerUltimate.showInEditorTitle`. |
 | Activity bar (left strip) | The **Task & Script Explorer** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
+| File Explorer (bottom section) | The same tree again, as a **Task & Script Explorer** section under the file list — collapsed until you open it, so it costs one row until you want it. Toggle with `taskRunnerUltimate.showInFileExplorer`. |
 | Status bar (bottom left) | `$(play-circle) Task & Script Explorer`, or `$(sync~spin) Task & Script Explorer N` while tasks run. Toggle with `taskRunnerUltimate.showInStatusBar`. |
 | Command palette | `Task & Script Explorer: Show Scripts` |
 | Keybinding | `Ctrl+Cmd+T` on macOS, `Ctrl+Alt+T` on Windows and Linux — see [Keyboard shortcuts](#keyboard-shortcuts) |
@@ -589,6 +590,7 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `showInEditorTitle` | `true` | The badged ▶ icon in the editor title bar. |
 | `showInStatusBar` | `true` | The `Task & Script Explorer` entry in the status bar. |
+| `showInFileExplorer` | `true` | The `Task & Script Explorer` section at the foot of the File Explorer. It ships collapsed, so it takes one header row until you open it. |
 | `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
 | `colorIcons` | `true` | Tints task icons by category. Turn off for plain foreground-coloured icons. |
 | `pinRunningTasks` | `false` | Lifts running tasks to the top of their own group, in the tree and the dropdown. Off because a row that stays put is a row you stop where you started it. |

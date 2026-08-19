@@ -214,6 +214,20 @@ const MAX_MANIFEST_BYTES = 1_000_000;
 let warnedAboutTruncation = false;
 
 let cache: ScriptEntry[] | undefined;
+/**
+ * The scan that is currently running, if one is. Two views draw this list now,
+ * and both ask for their roots the moment they are shown, which is before the
+ * first scan has anything to put in `cache`. Handing the second caller the first
+ * one's promise is what keeps that from walking the workspace twice.
+ */
+let scanning: Promise<ScriptEntry[]> | undefined;
+/**
+ * Bumped by every `resetSources`. A scan reads it on the way in and checks it on
+ * the way out, so one that was already walking the disk when a manifest changed
+ * hands its answer back to whoever asked but does not become the cache the next
+ * caller reads — the fresher scan's answer is the one that stands.
+ */
+let generation = 0;
 /** Node package manager per package directory, detected while scanning. */
 const detected = new Map<string, PackageManager>();
 /** package.json detection fields, by manifest URI, collected during the scan. */
@@ -228,6 +242,11 @@ const nodeHints = new Map<string, NodeHints>();
  */
 export function resetSources(): void {
   cache = undefined;
+  // A scan already in flight was started against the manifests as they were, so
+  // it is dropped rather than awaited: whoever it belongs to still gets its
+  // answer, and the next caller starts a scan that sees the change.
+  scanning = undefined;
+  generation++;
   detected.clear();
   nodeHints.clear();
 }
@@ -236,7 +255,25 @@ export async function collectScripts(): Promise<ScriptEntry[]> {
   if (cache) {
     return cache;
   }
+  if (scanning) {
+    return scanning;
+  }
 
+  const scan = runScan();
+  scanning = scan;
+  try {
+    return await scan;
+  } finally {
+    // Only if it is still ours: an `invalidate` during the scan has already
+    // cleared the slot for a fresher one, and clearing it again would drop that.
+    if (scanning === scan) {
+      scanning = undefined;
+    }
+  }
+}
+
+async function runScan(): Promise<ScriptEntry[]> {
+  const started = generation;
   const exclude = setting<string>('exclude') || DEFAULT_EXCLUDE;
   const enabled = enabledEcosystems();
   const manifests = await vscode.workspace.findFiles(MANIFEST_GLOB, exclude, MAX_MANIFESTS);
@@ -302,8 +339,10 @@ export async function collectScripts(): Promise<ScriptEntry[]> {
     }
   }
 
-  cache = entries;
-  await detectPackageManagers(entries);
+  if (started === generation) {
+    cache = entries;
+    await detectPackageManagers(entries);
+  }
   return entries;
 }
 

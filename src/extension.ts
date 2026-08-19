@@ -265,9 +265,14 @@ function onStateChanged(): void {
   updateStatusBar(count);
   activePicker?.refresh();
   treeChanged.fire();
-  if (treeView) {
-    // The activity bar badge is a real API here, unlike the editor toolbar one.
-    treeView.badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
+  // The view badge is a real API here, unlike the editor toolbar one, and both
+  // views carry it: the count belongs to the tasks, not to the sidebar the list
+  // happens to be read in.
+  const badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
+  for (const view of [treeView, explorerTreeView]) {
+    if (view) {
+      view.badge = badge;
+    }
   }
 }
 
@@ -960,6 +965,8 @@ type TreeNode =
 
 const treeChanged = new vscode.EventEmitter<void>();
 let treeView: vscode.TreeView<TreeNode> | undefined;
+/** The same tree again, in the File Explorer. See `createTree`. */
+let explorerTreeView: vscode.TreeView<TreeNode> | undefined;
 
 /**
  * One icon for every package row: a stack, for the pile of tasks the row opens
@@ -989,11 +996,19 @@ const TITLE_COLOR = 'taskRunnerUltimate.sourceTitleForeground';
 const RUNNING_COLOR = 'taskRunnerUltimate.runningForeground';
 
 /**
- * The tree's own drag type. VS Code lower-cases mime types, so the view id is
- * spelled out in lower case here — otherwise what we write on drag is not what
- * we look for on drop.
+ * The trees' own drag types, one per view. VS Code lower-cases mime types, so the
+ * view ids are spelled out in lower case here — otherwise what we write on drag is
+ * not what we look for on drop.
+ *
+ * A drag writes the payload under every one of them and a drop reads whichever it
+ * finds: the two views draw the same rows, and a row dragged in one has to land in
+ * the other. VS Code only lets a view export the mime type named after it, so the
+ * list is what makes the pair interchangeable rather than two isolated trees.
  */
-const DRAG_MIME = 'application/vnd.code.tree.taskrunnerultimate.tree';
+const DRAG_MIMES = [
+  'application/vnd.code.tree.taskrunnerultimate.tree',
+  'application/vnd.code.tree.taskrunnerultimate.explorer',
+];
 
 /** The list a script row belongs to: its own package, or FAVORITES. */
 function dragScope(node: TreeNode): string | undefined {
@@ -1026,6 +1041,22 @@ function clearHint(): void {
 }
 
 /**
+ * The dragged rows, read back from whichever of our mime types survived the trip.
+ * A drag writes all of them, but a view only exports the one named after itself,
+ * so which one arrives says which view the drag started in — and nothing here
+ * needs to know that.
+ */
+async function draggedPayload(transfer: vscode.DataTransfer): Promise<string | undefined> {
+  for (const mime of DRAG_MIMES) {
+    const raw = await transfer.get(mime)?.asString();
+    if (raw) {
+      return raw;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Dragging, in two gestures. Inside one list a drag reorders it. Onto FAVORITES
  * a drag stars the row, which is an addition rather than a move — the script
  * keeps the place it has in its own package, exactly as clicking ☆ leaves it.
@@ -1035,8 +1066,8 @@ function clearHint(): void {
  * and no gesture in a sidebar moves a script from one `package.json` to another.
  */
 const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
-  dragMimeTypes: [DRAG_MIME],
-  dropMimeTypes: [DRAG_MIME],
+  dragMimeTypes: DRAG_MIMES,
+  dropMimeTypes: DRAG_MIMES,
 
   handleDrag(source, transfer) {
     const dragged = source.filter((node): node is TreeNode & { kind: 'script' } => node.kind === 'script');
@@ -1047,7 +1078,10 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     // One drag carries one scope, so a multi-select spanning two packages moves
     // only the rows that belong to the list it started in.
     const refs = dragged.filter((node) => dragScope(node) === scope).map((node) => scriptRef(node.script));
-    transfer.set(DRAG_MIME, new vscode.DataTransferItem(JSON.stringify({ scope, refs })));
+    const payload = new vscode.DataTransferItem(JSON.stringify({ scope, refs }));
+    for (const mime of DRAG_MIMES) {
+      transfer.set(mime, payload);
+    }
 
     const what = refs.length > 1 ? `${refs.length} tasks` : `"${displayName(dragged[0].script)}"`;
     const where = scope === FAVORITES_SCOPE ? 'FAVORITES' : packageTitle(dragged[0].script);
@@ -1059,7 +1093,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
   },
 
   async handleDrop(target, transfer) {
-    const raw = await transfer.get(DRAG_MIME)?.asString();
+    const raw = await draggedPayload(transfer);
     // No target means the empty space below the tree, which names no position.
     if (!raw || !target) {
       clearHint();
@@ -1235,11 +1269,31 @@ function createTree(): vscode.Disposable[] {
     },
   };
 
+  // The same tree, twice: once in its own activity bar container, and once as a
+  // section at the foot of the File Explorer, for the half of the world that
+  // never leaves that sidebar. Both are handed the one provider and the one
+  // drag controller, so the rows, the order, the folds and the stars are the
+  // same list seen from two places rather than two lists to keep in step.
+  //
+  // The Explorer one is contributed collapsed and behind a setting: a section
+  // that opens itself is a section that has taken a file tree's space without
+  // being asked.
   const view = vscode.window.createTreeView('taskRunnerUltimate.tree', {
     treeDataProvider: provider,
     dragAndDropController,
   });
   treeView = view;
+
+  const explorerView = vscode.window.createTreeView('taskRunnerUltimate.explorer', {
+    treeDataProvider: provider,
+    dragAndDropController,
+  });
+  explorerTreeView = explorerView;
+
+  const explorerFolds = [
+    explorerView.onDidCollapseElement(({ element }) => rememberCollapse(element, true)),
+    explorerView.onDidExpandElement(({ element }) => rememberCollapse(element, false)),
+  ];
 
   // Which colour a row wants is the first segment of the uri it hands over, so a
   // repaint that changes the colour changes the uri with it. That is what makes
@@ -1258,6 +1312,9 @@ function createTree(): vscode.Disposable[] {
   const collapse = view.onDidCollapseElement(({ element }) => rememberCollapse(element, true));
   const expand = view.onDidExpandElement(({ element }) => rememberCollapse(element, false));
 
+  // Only the activity bar view opens the dropdown on the way in. The Explorer
+  // section becomes visible whenever someone opens the Explorer, which is not
+  // the deliberate click that setting is about.
   const visibility = view.onDidChangeVisibility(({ visible }) => {
     const opensDropdown = vscode.workspace
       .getConfiguration('taskRunnerUltimate')
@@ -1267,7 +1324,7 @@ function createTree(): vscode.Disposable[] {
     }
   });
 
-  return [treeChanged, view, collapse, expand, visibility, decorations];
+  return [treeChanged, view, collapse, expand, visibility, decorations, explorerView, ...explorerFolds];
 }
 
 /**

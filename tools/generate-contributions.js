@@ -320,7 +320,10 @@ manifest.contributes.commands = [
 ];
 
 const inTitle = 'config.taskRunnerUltimate.showInEditorTitle';
-const inTree = 'view == taskRunnerUltimate.tree';
+// The tree is contributed twice — its own activity bar container and a section at
+// the foot of the File Explorer — and the two draw the same rows with the same
+// actions, so every `when` clause below matches either view rather than naming one.
+const inTree = 'view =~ /^taskRunnerUltimate\\.(tree|explorer)$/';
 // `!taskRunnerUltimate.runningCount` also covers the moment before the extension has
 // activated, when the context key does not exist yet.
 const toolbarEntries = (whenPrefix) => [
@@ -344,17 +347,17 @@ manifest.contributes.menus = {
     {
       command: 'taskRunnerUltimate.restartAll',
       group: 'navigation@1',
-      when: 'view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0',
+      when: `${inTree} && taskRunnerUltimate.runningCount > 0`,
     },
     {
       command: 'taskRunnerUltimate.stopAll',
       group: 'navigation@2',
-      when: 'view == taskRunnerUltimate.tree && taskRunnerUltimate.runningCount > 0',
+      when: `${inTree} && taskRunnerUltimate.runningCount > 0`,
     },
-    { command: 'taskRunnerUltimate.show', group: 'navigation@3', when: 'view == taskRunnerUltimate.tree' },
+    { command: 'taskRunnerUltimate.show', group: 'navigation@3', when: inTree },
     // Refresh lives inside the menu: it is the rarest of the header actions, and
     // the command palette still has it under its own name.
-    { command: 'taskRunnerUltimate.menu', group: 'navigation@4', when: 'view == taskRunnerUltimate.tree' },
+    { command: 'taskRunnerUltimate.menu', group: 'navigation@4', when: inTree },
   ],
   // Script rows carry a composed contextValue — `script:<idle|running>:<fav|nofav>`
   // (see `treeItemFor`) — so a `when` clause can match on any one of the three
@@ -445,6 +448,20 @@ manifest.contributes.views = {
       contextualTitle: 'Task & Script Explorer',
     },
   ],
+  // The same tree again, at the foot of the File Explorer, for the half of the
+  // world that never leaves that sidebar. It ships collapsed and behind a
+  // setting: a section that opens itself is a section that has taken the file
+  // tree's space without being asked.
+  explorer: [
+    {
+      id: 'taskRunnerUltimate.explorer',
+      name: 'Task & Script Explorer',
+      icon: 'media/activity-bar.svg',
+      contextualTitle: 'Task & Script Explorer',
+      when: 'config.taskRunnerUltimate.showInFileExplorer',
+      visibility: 'collapsed',
+    },
+  ],
 };
 
 // `cmd+alt+r` is taken on macOS — it toggles regex in the find widget — and
@@ -504,6 +521,7 @@ manifest.activationEvents = [
   ...MANIFEST_FILES.map((file) => `workspaceContains:**/${file}`),
   'onTaskType:taskRunnerUltimate',
   'onView:taskRunnerUltimate.tree',
+  'onView:taskRunnerUltimate.explorer',
 ];
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
