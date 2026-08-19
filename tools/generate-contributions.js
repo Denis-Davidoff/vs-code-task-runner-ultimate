@@ -22,9 +22,20 @@ function glyph(fg) {
   return `  <path fill="${fg}" fill-rule="evenodd" d="M8 0.9a7.1 7.1 0 1 0 0 14.2A7.1 7.1 0 0 0 8 0.9zM6.1 4.6 11.6 8l-5.5 3.4z"/>`;
 }
 
-/** The same disc with a square knocked out instead of the triangle. */
+/*
+ * Hollow rounded square — the outline of VS Code's own `debug-stop` codicon,
+ * which the per-item stop action uses. Lifted from codicon.ttf (300 upem) and
+ * scaled to the 16x16 viewBox so the header icon matches the row icons exactly;
+ * the two contours are the frame's outside and inside edges, hence evenodd.
+ */
+const STOP_PATH =
+  'M12.48 3.52V12.48H3.52V3.52ZM12.48 1.97H3.52Q2.88 1.97 2.45 2.43Q2.03 2.88 ' +
+  '1.97 3.52V12.48Q2.03 13.12 2.45 13.57Q2.88 14.03 3.52 14.03H12.48Q13.12 ' +
+  '13.97 13.57 13.55Q14.03 13.12 13.97 12.48V3.52Q14.03 2.88 13.57 2.45Q13.12 ' +
+  '2.03 12.48 2.03Z';
+
 function stopGlyph(fill) {
-  return `  <path fill="${fill}" fill-rule="evenodd" d="M8 0.9a7.1 7.1 0 1 0 0 14.2A7.1 7.1 0 0 0 8 0.9zM5.6 5.6h4.8v4.8h-4.8z"/>`;
+  return `  <path fill="${fill}" fill-rule="evenodd" d="${STOP_PATH}"/>`;
 }
 
 /**
@@ -56,14 +67,14 @@ for (const [name, theme] of Object.entries(THEMES)) {
 }
 
 /*
- * Stop-all is the one destructive action in the view header, so it is orange
+ * Stop-all is the one destructive action in the view header, so it is a soft red
  * rather than the theme foreground every other action uses. Menu icons declared
  * in package.json cannot carry a ThemeColor — only `$(id)` codicons or image
  * files are accepted, and the header draws those files as-is — so the colour is
- * baked in per theme: darker on light backgrounds, lighter on dark ones.
+ * baked in per theme: a touch deeper on light backgrounds for contrast.
  */
-const STOP_ORANGE = { light: '#B35C00', dark: '#E8952F' };
-for (const [name, fill] of Object.entries(STOP_ORANGE)) {
+const STOP_RED = { light: '#E05252', dark: '#E57373' };
+for (const [name, fill] of Object.entries(STOP_RED)) {
   fs.writeFileSync(path.join(media, `stop-all-${name}.svg`), svg(stopGlyph(fill)));
 }
 
