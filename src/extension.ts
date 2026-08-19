@@ -1569,7 +1569,7 @@ function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string): vscode
  */
 function runningIcon(): vscode.ThemeIcon {
   const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
-  return new vscode.ThemeIcon('sync~spin', colored ? new vscode.ThemeColor(RUNNING_COLOR) : undefined);
+  return new vscode.ThemeIcon('loading~spin', colored ? new vscode.ThemeColor(RUNNING_COLOR) : undefined);
 }
 
 /**
@@ -1949,7 +1949,7 @@ function buildItems(saved: ScriptEntry[]): Item[] {
     items.push(separator(`Other tasks (${foreign.length})`));
     for (const execution of foreign) {
       items.push({
-        label: `$(sync~spin) ${execution.task.name}`,
+        label: `$(loading~spin) ${execution.task.name}`,
         description: execution.task.source ? `${execution.task.source} task` : 'task',
         buttons: [restartButton(true), stopButton()],
         execution,
@@ -1999,7 +1999,7 @@ function buildItems(saved: ScriptEntry[]): Item[] {
  *
  * - `iconPath` puts the icon in the row's own 16px slot, which carries
  *   `padding-right: 6px`. A codicon lands centred in the content box while
- *   `transform: rotate()` turns about the border box, so `sync~spin` orbits its
+ *   `transform: rotate()` turns about the border box, so the spinner orbits its
  *   own centre by 3px instead of spinning on it. That CSS belongs to VS Code and
  *   an extension cannot reach it.
  * - The colour is dropped either way. VS Code converts a `ThemeIcon` to a bare
@@ -2013,7 +2013,7 @@ function buildItems(saved: ScriptEntry[]): Item[] {
  */
 function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
   const isRunning = running.has(script.key);
-  const icon = isRunning ? 'sync~spin' : categoryFor(script)?.icon ?? 'play';
+  const icon = isRunning ? 'loading~spin' : categoryFor(script)?.icon ?? 'play';
   return {
     label: `$(${icon}) ${displayName(script)}`,
     description: scriptDescription(script, inFavorites),
@@ -2149,7 +2149,7 @@ function updateStatusBar(count: number): void {
   if (!statusBarItem) {
     return;
   }
-  statusBarItem.text = count > 0 ? `$(sync~spin) Task & Script Explorer ${count}` : '$(play-circle) Task & Script Explorer';
+  statusBarItem.text = count > 0 ? `$(loading~spin) Task & Script Explorer ${count}` : '$(play-circle) Task & Script Explorer';
   statusBarItem.tooltip = count > 0 ? `${count} running task(s) — click to manage` : 'Show workspace tasks';
 }
 
