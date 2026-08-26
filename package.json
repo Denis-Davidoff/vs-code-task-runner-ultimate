@@ -1206,11 +1206,14 @@
     "watch": "tsc -watch -p ./",
     "gen": "node tools/generate-contributions.js",
     "package": "vsce package",
-    "publish": "npx @vscode/vsce publish"
+    "publish": "npx @vscode/vsce publish",
+    "publish:ovsx": "ovsx publish",
+    "publish:all": "npm run publish && npm run publish:ovsx"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
     "@types/vscode": "^1.85.0",
+    "ovsx": "^0.10.5",
     "typescript": "^5.4.5"
   },
   "icon": "media/icon.png"
