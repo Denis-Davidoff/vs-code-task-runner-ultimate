@@ -51,6 +51,8 @@ three ways to reach it.
 
 Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?itemName=DenysDavydov.task-runner-ultimate
 
+Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/task-runner-ultimate
+
 ### ▶ in the toolbar of every file
 
 The play icon sits in the editor title bar, so the whole workspace is one click away from wherever
