@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -248,6 +248,18 @@
         "title": "Hide Package",
         "category": "Task & Script Explorer",
         "icon": "$(eye-closed)"
+      },
+      {
+        "command": "taskRunnerUltimate.stopGroup",
+        "title": "Stop All in Package",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "taskRunnerUltimate.restartGroup",
+        "title": "Restart All in Package",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "taskRunnerUltimate.showGroup",
@@ -521,6 +533,16 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
         },
         {
+          "command": "taskRunnerUltimate.restartGroup",
+          "group": "inline@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?:running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopGroup",
+          "group": "inline@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?:running$/"
+        },
+        {
           "command": "taskRunnerUltimate.openScript",
           "group": "0_open@1",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:/"
@@ -528,7 +550,7 @@
         {
           "command": "taskRunnerUltimate.openManifest",
           "group": "0_open@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package/"
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
@@ -553,7 +575,7 @@
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package/"
         },
         {
           "submenu": "taskRunnerUltimate.color",
@@ -563,17 +585,17 @@
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden/"
         },
         {
           "command": "taskRunnerUltimate.hideGroup",
           "group": "2_modify@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "2_modify@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden/"
         }
       ],
       "taskRunnerUltimate.color": [
@@ -701,6 +723,14 @@
         },
         {
           "command": "taskRunnerUltimate.showGroup",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.stopGroup",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.restartGroup",
           "when": "false"
         },
         {

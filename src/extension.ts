@@ -179,6 +179,11 @@ export function activate(context: vscode.ExtensionContext): void {
     // inside it already answer to.
     vscode.commands.registerCommand('taskRunnerUltimate.hideGroup', (node?: TreeNode) => setGroupHidden(node, true)),
     vscode.commands.registerCommand('taskRunnerUltimate.showGroup', (node?: TreeNode) => setGroupHidden(node, false)),
+    // The stop and restart on a heading, offered only while something under it
+    // runs. They act on the group's running rows and nothing else — an idle
+    // script is not started by restarting its neighbours.
+    vscode.commands.registerCommand('taskRunnerUltimate.stopGroup', (node?: TreeNode) => stopGroup(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
     // One command per colour: a submenu entry is a command, and there is no way
     // to hand it an argument from contributes.menus. The list is the palette's,
     // so the two can never drift apart.
@@ -1781,7 +1786,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // the two kinds of group are told apart for the `when` clause that offers it.
     // A put-away heading is told apart from the rest as well: the two eyes are
     // one button in two states, and only one of them can be on a row at a time.
-    item.contextValue = node.ref ? (node.hidden ? 'group:package:hidden' : 'group:package') : 'group';
+    // `:running` marks a heading with something alive under it, which is what
+    // puts the stop-all and restart-all buttons on the row and nowhere else.
+    const alive = node.children.some((child) => child.kind === 'script' && running.has(child.script.key));
+    const state = node.hidden ? 'group:package:hidden' : 'group:package';
+    item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
 
@@ -2058,6 +2067,37 @@ async function restartAllTasks(): Promise<void> {
   await stopAllTasks();
   for (const task of tasks) {
     await vscode.tasks.executeTask(task);
+  }
+}
+
+/** A group's rows that are alive right now, in the order the tree shows them. */
+function runningScriptsOf(node: TreeNode | undefined): ScriptEntry[] {
+  if (node?.kind !== 'group') {
+    return [];
+  }
+  return node.children.flatMap((child) =>
+    child.kind === 'script' && running.has(child.script.key) ? [child.script] : [],
+  );
+}
+
+/** Stops everything running in one package group; the rest of the tree keeps going. */
+async function stopGroup(node: TreeNode | undefined): Promise<void> {
+  await Promise.all(
+    runningScriptsOf(node).map((script) => {
+      const execution = running.get(script.key);
+      return execution ? stopExecution(execution) : Promise.resolve();
+    }),
+  );
+}
+
+/** Restarts everything running in one package group. Idle rows stay idle. */
+async function restartGroup(node: TreeNode | undefined): Promise<void> {
+  for (const script of runningScriptsOf(node)) {
+    const execution = running.get(script.key);
+    if (execution) {
+      await stopExecution(execution);
+    }
+    await startScript(script, false);
   }
 }
 
