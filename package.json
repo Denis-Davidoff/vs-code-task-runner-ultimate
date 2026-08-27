@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.5.11",
+  "version": "0.5.12",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -286,6 +286,12 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "taskRunnerUltimate.openTerminalEditor",
+        "title": "Open Terminal in Editor Area",
+        "category": "Task & Script Explorer",
+        "icon": "$(open-preview)"
+      },
+      {
         "command": "taskRunnerUltimate.setColor.red",
         "title": "🔴 Red",
         "category": "Task & Script Explorer"
@@ -558,6 +564,11 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
         },
         {
+          "command": "taskRunnerUltimate.openTerminalEditor",
+          "group": "0_open@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+        },
+        {
           "command": "taskRunnerUltimate.addFavorite",
           "group": "1_favorites@1",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:nofav$/"
@@ -743,6 +754,10 @@
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.openTerminalEditor",
           "when": "false"
         },
         {

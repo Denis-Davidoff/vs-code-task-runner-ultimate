@@ -170,6 +170,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.openScript', (node?: TreeNode) => openManifest(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.openManifest', (node?: TreeNode) => openManifest(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.showTerminal', (node?: TreeNode) => showTerminal(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.openTerminalEditor', (node?: TreeNode) =>
+      openTerminalEditor(node),
+    ),
     vscode.commands.registerCommand('taskRunnerUltimate.addFavorite', (node?: TreeNode) => setFavorite(node, true)),
     vscode.commands.registerCommand('taskRunnerUltimate.removeFavorite', (node?: TreeNode) => setFavorite(node, false)),
     vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
@@ -2110,16 +2113,13 @@ async function toggleNode(node: TreeNode | undefined, reveal: boolean): Promise<
 }
 
 /**
- * Brings up the terminal a running task is writing to, and focuses it.
- *
- * This is the way back from a task started with ▶, which deliberately leaves
- * the panel where it was: the output is there the whole time, and this is the
- * one click that goes to it without stopping or restarting anything.
+ * The terminal of a running row, or the message saying why there is none.
+ * Shared by the two ways of going to the output — the panel and the editor tab.
  */
-async function showTerminal(node: TreeNode | undefined): Promise<void> {
+function terminalOf(node: TreeNode | undefined): vscode.Terminal | undefined {
   const execution = executionOf(node);
   if (!execution) {
-    return;
+    return undefined;
   }
 
   const terminal = terminalFor(execution.task);
@@ -2128,9 +2128,36 @@ async function showTerminal(node: TreeNode | undefined): Promise<void> {
     // terminal ends the task, so this is the window between the two, or a task
     // whose owner runs it without one.
     void vscode.window.showInformationMessage(`${execution.task.name} has no open terminal.`);
+  }
+  return terminal;
+}
+
+/**
+ * Brings up the terminal a running task is writing to, and focuses it.
+ *
+ * This is the way back from a task started with ▶, which deliberately leaves
+ * the panel where it was: the output is there the whole time, and this is the
+ * one click that goes to it without stopping or restarting anything.
+ */
+async function showTerminal(node: TreeNode | undefined): Promise<void> {
+  terminalOf(node)?.show();
+}
+
+/**
+ * The same terminal, opened as a tab in the editor area instead of the panel.
+ *
+ * The panel is a strip along the bottom; a dev server's log read for more than
+ * a glance wants the height of an editor, side by side with the code it talks
+ * about. Moving is what the workbench offers — a terminal lives in one place at
+ * a time — and `show` first makes it the active one the move command takes.
+ */
+async function openTerminalEditor(node: TreeNode | undefined): Promise<void> {
+  const terminal = terminalOf(node);
+  if (!terminal) {
     return;
   }
   terminal.show();
+  await vscode.commands.executeCommand('workbench.action.terminal.moveToEditor');
 }
 
 /**
