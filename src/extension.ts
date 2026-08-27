@@ -1592,9 +1592,9 @@ function createTree(): vscode.Disposable[] {
  * One group per manifest. Scripts keep the order the manifest declares them in,
  * running or not — a row that moves when you start it is a row you have to find
  * again to stop it — unless `pinRunningTasks` says otherwise, which `listScripts`
- * has already applied by the time the rows get here. Groups that have something
- * running float to the top of the tree, so what is alive is still the first thing
- * on screen.
+ * has already applied by the time the rows get here. The same setting decides
+ * whether groups with something running float to the top of the tree: with it
+ * off nothing moves, with it on what is alive is the first thing on screen.
  */
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const groups: Array<{ node: TreeNode & { kind: 'group' }; hasRunning: boolean }> = [];
@@ -1642,10 +1642,15 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const shown = groups.filter((group) => !(group.node.ref && buried.has(group.node.ref)));
   const away = groups.filter((group) => group.node.ref && buried.has(group.node.ref));
 
-  const roots: TreeNode[] = [
-    ...shown.filter((group) => group.hasRunning).map((group) => group.node),
-    ...shown.filter((group) => !group.hasRunning).map((group) => group.node),
-  ];
+  // Headings stay where the saved order put them, running or not — a group that
+  // jumps to the top when one of its tasks starts is a group the eye has lost.
+  // Only `pinRunningTasks` — the same opt-in that lifts rows — floats them.
+  const roots: TreeNode[] = pinsRunning()
+    ? [
+        ...shown.filter((group) => group.hasRunning).map((group) => group.node),
+        ...shown.filter((group) => !group.hasRunning).map((group) => group.node),
+      ]
+    : shown.map((group) => group.node);
 
   // Tasks that are not backed by a manifest have no group of their own.
   const foreign = foreignExecutions();
