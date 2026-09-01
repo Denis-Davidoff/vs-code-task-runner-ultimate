@@ -198,6 +198,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.clearColor', (node?: TreeNode) =>
       setNodeColor(node, undefined),
     ),
+    // One command for every icon, unlike the colours: an icon picker is a list
+    // of thirty, which is a quick pick's size and three columns past a submenu's.
+    vscode.commands.registerCommand('taskRunnerUltimate.pickIcon', (node?: TreeNode) => pickIcon(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.menu', showMenu),
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
@@ -330,6 +333,7 @@ const ORDER_KEY = 'order';
 const GROUP_ORDER_KEY = 'groupOrder';
 const COLLAPSED_KEY = 'collapsed';
 const COLORS_KEY = 'colors';
+const ICONS_KEY = 'icons';
 
 let storage: vscode.Memento | undefined;
 /** This extension's `publisher.name`, for the query that filters the settings editor. */
@@ -625,6 +629,231 @@ async function setNodeColor(node: TreeNode | undefined, name: PaletteName | unde
     delete colors[ref];
   }
   await storage?.update(COLORS_KEY, colors);
+  repaint();
+}
+
+// --- row icons -----------------------------------------------------------------
+
+/**
+ * The icons a row can be given from its context menu, offered in a quick pick
+ * rather than a submenu: a hundred entries is a list you filter, not a menu you
+ * read. Every id is a codicon that has shipped for years, so the set is safe on
+ * the 1.85 baseline this extension asks for — the one hard limit on growing the
+ * list is that an id the running build's icon font does not carry draws as an
+ * empty square, so nothing lands here without being in the font by then.
+ *
+ * The store keeps the codicon id, and `storedIcon` checks it against this list
+ * the way `storedColor` checks the palette: an id a later build no longer offers
+ * is ignored rather than handed to `ThemeIcon` as a glyph nothing draws.
+ */
+const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: string; name: string }> }> = [
+  {
+    label: 'Actions & status',
+    icons: [
+      { id: 'rocket', name: 'Rocket' },
+      { id: 'zap', name: 'Zap' },
+      { id: 'flame', name: 'Flame' },
+      { id: 'play-circle', name: 'Play' },
+      { id: 'stop-circle', name: 'Stop' },
+      { id: 'record', name: 'Record' },
+      { id: 'check', name: 'Check' },
+      { id: 'checklist', name: 'Checklist' },
+      { id: 'sync', name: 'Sync' },
+      { id: 'refresh', name: 'Refresh' },
+      { id: 'save', name: 'Save' },
+      { id: 'search', name: 'Search' },
+      { id: 'filter', name: 'Filter' },
+      { id: 'edit', name: 'Edit' },
+      { id: 'trash', name: 'Trash' },
+      { id: 'warning', name: 'Warning' },
+      { id: 'error', name: 'Error' },
+      { id: 'info', name: 'Info' },
+      { id: 'question', name: 'Question' },
+      { id: 'verified', name: 'Verified' },
+      { id: 'history', name: 'History' },
+      { id: 'watch', name: 'Watch' },
+      { id: 'target', name: 'Target' },
+      { id: 'pulse', name: 'Pulse' },
+      { id: 'mute', name: 'Mute' },
+    ],
+  },
+  {
+    label: 'Objects',
+    icons: [
+      { id: 'star-full', name: 'Star' },
+      { id: 'heart', name: 'Heart' },
+      { id: 'bookmark', name: 'Bookmark' },
+      { id: 'tag', name: 'Tag' },
+      { id: 'pinned', name: 'Pin' },
+      { id: 'key', name: 'Key' },
+      { id: 'lock', name: 'Lock' },
+      { id: 'unlock', name: 'Unlock' },
+      { id: 'shield', name: 'Shield' },
+      { id: 'bell', name: 'Bell' },
+      { id: 'lightbulb', name: 'Lightbulb' },
+      { id: 'gift', name: 'Gift' },
+      { id: 'briefcase', name: 'Briefcase' },
+      { id: 'calendar', name: 'Calendar' },
+      { id: 'credit-card', name: 'Credit Card' },
+      { id: 'inbox', name: 'Inbox' },
+      { id: 'mail', name: 'Mail' },
+      { id: 'megaphone', name: 'Megaphone' },
+      { id: 'mirror', name: 'Mirror' },
+      { id: 'paintcan', name: 'Paint Can' },
+      { id: 'law', name: 'Law' },
+      { id: 'jersey', name: 'Jersey' },
+      { id: 'ruby', name: 'Ruby' },
+      { id: 'mortar-board', name: 'Mortar Board' },
+      { id: 'telescope', name: 'Telescope' },
+      { id: 'compass', name: 'Compass' },
+      { id: 'location', name: 'Location' },
+      { id: 'link', name: 'Link' },
+      { id: 'milestone', name: 'Milestone' },
+      { id: 'smiley', name: 'Smiley' },
+      { id: 'thumbsup', name: 'Thumbs Up' },
+      { id: 'thumbsdown', name: 'Thumbs Down' },
+      { id: 'eye', name: 'Eye' },
+      { id: 'home', name: 'Home' },
+    ],
+  },
+  {
+    label: 'Dev & infrastructure',
+    icons: [
+      { id: 'bug', name: 'Bug' },
+      { id: 'beaker', name: 'Beaker' },
+      { id: 'tools', name: 'Tools' },
+      { id: 'wrench', name: 'Wrench' },
+      { id: 'gear', name: 'Gear' },
+      { id: 'terminal', name: 'Terminal' },
+      { id: 'code', name: 'Code' },
+      { id: 'debug', name: 'Debug' },
+      { id: 'extensions', name: 'Extensions' },
+      { id: 'database', name: 'Database' },
+      { id: 'server', name: 'Server' },
+      { id: 'server-environment', name: 'Server Environment' },
+      { id: 'server-process', name: 'Server Process' },
+      { id: 'cloud', name: 'Cloud' },
+      { id: 'cloud-upload', name: 'Cloud Upload' },
+      { id: 'cloud-download', name: 'Cloud Download' },
+      { id: 'globe', name: 'Globe' },
+      { id: 'plug', name: 'Plug' },
+      { id: 'circuit-board', name: 'Circuit Board' },
+      { id: 'vm', name: 'Virtual Machine' },
+      { id: 'dashboard', name: 'Dashboard' },
+      { id: 'graph', name: 'Graph' },
+      { id: 'graph-line', name: 'Graph Line' },
+      { id: 'pie-chart', name: 'Pie Chart' },
+      { id: 'layers', name: 'Layers' },
+      { id: 'symbol-event', name: 'Event' },
+      { id: 'radio-tower', name: 'Radio Tower' },
+      { id: 'hubot', name: 'Robot' },
+    ],
+  },
+  {
+    label: 'Files & folders',
+    icons: [
+      { id: 'package', name: 'Package' },
+      { id: 'archive', name: 'Archive' },
+      { id: 'file', name: 'File' },
+      { id: 'file-code', name: 'File Code' },
+      { id: 'file-media', name: 'File Media' },
+      { id: 'file-binary', name: 'File Binary' },
+      { id: 'folder', name: 'Folder' },
+      { id: 'folder-opened', name: 'Folder Opened' },
+      { id: 'notebook', name: 'Notebook' },
+      { id: 'book', name: 'Book' },
+      { id: 'library', name: 'Library' },
+      { id: 'repo', name: 'Repository' },
+      { id: 'json', name: 'JSON' },
+      { id: 'versions', name: 'Versions' },
+      { id: 'project', name: 'Project' },
+    ],
+  },
+  {
+    label: 'Git & people',
+    icons: [
+      { id: 'git-branch', name: 'Git Branch' },
+      { id: 'git-commit', name: 'Git Commit' },
+      { id: 'git-merge', name: 'Git Merge' },
+      { id: 'git-pull-request', name: 'Git Pull Request' },
+      { id: 'github', name: 'GitHub' },
+      { id: 'account', name: 'Account' },
+      { id: 'person', name: 'Person' },
+      { id: 'organization', name: 'Organization' },
+      { id: 'comment', name: 'Comment' },
+      { id: 'mention', name: 'Mention' },
+      { id: 'broadcast', name: 'Broadcast' },
+      { id: 'rss', name: 'RSS' },
+    ],
+  },
+];
+
+/** The groups flattened, for the validation reads that do not care about sections. */
+const ICON_CHOICES: ReadonlyArray<{ id: string; name: string }> = ICON_GROUPS.flatMap((group) => group.icons);
+
+function customIcons(): Record<string, string> {
+  const stored = storage?.get<unknown>(ICONS_KEY);
+  return stored && typeof stored === 'object' && !Array.isArray(stored)
+    ? (stored as Record<string, string>)
+    : {};
+}
+
+/** The icon a ref was given, if it still names one this build offers. */
+function storedIcon(ref: string | undefined): string | undefined {
+  const id = ref ? customIcons()[ref] : undefined;
+  return ICON_CHOICES.some((choice) => choice.id === id) ? id : undefined;
+}
+
+/**
+ * The icon picker, on the same rows the colours are: an icon is filed under the
+ * same ref a colour is — see `colorRef` — so the two annotations travel together
+ * and one "Reset all icons" mirrors "Reset all colours" exactly.
+ */
+async function pickIcon(node: TreeNode | undefined): Promise<void> {
+  const ref = node ? colorRef(node) : undefined;
+  if (!ref) {
+    return;
+  }
+  const current = storedIcon(ref);
+
+  interface IconItem extends vscode.QuickPickItem {
+    id?: string;
+  }
+  const items: IconItem[] = [
+    {
+      label: '$(discard) Default',
+      description: current ? undefined : 'current',
+      detail: 'The icon its category or kind gives it.',
+    },
+    // The sections carry the browsing case; typing filters across all of them
+    // alike, separators standing aside the way quick picks always have them.
+    ...ICON_GROUPS.flatMap((group): IconItem[] => [
+      { label: group.label, kind: vscode.QuickPickItemKind.Separator },
+      ...group.icons.map(({ id, name }) => ({
+        label: `$(${id}) ${name}`,
+        description: id === current ? 'current' : undefined,
+        id,
+      })),
+    ]),
+  ];
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Change Icon',
+    placeHolder: 'Pick an icon for this row — shown in this list only',
+  });
+  if (!picked) {
+    return;
+  }
+
+  const icons = { ...customIcons() };
+  if (picked.id) {
+    icons[ref] = picked.id;
+  } else {
+    // `undefined` is the default, and the default is an absent entry — same
+    // deal as the colours, and what keeps the menu's count honest.
+    delete icons[ref];
+  }
+  await storage?.update(ICONS_KEY, icons);
   repaint();
 }
 
@@ -968,6 +1197,7 @@ async function showMenu(): Promise<void> {
   const orders = Object.values(manualOrders()).filter((refs) => refs.length > 0).length;
   const favorites = favoriteRefs().length;
   const colors = Object.keys(customColors()).length;
+  const icons = Object.keys(customIcons()).length;
   const hidden = hiddenRefs().length;
 
   const stores = [
@@ -1008,6 +1238,15 @@ async function showMenu(): Promise<void> {
       held: `${colors} painted`,
       confirm: 'Reset colours',
       detail: 'Every painted task and package heading goes back to the colour its category gives it.',
+    },
+    {
+      keys: [ICONS_KEY],
+      icon: 'symbol-misc',
+      name: 'Reset all icons',
+      count: icons,
+      held: `${icons} changed`,
+      confirm: 'Reset icons',
+      detail: 'Every task and package heading goes back to the icon its category or kind gives it.',
     },
     {
       keys: [FAVORITES_KEY],
@@ -1781,8 +2020,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // one too — it is a row on the same list, whatever it cannot be renamed to.
     const tint = nodeColor(node) ?? (node.id === HIDDEN_GROUP_ID ? HIDDEN_COLOR : TITLE_COLOR);
     item.resourceUri = decorationUri(tint, node.detail ?? node.label);
-    if (node.icon) {
-      item.iconPath = new vscode.ThemeIcon(node.icon, new vscode.ThemeColor(tint));
+    // An icon the user picked stands in for the stock one, in the tint the row
+    // already wears — the icon says which row this is, the colour keeps saying
+    // what it says on every heading.
+    const glyph = storedIcon(node.ref ?? node.id) ?? node.icon;
+    if (glyph) {
+      item.iconPath = new vscode.ThemeIcon(glyph, new vscode.ThemeColor(tint));
     }
     item.id = node.id;
     // Only a heading that names something on disk can be renamed back to it, so
@@ -1918,7 +2161,12 @@ function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string): vscode
   const category = categoryFor(script);
   const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   const color = tint ?? (category && colored ? category.color : undefined);
-  return new vscode.ThemeIcon(category?.icon ?? 'play', color ? new vscode.ThemeColor(color) : undefined);
+  // An icon the user picked wins over the category's for the same reason the
+  // colour does: the category guessed, this one was asked for by name. The
+  // spinner still wins over both — a running row is answering a different
+  // question.
+  const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? 'play';
+  return new vscode.ThemeIcon(glyph, color ? new vscode.ThemeColor(color) : undefined);
 }
 
 /**
@@ -2404,7 +2652,9 @@ function buildItems(saved: ScriptEntry[]): Item[] {
  */
 function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
   const isRunning = running.has(script.key);
-  const icon = isRunning ? 'loading~spin' : categoryFor(script)?.icon ?? 'play';
+  // The user's icon carries over from the tree: the picker and the tree are two
+  // views of the same rows, and a row you marked should be findable in both.
+  const icon = isRunning ? 'loading~spin' : storedIcon(scriptRef(script)) ?? categoryFor(script)?.icon ?? 'play';
   return {
     label: `$(${icon}) ${displayName(script)}`,
     description: scriptDescription(script, inFavorites),

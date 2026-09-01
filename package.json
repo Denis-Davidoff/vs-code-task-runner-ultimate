@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.5.12",
+  "version": "0.6.1",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -347,6 +347,12 @@
         "category": "Task & Script Explorer"
       },
       {
+        "command": "taskRunnerUltimate.pickIcon",
+        "title": "Change Icon…",
+        "category": "Task & Script Explorer",
+        "icon": "$(symbol-misc)"
+      },
+      {
         "command": "taskRunnerUltimate.menu",
         "title": "Menu",
         "category": "Task & Script Explorer",
@@ -594,18 +600,23 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group)/"
         },
         {
+          "command": "taskRunnerUltimate.pickIcon",
+          "group": "2_modify@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group)/"
+        },
+        {
           "command": "taskRunnerUltimate.showGroup",
           "group": "inline@1",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden/"
         },
         {
           "command": "taskRunnerUltimate.hideGroup",
-          "group": "2_modify@3",
+          "group": "2_modify@4",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showGroup",
-          "group": "2_modify@3",
+          "group": "2_modify@4",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden/"
         }
       ],
@@ -802,6 +813,10 @@
         },
         {
           "command": "taskRunnerUltimate.clearColor",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.pickIcon",
           "when": "false"
         }
       ]
