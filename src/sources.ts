@@ -89,7 +89,16 @@ const MANIFEST_KINDS: Record<string, SourceKind> = {
   '.mise.toml': 'mise',
 };
 
-export const MANIFEST_GLOB = `**/{${Object.keys(MANIFEST_KINDS).join(',')}}`;
+/**
+ * The scan glob, built from the enabled ecosystems only. `MAX_MANIFESTS` is a
+ * budget, and a repository full of Makefiles must not spend it once `make` is
+ * taken out of `sources` — which is exactly the remedy the truncation warning
+ * and the README offer.
+ */
+function manifestGlob(enabled: ReadonlySet<Ecosystem>): string | undefined {
+  const names = Object.keys(MANIFEST_KINDS).filter((name) => enabled.has(ECOSYSTEM_OF[MANIFEST_KINDS[name]]));
+  return names.length > 0 ? `**/{${names.join(',')}}` : undefined;
+}
 
 export const DEFAULT_EXCLUDE =
   '**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**';
@@ -276,7 +285,8 @@ async function runScan(): Promise<ScriptEntry[]> {
   const started = generation;
   const exclude = setting<string>('exclude') || DEFAULT_EXCLUDE;
   const enabled = enabledEcosystems();
-  const manifests = await vscode.workspace.findFiles(MANIFEST_GLOB, exclude, MAX_MANIFESTS);
+  const glob = manifestGlob(enabled);
+  const manifests = glob ? await vscode.workspace.findFiles(glob, exclude, MAX_MANIFESTS) : [];
 
   // Hitting the cap means the list on screen is incomplete, which is worth
   // saying out loud — once per window, not on every rescan.
@@ -284,7 +294,7 @@ async function runScan(): Promise<ScriptEntry[]> {
     warnedAboutTruncation = true;
     void vscode.window.showWarningMessage(
       `Task & Script Explorer stopped after ${MAX_MANIFESTS} manifests, so some tasks are missing. ` +
-        'Widen "taskRunnerUltimate.exclude" to skip the ones you do not need.',
+        'Widen "taskRunnerUltimate.exclude" or trim "taskRunnerUltimate.sources" to skip the ones you do not need.',
     );
   }
 
@@ -303,7 +313,10 @@ async function runScan(): Promise<ScriptEntry[]> {
     if (!parsed || parsed.tasks.length === 0) {
       continue;
     }
-    if (parsed.hints) {
+    // Only while this scan is still the current one: a `resetSources` during the
+    // parse has cleared the map for a fresher scan, and repopulating it here
+    // would hand that scan hints read before the change it is rescanning for.
+    if (parsed.hints && started === generation) {
       nodeHints.set(manifest.toString(), parsed.hints);
     }
 
@@ -341,7 +354,7 @@ async function runScan(): Promise<ScriptEntry[]> {
 
   if (started === generation) {
     cache = entries;
-    await detectPackageManagers(entries);
+    await detectPackageManagers(entries, started);
   }
   return entries;
 }
@@ -1210,6 +1223,13 @@ export function parseJsonc(text: string): unknown {
   let escaped = false;
   let inLineComment = false;
   let inBlockComment = false;
+  /**
+   * Where in `out` a comma sits that would be trailing if the next significant
+   * character closes its scope. Handled here rather than by a regex afterwards,
+   * because only this loop knows which commas are inside strings — a command
+   * like `echo {foo,}` must come through untouched.
+   */
+  let pendingComma = -1;
 
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
@@ -1242,6 +1262,7 @@ export function parseJsonc(text: string): unknown {
     }
     if (char === '"') {
       inString = true;
+      pendingComma = -1;
       out += char;
       continue;
     }
@@ -1255,11 +1276,27 @@ export function parseJsonc(text: string): unknown {
       i++;
       continue;
     }
+    if (char === ',') {
+      pendingComma = out.length;
+      out += char;
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      if (pendingComma >= 0) {
+        out = out.slice(0, pendingComma) + out.slice(pendingComma + 1);
+      }
+      pendingComma = -1;
+      out += char;
+      continue;
+    }
+    if (!/\s/.test(char)) {
+      pendingComma = -1;
+    }
     out += char;
   }
 
   try {
-    return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
+    return JSON.parse(out);
   } catch {
     return undefined;
   }
@@ -1306,13 +1343,20 @@ export function resolvePackageManager(script: ScriptEntry): PackageManager {
   return detected.get(script.cwd.toString()) ?? 'npm';
 }
 
-async function detectPackageManagers(entries: ScriptEntry[]): Promise<void> {
+async function detectPackageManagers(entries: ScriptEntry[], started: number): Promise<void> {
   for (const entry of entries) {
     const dir = entry.cwd.toString();
     if (entry.kind !== 'npm' || detected.has(dir)) {
       continue;
     }
     const found = await detectPackageManager(entry);
+    // A `resetSources` during the stat walk has cleared the map. A result
+    // computed from the old hints must not land in it: the fresh scan would see
+    // the directory as already detected, skip it, and keep launching the
+    // package's scripts with the runner the change was meant to replace.
+    if (started !== generation) {
+      return;
+    }
     if (found) {
       detected.set(dir, found);
     }

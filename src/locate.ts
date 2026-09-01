@@ -294,7 +294,13 @@ function under(keys: ReadonlyArray<string>, path: ReadonlyArray<string>): boolea
 function toxEnvironment(lines: ReadonlyArray<string>, name: string): TaskLocation | undefined {
   const section = lines.findIndex((line) => line.trim().replace(/\s+/g, '') === `[testenv:${name}]`);
   if (section >= 0) {
-    return on(lines, section, name);
+    // Not `on()`: for a name like `test` or `env` a plain indexOf lands inside
+    // the `testenv` prefix, so the search starts after the colon.
+    const line = lines[section];
+    const character = line.indexOf(name, line.indexOf(':') + 1);
+    return character < 0
+      ? { line: section, character: 0, length: 0 }
+      : { line: section, character, length: name.length };
   }
 
   let inTox = false;
@@ -318,7 +324,13 @@ function toxEnvironment(lines: ReadonlyArray<string>, name: string): TaskLocatio
       inList = false;
     }
     if (inList && entryOf(line).includes(name)) {
-      return on(lines, index, name);
+      // The same trap as the section header: a plain indexOf would find `test`
+      // inside `latest`, so the match is anchored to entry boundaries.
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const match = new RegExp(`(?:^|[=,\\s])(${escaped})(?=$|[,\\s])`).exec(line);
+      return match
+        ? { line: index, character: match.index + match[0].length - name.length, length: name.length }
+        : on(lines, index, name);
     }
   }
 

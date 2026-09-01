@@ -1839,9 +1839,9 @@ function createTree(): vscode.Disposable[] {
  * One group per manifest. Scripts keep the order the manifest declares them in,
  * running or not — a row that moves when you start it is a row you have to find
  * again to stop it — unless `pinRunningTasks` says otherwise, which `listScripts`
- * has already applied by the time the rows get here. The same setting decides
- * whether groups with something running float to the top of the tree: with it
- * off nothing moves, with it on what is alive is the first thing on screen.
+ * has already applied by the time the rows get here. Groups are the exception:
+ * one with something running floats to the top, here and in the picker alike,
+ * so whatever is alive is on screen without scrolling.
  */
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const groups: Array<{ node: TreeNode & { kind: 'group' }; hasRunning: boolean }> = [];
@@ -1889,15 +1889,13 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const shown = groups.filter((group) => !(group.node.ref && buried.has(group.node.ref)));
   const away = groups.filter((group) => group.node.ref && buried.has(group.node.ref));
 
-  // Headings stay where the saved order put them, running or not — a group that
-  // jumps to the top when one of its tasks starts is a group the eye has lost.
-  // Only `pinRunningTasks` — the same opt-in that lifts rows — floats them.
-  const roots: TreeNode[] = pinsRunning()
-    ? [
-        ...shown.filter((group) => group.hasRunning).map((group) => group.node),
-        ...shown.filter((group) => !group.hasRunning).map((group) => group.node),
-      ]
-    : shown.map((group) => group.node);
+  // Groups with something running come first — the same order the picker
+  // shows and the README promises. Each half keeps the saved order, and inside
+  // a group nothing moves unless `pinRunningTasks` lifts the rows too.
+  const roots: TreeNode[] = [
+    ...shown.filter((group) => group.hasRunning).map((group) => group.node),
+    ...shown.filter((group) => !group.hasRunning).map((group) => group.node),
+  ];
 
   // Tasks that are not backed by a manifest have no group of their own.
   const foreign = foreignExecutions();
@@ -2129,8 +2127,23 @@ function categoryFor(script: ScriptEntry): CategoryRule | undefined {
     return byAnyToken;
   }
 
-  const command = script.command.toLowerCase();
-  return rules.find((rule) => rule.match.some((token) => command.includes(token)));
+  // The command decides only when the name said nothing, and two things keep it
+  // honest. Whole tokens, not substrings: `up` must not claim `upload`, nor
+  // `run` claim `prune`. And a runner's own verb is cut off first: `npm run
+  // test` is a test, and the `run` in it is plumbing, not what the script does.
+  const command = script.command
+    .toLowerCase()
+    .replace(/^(?:(?:npm|pnpm|bun|yarn)\s+run(?:-script)?|yarn|deno\s+task|composer\s+run(?:-script)?)\s+/, '');
+  const commandTokens = command.split(/[^a-z0-9]+/).filter(Boolean);
+
+  // The first token is the tool itself — `vitest run` is a test however it ends —
+  // so it outranks a match anywhere else in the command.
+  const head = commandTokens[0];
+  const byCommandHead = head && rules.find((rule) => rule.match.includes(head));
+  if (byCommandHead) {
+    return byCommandHead;
+  }
+  return rules.find((rule) => rule.match.some((token) => commandTokens.includes(token)));
 }
 
 /** User rules take precedence, so a single entry can override a built-in category. */
@@ -2714,19 +2727,39 @@ async function stopExecution(execution: vscode.TaskExecution): Promise<void> {
   onStateChanged();
 }
 
-/** Resolves when the execution ends, or after a grace period if no event arrives. */
+/**
+ * Resolves when the execution ends. The event is the real signal; the poll
+ * covers the cases where it never arrives, and — unlike a flat grace period —
+ * it keeps waiting while the execution is still listed, so a process that takes
+ * its time dying after `terminate()` is not declared gone while it still holds
+ * its port, which is what would let a restart raise a second copy beside it.
+ * The deadline is the way out when the task system itself never lets go.
+ */
 function waitForEnd(execution: vscode.TaskExecution): Promise<void> {
+  const alive = () =>
+    vscode.tasks.taskExecutions.some(
+      (item) => item === execution || sameTask(item.task, execution.task),
+    );
+
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+    const deadline = Date.now() + 15_000;
+    const finish = () => {
+      clearTimeout(timer);
       subscription.dispose();
       resolve();
-    }, 3000);
+    };
+    const poll = () => {
+      if (!alive() || Date.now() >= deadline) {
+        finish();
+      } else {
+        timer = setTimeout(poll, 500);
+      }
+    };
+    let timer = setTimeout(poll, 500);
 
     const subscription = vscode.tasks.onDidEndTask((event) => {
       if (event.execution === execution || sameTask(event.execution.task, execution.task)) {
-        clearTimeout(timer);
-        subscription.dispose();
-        resolve();
+        finish();
       }
     });
   });
