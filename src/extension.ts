@@ -2797,6 +2797,9 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
 // --- status bar & badge ------------------------------------------------------
 
 let statusBarItem: vscode.StatusBarItem | undefined;
+/** Restart-all / stop-all buttons, shown to the right of the main item only while something runs. */
+let statusBarRestartItem: vscode.StatusBarItem | undefined;
+let statusBarStopItem: vscode.StatusBarItem | undefined;
 
 function syncStatusBar(context: vscode.ExtensionContext): void {
   const enabled = vscode.workspace
@@ -2805,15 +2808,31 @@ function syncStatusBar(context: vscode.ExtensionContext): void {
 
   if (!enabled) {
     statusBarItem?.dispose();
+    statusBarRestartItem?.dispose();
+    statusBarStopItem?.dispose();
     statusBarItem = undefined;
+    statusBarRestartItem = undefined;
+    statusBarStopItem = undefined;
     return;
   }
 
   if (!statusBarItem) {
+    // Higher priority sits further left, so the buttons land right after the label.
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.command = 'taskRunnerUltimate.show';
     statusBarItem.show();
-    context.subscriptions.push(statusBarItem);
+
+    statusBarRestartItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+    statusBarRestartItem.command = 'taskRunnerUltimate.restartAll';
+    statusBarRestartItem.text = '$(debug-restart)';
+    statusBarRestartItem.tooltip = 'Restart all running tasks';
+
+    statusBarStopItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 98);
+    statusBarStopItem.command = 'taskRunnerUltimate.stopAll';
+    statusBarStopItem.text = '$(debug-stop)';
+    statusBarStopItem.tooltip = 'Stop all running tasks';
+
+    context.subscriptions.push(statusBarItem, statusBarRestartItem, statusBarStopItem);
   }
 
   updateStatusBar(runningCount());
@@ -2823,8 +2842,16 @@ function updateStatusBar(count: number): void {
   if (!statusBarItem) {
     return;
   }
-  statusBarItem.text = count > 0 ? `$(loading~spin) Task & Script Explorer ${count}` : '$(play-circle) Task & Script Explorer';
+  statusBarItem.text = count > 0 ? `$(loading~spin) Tasks: ${count}` : '$(play-circle) Tasks';
   statusBarItem.tooltip = count > 0 ? `${count} running task(s) — click to manage` : 'Show workspace tasks';
+
+  for (const button of [statusBarRestartItem, statusBarStopItem]) {
+    if (count > 0) {
+      button?.show();
+    } else {
+      button?.hide();
+    }
+  }
 }
 
 /** Command ids of the badge variants, index 0 being a count of 1. */
