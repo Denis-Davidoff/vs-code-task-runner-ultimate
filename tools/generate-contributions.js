@@ -1,6 +1,6 @@
 /*
  * Generates media/*.svg and the generated parts of package.json:
- * the badge command variants and every menu contribution that references them.
+ * the commands, menus, views and keybindings sections.
  *
  * Run with `npm run gen` after changing the icon or the menu layout.
  */
@@ -10,11 +10,10 @@ const zlib = require('zlib');
 
 const root = path.join(__dirname, '..');
 const media = path.join(root, 'media');
-const MAX_BADGE = 9;
 
 const THEMES = {
-  light: { fg: '#424242', badge: '#005FB8', text: '#FFFFFF' },
-  dark: { fg: '#C5C5C5', badge: '#0078D4', text: '#FFFFFF' },
+  light: { fg: '#424242' },
+  dark: { fg: '#C5C5C5' },
 };
 
 /** Filled disc with the play triangle knocked out of it (evenodd fill rule). */
@@ -38,32 +37,12 @@ function stopGlyph(fill) {
   return `  <path fill="${fill}" fill-rule="evenodd" d="${STOP_PATH}"/>`;
 }
 
-/**
- * Count badge, drawn over the bottom-right of a full-size glyph — the way the
- * activity bar badges its icon. The glyph is never shrunk to make room.
- */
-function badge(theme, label) {
-  const fontSize = label.length > 1 ? 5.2 : 6.4;
-  return `  <circle cx="11.7" cy="11.7" r="4.3" fill="${theme.badge}"/>
-  <text x="11.7" y="11.7" text-anchor="middle" dominant-baseline="central" fill="${theme.text}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="${fontSize}" font-weight="700">${label}</text>`;
-}
-
 const svg = (inner, size = 16) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">\n${inner}\n</svg>\n`;
-
-const variants = [];
-for (let n = 1; n <= MAX_BADGE; n++) variants.push({ suffix: `-${n}`, label: String(n) });
-variants.push({ suffix: '-many', label: `${MAX_BADGE}+` });
 
 fs.mkdirSync(media, { recursive: true });
 for (const [name, theme] of Object.entries(THEMES)) {
   fs.writeFileSync(path.join(media, `scripts-${name}.svg`), svg(glyph(theme.fg)));
-  for (const variant of variants) {
-    fs.writeFileSync(
-      path.join(media, `scripts-${name}${variant.suffix}.svg`),
-      svg(`${glyph(theme.fg)}\n${badge(theme, variant.label)}`),
-    );
-  }
 }
 
 /*
@@ -273,21 +252,8 @@ const icon = (suffix) => ({
   dark: `media/scripts-dark${suffix}.svg`,
 });
 
-const badgeEntries = variants.map((variant, index) => ({
-  id: index < MAX_BADGE ? `taskRunnerUltimate.show.badge${index + 1}` : 'taskRunnerUltimate.show.badgeMany',
-  count: index + 1,
-  suffix: variant.suffix,
-  label: variant.label,
-}));
-
 manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'Task & Script Explorer', icon: icon('') },
-  ...badgeEntries.map((entry) => ({
-    command: entry.id,
-    title: `Show Scripts (${entry.label} running)`,
-    category: 'Task & Script Explorer',
-    icon: icon(entry.suffix),
-  })),
   { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
   { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'Task & Script Explorer', icon: '$(refresh)' },
   { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'Task & Script Explorer', icon: '$(play)' },
@@ -339,15 +305,8 @@ const inTree = 'view =~ /^taskRunnerUltimate\\.(tree|explorer)$/';
 const PACKAGE = '/^group:package$/';
 const HIDDEN_PACKAGE = '/^group:package:hidden$/';
 const PACKAGE_ROW = 'group:package(:hidden)?';
-// `!taskRunnerUltimate.runningCount` also covers the moment before the extension has
-// activated, when the context key does not exist yet.
-const toolbarEntries = (whenPrefix) => [
-  { command: 'taskRunnerUltimate.show', group: 'navigation@1', when: `${whenPrefix}!taskRunnerUltimate.runningCount` },
-  ...badgeEntries.map((entry) => ({
-    command: entry.id,
-    group: 'navigation@1',
-    when: `${whenPrefix}taskRunnerUltimate.runningCount == ${entry.count}`,
-  })),
+const toolbarEntries = (when) => [
+  { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];
 
 manifest.contributes.submenus = [
@@ -355,9 +314,9 @@ manifest.contributes.submenus = [
 ];
 
 manifest.contributes.menus = {
-  'editor/title': toolbarEntries(`${inTitle} && `),
+  'editor/title': toolbarEntries(inTitle),
   // Notebooks render their own toolbar instead of the editor title actions.
-  'notebook/toolbar': toolbarEntries(`${inTitle} && `),
+  'notebook/toolbar': toolbarEntries(inTitle),
   'view/title': [
     {
       command: 'taskRunnerUltimate.restartAll',
@@ -433,7 +392,6 @@ manifest.contributes.menus = {
     { command: CLEAR_COLOUR, group: '2_reset@1' },
   ],
   commandPalette: [
-    ...badgeEntries.map((entry) => ({ command: entry.id, when: 'false' })),
     { command: 'taskRunnerUltimate.restartActive', when: 'false' },
     { command: 'taskRunnerUltimate.runItem', when: 'false' },
     { command: 'taskRunnerUltimate.stopItem', when: 'false' },
@@ -550,4 +508,4 @@ manifest.activationEvents = [
 ];
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-console.log(`wrote ${variants.length * 2 + 3} svg files, icon.png and patched package.json`);
+console.log('wrote 4 svg files, icon.png and patched package.json');

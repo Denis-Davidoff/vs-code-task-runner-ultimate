@@ -8,8 +8,6 @@ const TASK_TYPE = 'taskRunnerUltimate';
 const TASK_SOURCE = 'scripts';
 const CONTEXT_PICKER_OPEN = 'taskRunnerUltimate.pickerOpen';
 const CONTEXT_RUNNING_COUNT = 'taskRunnerUltimate.runningCount';
-/** Highest count with a dedicated badge icon; above this the "9+" icon is used. */
-const MAX_BADGE = 9;
 
 interface CategoryRule {
   /** Tokens the script name (or, as a last resort, its command) is matched against. */
@@ -155,9 +153,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.show', showScriptPicker),
     vscode.commands.registerCommand('taskRunnerUltimate.restartActive', restartActiveItem),
     vscode.commands.registerCommand('taskRunnerUltimate.refresh', refreshScripts),
-    // One command per badge count: the toolbar icon is static, so the visible
-    // entry is swapped via the runningCount context key (see contributes.menus).
-    ...badgeCommandIds().map((id) => vscode.commands.registerCommand(id, showScriptPicker)),
     // The buttons on a row start a task without pulling the terminal to the
     // front; clicking the row itself is the one that also shows it. See
     // `startScript`.
@@ -278,13 +273,12 @@ function runningCount(): number {
 
 function onStateChanged(): void {
   const count = runningCount();
-  void vscode.commands.executeCommand('setContext', CONTEXT_RUNNING_COUNT, Math.min(count, MAX_BADGE + 1));
+  void vscode.commands.executeCommand('setContext', CONTEXT_RUNNING_COUNT, count);
   updateStatusBar(count);
   activePicker?.refresh();
   treeChanged.fire();
-  // The view badge is a real API here, unlike the editor toolbar one, and both
-  // views carry it: the count belongs to the tasks, not to the sidebar the list
-  // happens to be read in.
+  // Both views carry the badge: the count belongs to the tasks, not to the
+  // sidebar the list happens to be read in.
   const badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
   for (const view of [treeView, explorerTreeView]) {
     if (view) {
@@ -2794,7 +2788,7 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
   return task;
 }
 
-// --- status bar & badge ------------------------------------------------------
+// --- status bar --------------------------------------------------------------
 
 let statusBarItem: vscode.StatusBarItem | undefined;
 /** Restart-all / stop-all buttons, shown to the right of the main item only while something runs. */
@@ -2852,14 +2846,4 @@ function updateStatusBar(count: number): void {
       button?.hide();
     }
   }
-}
-
-/** Command ids of the badge variants, index 0 being a count of 1. */
-function badgeCommandIds(): string[] {
-  const ids: string[] = [];
-  for (let count = 1; count <= MAX_BADGE; count++) {
-    ids.push(`taskRunnerUltimate.show.badge${count}`);
-  }
-  ids.push('taskRunnerUltimate.show.badgeMany');
-  return ids;
 }

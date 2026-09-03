@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -98,96 +98,6 @@
         "icon": {
           "light": "media/scripts-light.svg",
           "dark": "media/scripts-dark.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge1",
-        "title": "Show Scripts (1 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-1.svg",
-          "dark": "media/scripts-dark-1.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge2",
-        "title": "Show Scripts (2 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-2.svg",
-          "dark": "media/scripts-dark-2.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge3",
-        "title": "Show Scripts (3 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-3.svg",
-          "dark": "media/scripts-dark-3.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge4",
-        "title": "Show Scripts (4 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-4.svg",
-          "dark": "media/scripts-dark-4.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge5",
-        "title": "Show Scripts (5 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-5.svg",
-          "dark": "media/scripts-dark-5.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge6",
-        "title": "Show Scripts (6 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-6.svg",
-          "dark": "media/scripts-dark-6.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge7",
-        "title": "Show Scripts (7 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-7.svg",
-          "dark": "media/scripts-dark-7.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge8",
-        "title": "Show Scripts (8 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-8.svg",
-          "dark": "media/scripts-dark-8.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badge9",
-        "title": "Show Scripts (9 running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-9.svg",
-          "dark": "media/scripts-dark-9.svg"
-        }
-      },
-      {
-        "command": "taskRunnerUltimate.show.badgeMany",
-        "title": "Show Scripts (9+ running)",
-        "category": "Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light-many.svg",
-          "dark": "media/scripts-dark-many.svg"
         }
       },
       {
@@ -386,114 +296,14 @@
         {
           "command": "taskRunnerUltimate.show",
           "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && !taskRunnerUltimate.runningCount"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge1",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 1"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge2",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 2"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge3",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 3"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge4",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 4"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge5",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 5"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge6",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 6"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge7",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 7"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge8",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 8"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge9",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 9"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badgeMany",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 10"
+          "when": "config.taskRunnerUltimate.showInEditorTitle"
         }
       ],
       "notebook/toolbar": [
         {
           "command": "taskRunnerUltimate.show",
           "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && !taskRunnerUltimate.runningCount"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge1",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 1"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge2",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 2"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge3",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 3"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge4",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 4"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge5",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 5"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge6",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 6"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge7",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 7"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge8",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 8"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge9",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 9"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badgeMany",
-          "group": "navigation@1",
-          "when": "config.taskRunnerUltimate.showInEditorTitle && taskRunnerUltimate.runningCount == 10"
+          "when": "config.taskRunnerUltimate.showInEditorTitle"
         }
       ],
       "view/title": [
@@ -668,46 +478,6 @@
       ],
       "commandPalette": [
         {
-          "command": "taskRunnerUltimate.show.badge1",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge2",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge3",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge4",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge5",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge6",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge7",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge8",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badge9",
-          "when": "false"
-        },
-        {
-          "command": "taskRunnerUltimate.show.badgeMany",
-          "when": "false"
-        },
-        {
           "command": "taskRunnerUltimate.restartActive",
           "when": "false"
         },
@@ -865,7 +635,7 @@
         "taskRunnerUltimate.showInEditorTitle": {
           "type": "boolean",
           "default": true,
-          "description": "Show the scripts icon (with the running-task badge) in the editor title bar."
+          "description": "Show the scripts icon in the editor title bar."
         },
         "taskRunnerUltimate.showInFileExplorer": {
           "type": "boolean",

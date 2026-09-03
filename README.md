@@ -8,9 +8,8 @@ restart without ever going looking for a terminal tab.**
 - 📋 **[A panel in the left bar](#the-task--script-explorer-view)** — every task of the workspace as a
   tree, grouped by the manifest it came from. Groups with something running float to the top and the
   number of running tasks rides on the activity bar icon as a real VS Code badge.
-- ⚡ **[A button in every editor's toolbar](#-in-the-toolbar-of-every-file)** — the ▶ icon, carrying
-  a live badge with how many tasks are running, so the watcher you forgot about stays in the corner
-  of your eye instead of hiding in a stack of terminals.
+- ⚡ **[A button in every editor's toolbar](#-in-the-toolbar-of-every-file)** — the ▶ icon, so the
+  whole list is one click away from wherever you happen to be.
 - ⌨️ **[A hotkey, from anywhere](#keyboard-shortcuts)** — <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>T</kbd>
   (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> on Windows and Linux) opens the whole list without
   touching the mouse, from the editor, the terminal, anywhere.
@@ -56,8 +55,9 @@ Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/task-runner-
 ### ▶ in the toolbar of every file
 
 The play icon sits in the editor title bar, so the whole workspace is one click away from wherever
-you happen to be. It wears a **live badge with the number of running tasks** — the watcher you forgot
-about stays in the corner of your eye instead of hiding in a stack of terminals.
+you happen to be. The count of running tasks lives on the activity bar icon and in the status bar —
+the watcher you forgot about stays in the corner of your eye instead of hiding in a stack of
+terminals.
 
 ### A hotkey, from anywhere
 
@@ -109,7 +109,7 @@ monorepo.
   `Gateway`. Display only: nothing on disk is renamed, and the real name stays findable.
 - **Paint any row, and any folder** — ten colours in a right-click submenu, each shown in its own
   colour, remembered per workspace, over the colour the task's category would have had.
-- **A live badge** — the number of running tasks, on the toolbar icon, the panel and the status bar.
+- **A live count** — the number of running tasks, on the activity bar icon and in the status bar.
 - **Knows your runner** — npm, yarn, pnpm, bun and deno, detected per package, overridable.
 - **Real tasks, not typed-out terminal commands** — running state, stop and restart are reliable, and
   every task also shows up under **Run Task…**.
@@ -181,7 +181,7 @@ pins it, and `none` hides them entirely.
 
 | Place | Notes |
 | --- | --- |
-| Editor title bar (top right) | The badged icon. Toggle with `taskRunnerUltimate.showInEditorTitle`. |
+| Editor title bar (top right) | The ▶ icon. Toggle with `taskRunnerUltimate.showInEditorTitle`. |
 | Activity bar (left strip) | The **Task & Script Explorer** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
 | File Explorer (bottom section) | The same tree again, as a **Task & Script Explorer** section under the file list — collapsed until you open it, so it costs one row until you want it. Toggle with `taskRunnerUltimate.showInFileExplorer`. |
 | Status bar (bottom left) | `$(play-circle) Tasks`, or `$(loading~spin) Tasks: N` while tasks run, followed by Restart all and Stop all buttons whenever something is running. Toggle with `taskRunnerUltimate.showInStatusBar`. |
@@ -609,7 +609,7 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `goCommands` | `run`, `build`, `test`, `vet` | The go subcommands every module gets. |
 | `pythonRunner` | `auto` | How `[project.scripts]` entry points are entered — see [Python](#python). `none` hides them. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
-| `showInEditorTitle` | `true` | The badged ▶ icon in the editor title bar. |
+| `showInEditorTitle` | `true` | The ▶ icon in the editor title bar. |
 | `showInStatusBar` | `true` | The `Tasks` entry (and its Restart all / Stop all buttons) in the status bar. |
 | `showInFileExplorer` | `true` | The `Task & Script Explorer` section at the foot of the File Explorer. It ships collapsed, so it takes one header row until you open it. |
 | `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
@@ -705,11 +705,11 @@ Two details worth knowing:
 
 ### How the badge works
 
-The activity bar badge is a real API (`TreeView.badge`). The toolbar one is not: editor title icons
-are static images with no way to draw on them. So `media/` holds pre-rendered icons for counts 1–9
-plus `9+`, one command per variant, and the extension publishes the running count into the
-`taskRunnerUltimate.runningCount` context key — the `editor/title` menu then shows whichever variant
-matches. Those icons and the menu entries that reference them are generated:
+The count of running tasks is shown on the activity bar and File Explorer views through a real API
+(`TreeView.badge`), and in the status bar entry. The editor title icon carries no badge: title-bar
+icons are static images with no way to draw on them. The running count is still published into the
+`taskRunnerUltimate.runningCount` context key, which is what the view header's Stop all / Restart all
+buttons appear on. The icons and the menu entries are generated:
 
 ```bash
 npm run gen     # tools/generate-contributions.js
