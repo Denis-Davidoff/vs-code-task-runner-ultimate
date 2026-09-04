@@ -271,10 +271,13 @@ manifest.contributes.commands = [
   // Reordering has no command at all: a heading is moved by dragging it, which is
   // the gesture the rows inside it already answer to.
   { command: 'taskRunnerUltimate.hideGroup', title: 'Hide Package', category: 'Task & Script Explorer', icon: '$(eye-closed)' },
+  { command: 'taskRunnerUltimate.stopGroup', title: 'Stop All in Package', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartGroup', title: 'Restart All in Package', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
   { command: 'taskRunnerUltimate.showGroup', title: 'Show Package', category: 'Task & Script Explorer', icon: '$(eye)' },
   { command: 'taskRunnerUltimate.openScript', title: 'Go to Script Definition', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
   { command: 'taskRunnerUltimate.openManifest', title: 'Open Manifest File', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
   { command: 'taskRunnerUltimate.showTerminal', title: 'Show Terminal', category: 'Task & Script Explorer', icon: '$(terminal)' },
+  { command: 'taskRunnerUltimate.openTerminalEditor', title: 'Open Terminal in Editor Area', category: 'Task & Script Explorer', icon: '$(open-preview)' },
   // The swatch rides in the title; see PALETTE above for why it is not an icon.
   // None of these reach the command palette (see commandPalette below), so the
   // glyph is only ever read where it means something.
@@ -284,6 +287,7 @@ manifest.contributes.commands = [
     category: 'Task & Script Explorer',
   })),
   { command: CLEAR_COLOUR, title: 'Default', category: 'Task & Script Explorer' },
+  { command: 'taskRunnerUltimate.pickIcon', title: 'Change Icon…', category: 'Task & Script Explorer', icon: '$(symbol-misc)' },
   { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task & Script Explorer', icon: '$(menu)' },
   {
     command: 'taskRunnerUltimate.stopAll',
@@ -299,12 +303,13 @@ const inTitle = 'config.taskRunnerUltimate.showInEditorTitle';
 // the foot of the File Explorer — and the two draw the same rows with the same
 // actions, so every `when` clause below matches either view rather than naming one.
 const inTree = 'view =~ /^taskRunnerUltimate\\.(tree|explorer)$/';
-// The two states a package heading is in: on the list, or put away under HIDDEN.
-// The eye is a different button in each, and opening the manifest or renaming is
-// the same one in both, which is what the third value is for.
-const PACKAGE = '/^group:package$/';
-const HIDDEN_PACKAGE = '/^group:package:hidden$/';
-const PACKAGE_ROW = 'group:package(:hidden)?';
+// A package heading can be visible or hidden, and idle or running. Keep the
+// complete shapes here so regenerating the manifest preserves actions for all
+// four states without letting similarly prefixed context values slip through.
+const PACKAGE = '/^group:package(:running)?$/';
+const HIDDEN_PACKAGE = '/^group:package:hidden(:running)?$/';
+const RUNNING_PACKAGE = '/^group:package(:hidden)?:running$/';
+const PACKAGE_ROW = 'group:package(:hidden)?(:running)?';
 const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];
@@ -342,6 +347,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^script:idle:/` },
     { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
+    { command: 'taskRunnerUltimate.restartGroup', group: 'inline@2', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
+    { command: 'taskRunnerUltimate.stopGroup', group: 'inline@3', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
     // Non-inline groups are what the right-click menu shows.
     //
     // Opening the file is the one action here that is about the manifest rather
@@ -357,6 +364,7 @@ manifest.contributes.menus = {
     // Only a running task has a terminal to show, which is the same set of rows
     // that has a ■ button — ours and the foreign ones alike.
     { command: 'taskRunnerUltimate.showTerminal', group: '0_open@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
+    { command: 'taskRunnerUltimate.openTerminalEditor', group: '0_open@3', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav$/` },
     { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav$/` },
     { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^script:/` },
@@ -376,14 +384,15 @@ manifest.contributes.menus = {
     // `editTitle` lines above get away with it because a command is its own
     // action; a submenu is not.
     { submenu: COLOUR_SUBMENU, group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group)/` },
+    { command: 'taskRunnerUltimate.pickIcon', group: '2_modify@3', when: `${inTree} && viewItem =~ /^(script|group)/` },
     // Bringing a group back is the one of the two that keeps its button: a row
     // under HIDDEN is there to be taken out again, and an eye in its own column is
     // one click where putting it away was a menu you went looking for.
     { command: 'taskRunnerUltimate.showGroup', group: 'inline@1', when: `${inTree} && viewItem =~ ${HIDDEN_PACKAGE}` },
     // Both in the right-click menu as well, findable without a hover and readable
     // with a name on them.
-    { command: 'taskRunnerUltimate.hideGroup', group: '2_modify@3', when: `${inTree} && viewItem =~ ${PACKAGE}` },
-    { command: 'taskRunnerUltimate.showGroup', group: '2_modify@3', when: `${inTree} && viewItem =~ ${HIDDEN_PACKAGE}` },
+    { command: 'taskRunnerUltimate.hideGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${PACKAGE}` },
+    { command: 'taskRunnerUltimate.showGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${HIDDEN_PACKAGE}` },
   ],
   // The palette itself, in one group, with the way back to the default in a
   // second so the menu draws a separator above it.
@@ -404,11 +413,15 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.editTitle', when: 'false' },
     { command: 'taskRunnerUltimate.hideGroup', when: 'false' },
     { command: 'taskRunnerUltimate.showGroup', when: 'false' },
+    { command: 'taskRunnerUltimate.stopGroup', when: 'false' },
+    { command: 'taskRunnerUltimate.restartGroup', when: 'false' },
     { command: 'taskRunnerUltimate.openScript', when: 'false' },
     { command: 'taskRunnerUltimate.openManifest', when: 'false' },
     { command: 'taskRunnerUltimate.showTerminal', when: 'false' },
+    { command: 'taskRunnerUltimate.openTerminalEditor', when: 'false' },
     ...PALETTE.map(({ name }) => ({ command: colourCommand(name), when: 'false' })),
     { command: CLEAR_COLOUR, when: 'false' },
+    { command: 'taskRunnerUltimate.pickIcon', when: 'false' },
   ],
 };
 

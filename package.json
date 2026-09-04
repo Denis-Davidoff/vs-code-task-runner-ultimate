@@ -372,7 +372,7 @@
         {
           "command": "taskRunnerUltimate.openManifest",
           "group": "0_open@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
@@ -402,7 +402,7 @@
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?(:running)?$/"
         },
         {
           "submenu": "taskRunnerUltimate.color",
@@ -417,7 +417,7 @@
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.hideGroup",
@@ -427,7 +427,7 @@
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden(:running)?$/"
         }
       ],
       "taskRunnerUltimate.color": [
