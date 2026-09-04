@@ -1162,6 +1162,17 @@ interface MenuItem extends vscode.QuickPickItem {
   run?(): Promise<void>;
 }
 
+interface ResetStore {
+  keys: string[];
+  icon: string;
+  name: string;
+  count: number;
+  held: string;
+  confirm: string;
+  detail: string;
+  alwaysConfirm?: boolean;
+}
+
 /**
  * Opens the settings editor with nothing in it but this extension's own options.
  * It lives in the menu rather than in the view header: the header is for what you
@@ -1178,13 +1189,9 @@ function openSettings(): void {
 
 /**
  * Everything the view can do that is not aimed at one row: the rescan, the
- * settings, and the stores the menu can empty. Each of those empties whole,
- * so its entry says how much is in it before you pick it and asks once after —
- * a mis-click here costs every rename.
- *
- * The workspace keeps a fourth store of its own, the folded headings, and it
- * deliberately has no entry here: a fold is undone by clicking the same arrow
- * that made it, which is one click where the user is already looking.
+ * settings, and the stores the menu can empty. Each reset says how much is in
+ * its scope before you pick it and asks once after — a mis-click here can cost
+ * every rename, or every customization in the project for the final entry.
  */
 async function showMenu(): Promise<void> {
   const titles = Object.keys(customTitles()).length;
@@ -1193,8 +1200,24 @@ async function showMenu(): Promise<void> {
   const colors = Object.keys(customColors()).length;
   const icons = Object.keys(customIcons()).length;
   const hidden = hiddenRefs().length;
+  const collapsed = foldedRefs().size;
+  const reordered = orders + (groupOrder().length > 0 ? 1 : 0);
+  const appliedStyles = titles + colors + icons;
+  const allChanges = appliedStyles + reordered + favorites + hidden + collapsed;
 
-  const stores = [
+  const resetStyles: ResetStore = {
+    keys: [TITLES_KEY, COLORS_KEY, ICONS_KEY],
+    icon: 'discard',
+    name: 'Reset all applied styles',
+    count: appliedStyles,
+    held: `${appliedStyles} ${appliedStyles === 1 ? 'style' : 'styles'} applied`,
+    confirm: 'Reset styles',
+    detail:
+      'Every custom title, colour, and icon goes back to its default. Favorites, hidden packages, sort order, and folded groups stay as they are.',
+    alwaysConfirm: true,
+  };
+
+  const stores: ResetStore[] = [
     {
       keys: [TITLES_KEY],
       icon: 'discard',
@@ -1210,19 +1233,10 @@ async function showMenu(): Promise<void> {
       keys: [ORDER_KEY, GROUP_ORDER_KEY],
       icon: 'list-ordered',
       name: 'Reset sort order',
-      count: orders + (groupOrder().length > 0 ? 1 : 0),
-      held: `${orders} ${orders === 1 ? 'list' : 'lists'} reordered`,
+      count: reordered,
+      held: `${reordered} ${reordered === 1 ? 'list' : 'lists'} reordered`,
       confirm: 'Reset order',
       detail: 'Every list, and the packages themselves, go back to the order the manifests declare.',
-    },
-    {
-      keys: [HIDDEN_KEY],
-      icon: 'eye',
-      name: 'Show hidden packages',
-      count: hidden,
-      held: `${hidden} hidden`,
-      confirm: 'Show all',
-      detail: 'The hidden group disappears and every package in it comes back to its own place in the tree.',
     },
     {
       keys: [COLORS_KEY],
@@ -1253,6 +1267,43 @@ async function showMenu(): Promise<void> {
     },
   ];
 
+  const showHidden: ResetStore = {
+    keys: [HIDDEN_KEY],
+    icon: 'eye',
+    name: 'Show hidden packages',
+    count: hidden,
+    held: `${hidden} hidden`,
+    confirm: 'Show all',
+    detail: 'The hidden group disappears and every package in it comes back to its own place in the tree.',
+  };
+
+  const resetProject: ResetStore = {
+    keys: [
+      TITLES_KEY,
+      COLORS_KEY,
+      ICONS_KEY,
+      ORDER_KEY,
+      GROUP_ORDER_KEY,
+      FAVORITES_KEY,
+      HIDDEN_KEY,
+      COLLAPSED_KEY,
+    ],
+    icon: 'trash',
+    name: 'Reset all changes for this project',
+    count: allChanges,
+    held: `${allChanges} saved ${allChanges === 1 ? 'change' : 'changes'}`,
+    confirm: 'Reset project',
+    detail:
+      'Every custom title, colour, icon, favorite, hidden package, manual sort order, and saved folded state is cleared for this project.',
+    alwaysConfirm: true,
+  };
+
+  const resetItem = (store: ResetStore): MenuItem => ({
+    label: `$(${store.icon}) ${store.name}`,
+    description: store.count > 0 ? store.held : 'nothing to undo',
+    run: () => emptyStore(store),
+  });
+
   const items: MenuItem[] = [
     {
       label: '$(refresh) Refresh scripts',
@@ -1264,12 +1315,13 @@ async function showMenu(): Promise<void> {
       description: 'every option this extension has',
       run: async () => openSettings(),
     },
-    { label: 'Undo', kind: vscode.QuickPickItemKind.Separator },
-    ...stores.map((store) => ({
-      label: `$(${store.icon}) ${store.name}`,
-      description: store.count > 0 ? store.held : 'nothing to undo',
-      run: () => emptyStore(store),
-    })),
+    { label: 'Reset', kind: vscode.QuickPickItemKind.Separator },
+    resetItem(resetStyles),
+    ...stores.map(resetItem),
+    { label: '', kind: vscode.QuickPickItemKind.Separator },
+    resetItem(showHidden),
+    { label: '', kind: vscode.QuickPickItemKind.Separator },
+    resetItem(resetProject),
   ];
 
   const picked = await vscode.window.showQuickPick(items, {
@@ -1286,8 +1338,9 @@ async function emptyStore(store: {
   count: number;
   confirm: string;
   detail: string;
+  alwaysConfirm?: boolean;
 }): Promise<void> {
-  if (store.count === 0) {
+  if (store.count === 0 && !store.alwaysConfirm) {
     vscode.window.showInformationMessage(`${store.name}: nothing to undo.`);
     return;
   }
@@ -1304,6 +1357,11 @@ async function emptyStore(store: {
   // empty default instead of finding an empty object left behind.
   for (const key of store.keys) {
     await storage?.update(key, undefined);
+  }
+  // Fold state is cached in memory because tree events can arrive faster than
+  // workspace-state writes. A project-wide reset must clear both authorities.
+  if (store.keys.includes(COLLAPSED_KEY)) {
+    folded = undefined;
   }
   repaint();
 }
@@ -1674,7 +1732,7 @@ async function starDropped(refs: string[], anchor: string | undefined): Promise<
  * state we hand it says otherwise — and every repaint hands it one. Keeping the
  * answer here is what makes a fold outlive both a repaint and a restart.
  *
- * Alone among the four stores this one is held in memory as well, because alone
+ * Alone among these stores this one is held in memory as well, because alone
  * among them it is written from a stream of UI events rather than from a command:
  * the tree fires collapse and expand as fast as a user can click the arrows. This
  * set is the authority and `storage` only trails it, so a fold never reads back

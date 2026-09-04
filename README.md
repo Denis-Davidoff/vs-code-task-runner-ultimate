@@ -291,13 +291,18 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | --- | --- |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
+| **Reset all applied styles** | Restores every custom title, colour and icon while leaving favorites, visibility, ordering and folded groups untouched. |
 | **Reset all titles** | Every [renamed](#renaming-a-row) row and group heading goes back to the name its manifest gives it. |
 | **Reset sort order** | Every list goes back to the order its manifest declares, undoing [the drags](#reordering-rows). |
 | **Reset all colours** | Every [painted](#painting-a-row) row and group heading goes back to the colour its category gives it. |
+| **Reset all icons** | Every customized row and group heading goes back to its default icon. |
 | **Remove favorites** | Unstars everything, so the rows at the top disappear. The tasks stay where they are, in their own packages. |
+| **Show hidden packages** | Restores every hidden package to its saved place in the tree. This entry is separated at the bottom of the individual resets. |
+| **Reset all changes for this project** | Clears all list customizations for this project, including favorites, hidden packages, ordering and folded state. |
 
 Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `4 painted`,
-`5 starred` — and asks once before it does it. Refresh is also in the command palette under
+`5 starred` — and asks once before it does it. The two broad resets are separated from the
+individual actions they bracket. Refresh is also in the command palette under
 **Task & Script Explorer: Refresh Scripts**.
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
@@ -485,12 +490,13 @@ All of them are deliberately hidden from the command palette, which has no row t
 palette keeps the five that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
 **Stop All Running Tasks** and **Restart All Running Tasks**.
 
-### Where favorites, titles, colours and order are stored
+### Where list customizations are stored
 
-In VS Code's own workspace storage (`ExtensionContext.workspaceState`), under the keys `favorites`,
-`titles`, `colors` and `order` — not in your `package.json`, and not in `.vscode/settings.json`. That
-storage is already scoped to this extension and this workspace, so no key can collide with anything
-and none of them show up in a diff. [The menu](#the-menu) empties any one of the four.
+In VS Code's own workspace storage (`ExtensionContext.workspaceState`) — not in your `package.json`,
+and not in `.vscode/settings.json`. Titles, colours, icons, task and package order, favorites, hidden
+packages and folded groups have separate stores. That storage is already scoped to this extension
+and this workspace, so no key can collide with anything and none of them show up in a diff.
+[The menu](#the-menu) can empty each user-facing customization separately or clear all of them.
 
 Starring a script is a personal note about a file the project owns, so the alternatives both have a
 cost: the manifest is shared with everyone who clones the repo, and a setting would rewrite
