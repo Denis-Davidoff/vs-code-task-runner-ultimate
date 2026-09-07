@@ -16,9 +16,35 @@ const THEMES = {
   dark: { fg: '#C5C5C5' },
 };
 
-/** Filled disc with the play triangle knocked out of it (evenodd fill rule). */
-function glyph(fg) {
-  return `  <path fill="${fg}" fill-rule="evenodd" d="M8 0.9a7.1 7.1 0 1 0 0 14.2A7.1 7.1 0 0 0 8 0.9zM6.1 4.6 11.6 8l-5.5 3.4z"/>`;
+/*
+ * The extension's own mark: a ring with a play triangle standing inside it — the
+ * shape the status bar borrows from `$(play-circle)` and the activity bar wears.
+ * One description at two sizes, so the 16px header button and the 24px activity
+ * bar mask read as the same icon rather than two takes on one idea.
+ *
+ * Everything is a ratio of the 24-unit design, and the ring is an evenodd path
+ * tracing its outside edge and then its inside one: a stroke would be no good to
+ * the activity bar, which draws the file as a mask where only fills survive.
+ */
+function glyph(fg, size = 16) {
+  const n = (value) => Number(((value * size) / 24).toFixed(2));
+  const c = n(12);
+  const outer = n(10.6);
+  const inner = n(8.8);
+  // Derived from the two radii rather than scaled on its own, so the inside edge
+  // lands where the arcs actually are once both have been rounded.
+  const thickness = Number((outer - inner).toFixed(2));
+  const ring =
+    `M${c} ${Number((c - outer).toFixed(2))}` +
+    `a${outer} ${outer} 0 1 0 0 ${outer * 2} ${outer} ${outer} 0 0 0 0-${outer * 2}z` +
+    `m0 ${thickness}` +
+    `a${inner} ${inner} 0 1 1 0 ${inner * 2} ${inner} ${inner} 0 0 1 0-${inner * 2}z`;
+  const left = n(9.2);
+  const tip = n(16.8);
+  const play = `M${left} ${n(7.2)}L${tip} ${c}l-${Number((tip - left).toFixed(2))} ${n(4.8)}z`;
+  return (
+    `  <path fill="${fg}" fill-rule="evenodd" d="${ring}"/>\n` + `  <path fill="${fg}" d="${play}"/>`
+  );
 }
 
 /*
@@ -58,14 +84,9 @@ for (const [name, fill] of Object.entries(STOP_RED)) {
 }
 
 // The activity bar uses the icon as a mask, so its colour does not matter and a
-// single 24x24 file serves both themes.
-fs.writeFileSync(
-  path.join(media, 'activity-bar.svg'),
-  svg(
-    '  <path fill="#000000" fill-rule="evenodd" d="M12 1.4a10.6 10.6 0 1 0 0 21.2 10.6 10.6 0 0 0 0-21.2zm-2.8 5.5L17.4 12l-8.2 5.1z"/>',
-    24,
-  ),
-);
+// single 24x24 file serves both themes. Same glyph as the header button, drawn
+// at the size the container asks for.
+fs.writeFileSync(path.join(media, 'activity-bar.svg'), svg(glyph('#000000', 24), 24));
 
 // --- marketplace icon --------------------------------------------------------
 

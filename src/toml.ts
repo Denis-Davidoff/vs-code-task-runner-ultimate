@@ -59,7 +59,7 @@ class Reader {
   constructor(private readonly text: string) {}
 
   document(): Record<string, unknown> {
-    const root: Record<string, unknown> = {};
+    const root = dictionary();
     let table = root;
 
     for (;;) {
@@ -206,7 +206,7 @@ class Reader {
 
   private inlineTable(): Record<string, unknown> {
     this.index++;
-    const table: Record<string, unknown> = {};
+    const table = dictionary();
     for (;;) {
       this.trivia();
       if (this.done()) {
@@ -345,17 +345,40 @@ class Reader {
 
 // --- shaping the document ----------------------------------------------------
 
+/**
+ * Every table this parser builds, from the document down to an inline one.
+ *
+ * A prototype-less object is what makes a key called `__proto__` — or
+ * `constructor`, or `toString` — nothing but data. A plain `{}` would answer
+ * `node['__proto__']` with `Object.prototype`, which `descend` would then walk
+ * into and write the rest of the manifest onto: one hostile Cargo.toml lying in
+ * a scanned workspace would reach every object in the extension host, ours and
+ * every other extension's alike, before anyone had run a single task.
+ */
+function dictionary(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>;
+}
+
+/**
+ * A key's own value, or nothing. Belt to `dictionary`'s braces: a table read
+ * here is one we built, so there is nothing to inherit, and the check says so
+ * rather than leaving it to be inferred.
+ */
+function ownValue(node: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(node, key) ? node[key] : undefined;
+}
+
 /** Walks to the table a dotted key writes into, following the last entry of any array of tables. */
 function descend(table: Record<string, unknown>, keys: string[]): Record<string, unknown> {
   let node = table;
   for (const key of keys) {
-    const next = node[key];
+    const next = ownValue(node, key);
     if (Array.isArray(next) && next.length > 0 && typeof next[next.length - 1] === 'object') {
       node = next[next.length - 1] as Record<string, unknown>;
     } else if (next && typeof next === 'object' && !Array.isArray(next)) {
       node = next as Record<string, unknown>;
     } else {
-      const created: Record<string, unknown> = {};
+      const created = dictionary();
       node[key] = created;
       node = created;
     }
@@ -374,10 +397,10 @@ function openTable(root: Record<string, unknown>, keys: string[]): Record<string
 function pushTable(root: Record<string, unknown>, keys: string[]): Record<string, unknown> {
   const parent = descend(root, keys.slice(0, -1));
   const key = keys[keys.length - 1];
-  const existing = parent[key];
+  const existing = ownValue(parent, key);
   const list = Array.isArray(existing) ? existing : [];
   parent[key] = list;
-  const entry: Record<string, unknown> = {};
+  const entry = dictionary();
   list.push(entry);
   return entry;
 }

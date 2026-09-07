@@ -1,7 +1,16 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { locateTask } from './locate';
-import { collectScripts, commandFor, resetSources, scriptKey, ScriptEntry, WATCH_GLOB } from './sources';
+import {
+  collectScripts,
+  commandFor,
+  launchArgv,
+  plainArgument,
+  resetSources,
+  scriptKey,
+  ScriptEntry,
+  WATCH_GLOB,
+} from './sources';
 
 /** Task type used for the tasks this extension executes. Must match contributes.taskDefinitions. */
 const TASK_TYPE = 'taskRunnerUltimate';
@@ -2540,21 +2549,47 @@ async function openTerminalEditor(node: TreeNode | undefined): Promise<void> {
  * label — `source: name (folder)` — in a multi-root one, where the folder is
  * what tells two identically named tasks apart. Older versions prefixed it with
  * `Task - `. Every whole form is tried before the containment test, so an exact
- * name never loses to a longer one that merely has it inside.
+ * name never loses to a longer one that merely has it inside, and the forms
+ * carrying the folder are tried first: in a multi-root workspace the bare name
+ * is the ambiguous one.
  *
  * A miss is a real answer and not a failure to handle: a task terminal that has
  * been closed took its task with it, so the caller says so rather than opening
  * something else that happens to be there.
  */
 function terminalFor(task: vscode.Task): vscode.Terminal | undefined {
-  const names = [task.name, `${task.source}: ${task.name}`, `Task - ${task.name}`];
+  // `scope` is a folder or one of the TaskScope numbers, and only a folder has a
+  // name a terminal could be carrying.
+  const folder = typeof task.scope === 'object' ? task.scope : undefined;
+  const names = [
+    ...(folder
+      ? [`${task.source}: ${task.name} (${folder.name})`, `${task.name} (${folder.name})`]
+      : []),
+    task.name,
+    `${task.source}: ${task.name}`,
+    `Task - ${task.name}`,
+  ];
   for (const name of names) {
     const exact = vscode.window.terminals.find((terminal) => terminal.name === name);
     if (exact) {
       return exact;
     }
   }
-  return vscode.window.terminals.find((terminal) => terminal.name.includes(task.name));
+
+  // Nothing matched whole, so fall back to containment — which is what catches
+  // a naming form this list does not know yet. One hit is the answer.
+  const loose = vscode.window.terminals.filter((terminal) => terminal.name.includes(task.name));
+  if (loose.length <= 1) {
+    return loose[0];
+  }
+  // Several is a multi-root workspace where two folders each run a task of this
+  // name, and the folder is the only thing that tells their terminals apart.
+  // Taking the first would show one folder's log for the other folder's task, so
+  // an ambiguity nothing resolves is reported as a miss instead.
+  const scoped = folder
+    ? loose.filter((terminal) => terminal.name.includes(`(${folder.name})`))
+    : [];
+  return scoped.length === 1 ? scoped[0] : undefined;
 }
 
 // --- picker ------------------------------------------------------------------
@@ -2884,12 +2919,15 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
   // just the directory — except for a Node package, where the file name is
   // always package.json and would only be noise.
   const where = script.kind === 'npm' || script.kind === 'deno' ? script.directory : script.location;
+  const argv = launchArgv(script);
   const task = new vscode.Task(
     { type: TASK_TYPE, script: script.name, manifest: script.manifest.toString() },
     folder ?? vscode.TaskScope.Workspace,
     where ? `${script.name} (${where})` : script.name,
     TASK_SOURCE,
-    new vscode.ShellExecution(commandFor(script), { cwd: script.cwd.fsPath }),
+    // The program and its arguments handed over as pieces rather than as one
+    // command line: see `launchArgv`, and `shellArgument` for the quoting.
+    new vscode.ShellExecution(argv[0], argv.slice(1).map(shellArgument), { cwd: script.cwd.fsPath }),
   );
   task.presentationOptions = {
     reveal: reveal ? vscode.TaskRevealKind.Always : vscode.TaskRevealKind.Never,
@@ -2900,6 +2938,19 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
     showReuseMessage: false,
   };
   return task;
+}
+
+/**
+ * One argument on its way to the shell.
+ *
+ * A plain word goes as it is, so the line echoed in the terminal reads like the
+ * one you would have typed. Anything else is handed over as a quoted string and
+ * VS Code quotes it for the shell that terminal actually runs: a task name is
+ * the manifest's text, and `$(…)`, a backtick or a space in one is an argument
+ * rather than something for the shell to read as code.
+ */
+function shellArgument(value: string): string | vscode.ShellQuotedString {
+  return plainArgument(value) ? value : { value, quoting: vscode.ShellQuoting.Strong };
 }
 
 // --- status bar --------------------------------------------------------------

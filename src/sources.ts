@@ -103,16 +103,28 @@ function manifestGlob(enabled: ReadonlySet<Ecosystem>): string | undefined {
 export const DEFAULT_EXCLUDE =
   '**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**';
 
-/** How each Node runner invokes a named script. */
-const RUNNERS: Record<PackageManager, (script: string) => string> = {
-  npm: (script) => `npm run ${script}`,
-  yarn: (script) => `yarn ${script}`,
-  pnpm: (script) => `pnpm run ${script}`,
-  bun: (script) => `bun run ${script}`,
-  deno: (script) => `deno task ${script}`,
+/** The words each Node runner puts in front of a script's name. */
+const RUNNERS: Record<PackageManager, string[]> = {
+  npm: ['npm', 'run'],
+  yarn: ['yarn'],
+  pnpm: ['pnpm', 'run'],
+  bun: ['bun', 'run'],
+  deno: ['deno', 'task'],
 };
 
 export type PackageManager = 'npm' | 'yarn' | 'pnpm' | 'bun' | 'deno';
+
+/** The runners a `packageManager` setting is allowed to name. */
+const PACKAGE_MANAGERS = Object.keys(RUNNERS) as PackageManager[];
+
+/**
+ * A lookup that cannot answer with something off `Object.prototype`. The keys
+ * here come from settings — `cargoCommands`, `goCommands` — and a plain
+ * `table[key]` would hand back a function for `constructor` or `toString`.
+ */
+function known(table: Record<string, string[]>, key: string): string[] | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
 
 /**
  * Lock and config files that identify a Node runner, checked in this order
@@ -175,11 +187,14 @@ export interface ScriptEntry {
   /** What kind of file that is, which is what decides the parser and the runner. */
   kind: SourceKind;
   /**
-   * The shell command to run. Left undefined for package.json scripts alone,
-   * whose runner is resolved on demand — a lock file or a `packageManager`
-   * field can change it without the script itself changing.
+   * The program and arguments to run. Left undefined for package.json scripts
+   * alone, whose runner is resolved on demand — a lock file or a
+   * `packageManager` field can change it without the script itself changing.
+   *
+   * A vector and not a command line because a task name comes out of a manifest
+   * and ends up in a shell; see `launchArgv`.
    */
-  exec?: string;
+  argv?: string[];
   /** Directory the task must run in. */
   cwd: vscode.Uri;
   /** Manifest path relative to its workspace folder. */
@@ -194,8 +209,8 @@ export interface ScriptEntry {
 interface RawTask {
   name: string;
   command: string;
-  /** Undefined only for package.json, see `ScriptEntry.exec`. */
-  exec?: string;
+  /** Undefined only for package.json, see `ScriptEntry.argv`. */
+  argv?: string[];
 }
 
 interface ParsedManifest {
@@ -341,7 +356,7 @@ async function runScan(): Promise<ScriptEntry[]> {
         // A description can be a multi-line string in every format that has one,
         // and both surfaces this is shown on are a single line.
         command: task.command.replace(/\s+/g, ' ').trim(),
-        exec: task.exec,
+        argv: task.argv,
         manifest,
         kind,
         cwd,
@@ -353,8 +368,19 @@ async function runScan(): Promise<ScriptEntry[]> {
   }
 
   if (started === generation) {
-    cache = entries;
     await detectPackageManagers(entries, started);
+  }
+  // Published only once the runners are known. A caller that reached the cache
+  // while the detection walk was still going would find every Node package
+  // undetected, fall back to `npm`, and launch a pnpm workspace's scripts with
+  // the wrong runner. Nobody waits any longer for it: `runScan` already awaited
+  // detection before returning, so every caller queued on `scanning` did too.
+  //
+  // The generation is checked again after the await for the same reason it is
+  // checked inside the walk — a `resetSources` in the meantime means these
+  // entries describe manifests that have already changed.
+  if (started === generation) {
+    cache = entries;
   }
   return entries;
 }
@@ -438,7 +464,7 @@ function parsePackageJson(text: string): ParsedManifest | undefined {
   for (const [name, value] of Object.entries(scripts as Record<string, unknown>)) {
     const command = commandOf(value);
     if (command !== undefined) {
-      // No `exec`: the runner is resolved per package, on demand.
+      // No `argv`: the runner is resolved per package, on demand.
       tasks.push({ name, command });
     }
   }
@@ -524,7 +550,7 @@ function parseComposerJson(text: string): ParsedManifest | undefined {
       command: command ?? `composer ${name}`,
       // `run-script` rather than the bare form, so a script named after a
       // built-in subcommand still reaches the script.
-      exec: `composer run-script ${shellArg(name)}`,
+      argv: ['composer', 'run-script', name],
     });
   }
   return { tasks, packageName: typeof json?.name === 'string' ? json.name : undefined };
@@ -540,16 +566,16 @@ function parseComposerJson(text: string): ParsedManifest | undefined {
  */
 const DEFAULT_CARGO_COMMANDS: ReadonlyArray<string> = ['run', 'build', 'test', 'clippy', 'fmt'];
 
-const CARGO_COMMANDS: Record<string, string> = {
-  build: 'cargo build',
-  test: 'cargo test',
-  check: 'cargo check',
-  clippy: 'cargo clippy --all-targets',
-  fmt: 'cargo fmt',
-  bench: 'cargo bench',
-  doc: 'cargo doc --open',
-  clean: 'cargo clean',
-  update: 'cargo update',
+const CARGO_COMMANDS: Record<string, string[]> = {
+  build: ['cargo', 'build'],
+  test: ['cargo', 'test'],
+  check: ['cargo', 'check'],
+  clippy: ['cargo', 'clippy', '--all-targets'],
+  fmt: ['cargo', 'fmt'],
+  bench: ['cargo', 'bench'],
+  doc: ['cargo', 'doc', '--open'],
+  clean: ['cargo', 'clean'],
+  update: ['cargo', 'update'],
 };
 
 async function parseCargo(text: string, cwd: vscode.Uri): Promise<ParsedManifest | undefined> {
@@ -568,20 +594,25 @@ async function parseCargo(text: string, cwd: vscode.Uri): Promise<ParsedManifest
   const packageName = typeof pkg?.name === 'string' ? pkg.name : undefined;
   const commands = settingList('cargoCommands', DEFAULT_CARGO_COMMANDS);
   const tasks: RawTask[] = [];
+  // For cargo the command shown and the command run are the same thing, so the
+  // row is written once, as the vector, and read back for the label. A binary or
+  // an example name is the crate's text and stays one argument of its own.
+  const push = (name: string, argv: string[]) =>
+    tasks.push({ name, command: argv.join(' '), argv });
 
   if (commands.includes('run') && pkg) {
     // A crate with no binary cannot be run at all, and one with several needs to
     // be told which — so a bare `run` row is only correct for a single binary.
     const bins = await cargoBins(toml, cwd, packageName);
     if (bins.length === 1) {
-      tasks.push({ name: 'run', command: 'cargo run' });
+      push('run', ['cargo', 'run']);
     } else {
       for (const bin of bins) {
-        tasks.push({ name: `run: ${bin}`, command: `cargo run --bin ${bin}` });
+        push(`run: ${bin}`, ['cargo', 'run', '--bin', bin]);
       }
     }
     for (const example of await cargoExamples(toml, cwd)) {
-      tasks.push({ name: `example: ${example}`, command: `cargo run --example ${example}` });
+      push(`example: ${example}`, ['cargo', 'run', '--example', example]);
     }
   }
 
@@ -589,11 +620,10 @@ async function parseCargo(text: string, cwd: vscode.Uri): Promise<ParsedManifest
     if (command === 'run') {
       continue;
     }
-    tasks.push({ name: command, command: CARGO_COMMANDS[command] ?? `cargo ${command}` });
+    push(command, known(CARGO_COMMANDS, command) ?? ['cargo', command]);
   }
 
-  // For cargo the command shown and the command run are the same thing.
-  return { packageName, tasks: tasks.map((task) => ({ ...task, exec: task.command })) };
+  return { packageName, tasks };
 }
 
 /**
@@ -670,7 +700,7 @@ function parseCargoMake(text: string): ParsedManifest | undefined {
     out.push({
       name,
       command: describe(task) ?? `cargo make ${name}`,
-      exec: `cargo make ${shellArg(name)}`,
+      argv: ['cargo', 'make', name],
     });
   }
   return { tasks: out };
@@ -686,34 +716,34 @@ async function parsePyproject(text: string, cwd: vscode.Uri): Promise<ParsedMani
 
   const tasks: RawTask[] = [];
   const seen = new Set<string>();
-  const add = (name: string, value: unknown, exec: string, fallback: string) => {
+  const add = (name: string, value: unknown, argv: string[], fallback: string) => {
     if (seen.has(name)) {
       return;
     }
     seen.add(name);
-    tasks.push({ name, command: describe(value) ?? fallback, exec });
+    tasks.push({ name, command: describe(value) ?? fallback, argv });
   };
 
   // Each of these tables names its own runner, so nothing has to be detected:
   // a task under [tool.pdm.scripts] is a pdm task wherever it lives.
   for (const [name, value] of tableEntries(toml, 'tool', 'poetry', 'scripts')) {
-    add(name, value, `poetry run ${shellArg(name)}`, `poetry run ${name}`);
+    add(name, value, ['poetry', 'run', name], `poetry run ${name}`);
   }
   for (const [name, value] of tableEntries(toml, 'tool', 'pdm', 'scripts')) {
     // `_` holds options shared by every script rather than a script of its own.
     if (name !== '_') {
-      add(name, value, `pdm run ${shellArg(name)}`, `pdm run ${name}`);
+      add(name, value, ['pdm', 'run', name], `pdm run ${name}`);
     }
   }
   for (const [name, value] of tableEntries(toml, 'tool', 'rye', 'scripts')) {
-    add(name, value, `rye run ${shellArg(name)}`, `rye run ${name}`);
+    add(name, value, ['rye', 'run', name], `rye run ${name}`);
   }
 
   // poethepoet is normally installed into the project's own environment, so it
   // is reached through poetry when the project uses poetry.
-  const poe = tomlTable(toml, 'tool', 'poetry') ? 'poetry run poe' : 'poe';
+  const poe = tomlTable(toml, 'tool', 'poetry') ? ['poetry', 'run', 'poe'] : ['poe'];
   for (const [name, value] of tableEntries(toml, 'tool', 'poe', 'tasks')) {
-    add(name, value, `${poe} ${shellArg(name)}`, `${poe} ${name}`);
+    add(name, value, [...poe, name], `${poe.join(' ')} ${name}`);
   }
 
   // Hatch keeps one script table per environment; the default one is addressed
@@ -722,7 +752,7 @@ async function parsePyproject(text: string, cwd: vscode.Uri): Promise<ParsedMani
   for (const env of Object.keys(envs ?? {})) {
     for (const [name, value] of tableEntries(toml, 'tool', 'hatch', 'envs', env, 'scripts')) {
       const target = env === 'default' ? name : `${env}:${name}`;
-      add(target, value, `hatch run ${shellArg(target)}`, `hatch run ${target}`);
+      add(target, value, ['hatch', 'run', target], `hatch run ${target}`);
     }
   }
 
@@ -732,7 +762,7 @@ async function parsePyproject(text: string, cwd: vscode.Uri): Promise<ParsedMani
   const runner = await pythonRunner(toml, cwd);
   if (runner) {
     for (const [name, value] of tableEntries(toml, 'project', 'scripts')) {
-      add(name, value, `${runner} run ${shellArg(name)}`, `${runner} run ${name}`);
+      add(name, value, [runner, 'run', name], `${runner} run ${name}`);
     }
   }
 
@@ -788,7 +818,7 @@ function parsePipfile(text: string): ParsedManifest | undefined {
     tasks.push({
       name,
       command: describe(value) ?? `pipenv run ${name}`,
-      exec: `pipenv run ${shellArg(name)}`,
+      argv: ['pipenv', 'run', name],
     });
   }
   return { tasks };
@@ -837,7 +867,7 @@ function parseTox(text: string): ParsedManifest | undefined {
       return {
         name,
         command: description || `tox -e ${name}`,
-        exec: `tox -e ${shellArg(name)}`,
+        argv: ['tox', '-e', name],
       };
     }),
   };
@@ -866,7 +896,7 @@ function parseNoxfile(text: string): ParsedManifest | undefined {
       const definition = /^\s*def\s+([A-Za-z_]\w*)\s*\(/.exec(line);
       if (definition) {
         const name = named ?? definition[1];
-        tasks.push({ name, command: `nox -s ${name}`, exec: `nox -s ${shellArg(name)}` });
+        tasks.push({ name, command: `nox -s ${name}`, argv: ['nox', '-s', name] });
         armed = false;
         named = undefined;
       }
@@ -931,7 +961,7 @@ function parseMakefile(text: string): ParsedManifest | undefined {
       tasks.push({
         name,
         command: description || `make ${name}`,
-        exec: `make ${shellArg(name)}`,
+        argv: ['make', name],
       });
     }
   }
@@ -999,7 +1029,7 @@ function parseJustfile(text: string): ParsedManifest | undefined {
     tasks.push({
       name,
       command: description || `just ${name}${parameters ? ` ${parameters}` : ''}`,
-      exec: `just ${shellArg(name)}`,
+      argv: ['just', name],
     });
   }
 
@@ -1059,7 +1089,7 @@ function parseTaskfile(text: string): ParsedManifest | undefined {
     tasks.push({
       name: entry.name,
       command: description || `task ${entry.name}`,
-      exec: `task ${shellArg(entry.name)}`,
+      argv: ['task', entry.name],
     });
   }
 
@@ -1070,15 +1100,15 @@ function parseTaskfile(text: string): ParsedManifest | undefined {
 
 const DEFAULT_GO_COMMANDS: ReadonlyArray<string> = ['run', 'build', 'test', 'vet'];
 
-const GO_COMMANDS: Record<string, string> = {
-  run: 'go run .',
-  build: 'go build ./...',
-  test: 'go test ./...',
-  vet: 'go vet ./...',
-  fmt: 'go fmt ./...',
-  tidy: 'go mod tidy',
-  generate: 'go generate ./...',
-  bench: 'go test -bench=. ./...',
+const GO_COMMANDS: Record<string, string[]> = {
+  run: ['go', 'run', '.'],
+  build: ['go', 'build', './...'],
+  test: ['go', 'test', './...'],
+  vet: ['go', 'vet', './...'],
+  fmt: ['go', 'fmt', './...'],
+  tidy: ['go', 'mod', 'tidy'],
+  generate: ['go', 'generate', './...'],
+  bench: ['go', 'test', '-bench=.', './...'],
 };
 
 async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest | undefined> {
@@ -1091,8 +1121,8 @@ async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest
     if (command === 'run' && !hasMain) {
       continue;
     }
-    const exec = GO_COMMANDS[command] ?? `go ${command}`;
-    tasks.push({ name: command, command: exec, exec });
+    const argv = known(GO_COMMANDS, command) ?? ['go', command];
+    tasks.push({ name: command, command: argv.join(' '), argv });
   }
 
   return tasks.length > 0 ? { tasks, packageName: module?.[1] } : undefined;
@@ -1113,7 +1143,7 @@ function parseMise(text: string): ParsedManifest | undefined {
     out.push({
       name,
       command: describe(value) ?? `mise run ${name}`,
-      exec: `mise run ${shellArg(name)}`,
+      argv: ['mise', 'run', name],
     });
   }
   return { tasks: out };
@@ -1320,14 +1350,44 @@ async function listDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType]
   }
 }
 
-function shellArg(name: string): string {
-  return /^[\w.:@/=+-]+$/.test(name) ? name : JSON.stringify(name);
-}
-
 // --- launching ---------------------------------------------------------------
 
+/**
+ * The program and its arguments — what actually runs.
+ *
+ * A vector rather than a command line, all the way from the parser, because a
+ * task name is the manifest's text and the terminal is a shell: a name holding
+ * `$(…)`, a backtick or a space would otherwise be read as code on its way
+ * through. Handing VS Code the pieces lets it quote each one for the shell that
+ * terminal actually runs — sh, cmd.exe and PowerShell all want something
+ * different, and double quotes, which is what `JSON.stringify` produces, leave
+ * substitution alive in the first of them.
+ */
+export function launchArgv(script: ScriptEntry): string[] {
+  return script.argv ?? [...RUNNERS[resolvePackageManager(script)], script.name];
+}
+
+/** The same command as a person reads it: the row's tooltip and the picker. */
 export function commandFor(script: ScriptEntry): string {
-  return script.exec ?? RUNNERS[resolvePackageManager(script)](shellArg(script.name));
+  return launchArgv(script).map(displayArg).join(' ');
+}
+
+/**
+ * An argument that reads the same whatever the shell: word characters and the
+ * punctuation task names and paths are normally built from. Anything else — a
+ * space, a quote, `$`, a backtick — has to be quoted on its way to one, which
+ * is what `buildTask` asks VS Code for.
+ */
+export function plainArgument(value: string): boolean {
+  return /^[\w.:@/=+-]+$/.test(value);
+}
+
+/**
+ * Quoting for the eye alone — enough to show where an argument begins and ends.
+ * The quoting that reaches a shell is VS Code's; see `launchArgv`.
+ */
+function displayArg(value: string): string {
+  return plainArgument(value) ? value : JSON.stringify(value);
 }
 
 export function resolvePackageManager(script: ScriptEntry): PackageManager {
@@ -1336,9 +1396,13 @@ export function resolvePackageManager(script: ScriptEntry): PackageManager {
     return 'deno';
   }
 
-  const configured = setting<string>('packageManager', script.manifest) ?? 'auto';
-  if (configured && configured !== 'auto') {
-    return configured as PackageManager;
+  // Matched against the known runners rather than trusted: a settings.json can
+  // hold any string at all, and this one is the first word of a command line.
+  // Anything else — 'auto' included — falls through to what the scan detected.
+  const configured = setting<string>('packageManager', script.manifest);
+  const chosen = PACKAGE_MANAGERS.find((manager) => manager === configured);
+  if (chosen) {
+    return chosen;
   }
   return detected.get(script.cwd.toString()) ?? 'npm';
 }
