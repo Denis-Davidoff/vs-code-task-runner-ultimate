@@ -186,6 +186,27 @@ export const WATCH_GLOB = `**/{${[
   ]),
 ].join(',')}}`;
 
+/**
+ * Files whose mere existence adds or removes a row, rather than describing one.
+ *
+ * Some rows are not written down anywhere: cargo's `run` exists because the
+ * crate has a `src/main.rs`, one `run: <name>` per file or directory under
+ * `src/bin`, one `example: <name>` per entry under `examples`, and go's `run`
+ * because the module root has a `main.go`. None of that is in a manifest, so a
+ * manifest watcher never hears about it, and the list stayed a Refresh behind
+ * the crate — a library that has just gained a `main.rs` has a `run` to offer.
+ *
+ * The patterns match exactly what the parsers read: the direct entries of those
+ * two directories, plus the `main.rs` inside one, which is how an entry that is
+ * a directory is usually made. A file added deeper inside an example changes
+ * nothing about the list, and does not appear here.
+ *
+ * Watched for creation and deletion only. What is in these files is the
+ * compiler's business; only whether they are there is ours.
+ */
+export const SOURCE_GLOB =
+  '**/{src/main.rs,src/bin/*,src/bin/*/main.rs,examples/*,examples/*/main.rs,main.go}';
+
 export interface ScriptEntry {
   /** Stable identity of a task: its manifest plus the task name. */
   key: string;
@@ -328,22 +349,6 @@ async function runScan(): Promise<ScriptEntry[]> {
 
   const entries: ScriptEntry[] = [];
 
-  // How many files of one kind share a directory. A runner asked to find its own
-  // file picks by its own order — make prefers GNUmakefile to Makefile, task
-  // prefers Taskfile.yml to Taskfile.yaml, just refuses to choose at all — so
-  // where a directory holds two, neither row can leave the choice to the runner:
-  // the one it would not have picked would run the other file's task under its
-  // own name. Naming the file is the fix, and it is done only here, because a
-  // directory with one file is a command that already means what it says.
-  const rivals = new Map<string, number>();
-  for (const manifest of manifests) {
-    const kind = manifestKind(manifest);
-    if (kind) {
-      const key = `${kind}\u0000${directoryOf(manifest)}`;
-      rivals.set(key, (rivals.get(key) ?? 0) + 1);
-    }
-  }
-
   for (const manifest of manifests) {
     const kind = manifestKind(manifest);
     if (!kind || !enabled.has(ECOSYSTEM_OF[kind])) {
@@ -351,8 +356,7 @@ async function runScan(): Promise<ScriptEntry[]> {
     }
 
     const cwd = directoryOf(manifest);
-    const shared = (rivals.get(`${kind}\u0000${cwd}`) ?? 0) > 1;
-    const parsed = await parseManifest(manifest, kind, cwd, shared);
+    const parsed = await parseManifest(manifest, kind, cwd);
     if (!parsed || parsed.tasks.length === 0) {
       continue;
     }
@@ -440,17 +444,24 @@ async function parseManifest(
   uri: vscode.Uri,
   kind: SourceKind,
   cwd: vscode.Uri,
-  /** Set when a file of the same kind sits beside this one; see `runScan`. */
-  shared = false,
 ): Promise<ParsedManifest | undefined> {
   const text = await readText(uri);
   if (text === undefined) {
     return undefined;
   }
 
-  // Passed to the runners that search for their own file, and only when the
-  // search has more than one answer in this directory.
-  const file = shared ? path.posix.basename(uri.path) : undefined;
+  /**
+   * The file this row's tasks come from, for the runners that would otherwise
+   * go looking for one themselves.
+   *
+   * Always, and not only where the scan saw a second candidate beside it: what
+   * the scan sees is not what the runner sees. A GNUmakefile left out by
+   * `exclude`, or dropped when the manifest budget ran out, is still on disk and
+   * still the file `make` prefers — so a row from the Makefile would have run
+   * the other file's target of the same name. The command a row shows is the
+   * command it runs, and it names its own file to stay that way.
+   */
+  const file = path.posix.basename(uri.path);
 
   switch (kind) {
     case 'npm':
@@ -954,10 +965,11 @@ export const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?!=)\s*(.*)$/;
 /** `build: deps ## Build everything` — the convention every self-documenting Makefile uses. */
 const MAKE_DOC = /##\s*(.*)$/;
 
-function parseMakefile(text: string, file?: string): ParsedManifest | undefined {
-  // `-f` only where a sibling makefile would otherwise win the search; see
-  // `runScan`. The row names one file, so it has to run that one.
-  const runner = file ? ['make', '-f', file] : ['make'];
+function parseMakefile(text: string, file: string): ParsedManifest | undefined {
+  // make searches for GNUmakefile, then makefile, then Makefile, and this row
+  // belongs to one of them; see `parseManifest` for why the choice is never
+  // left to it.
+  const runner = ['make', '-f', file];
   const tasks: RawTask[] = [];
   const seen = new Set<string>();
   let doc = '';
@@ -1017,11 +1029,11 @@ function parseMakefile(text: string, file?: string): ParsedManifest | undefined 
  */
 export const JUST_RECIPE = /^@?([A-Za-z_][A-Za-z0-9_-]*)([^:\n]*):(?!=)/;
 
-function parseJustfile(text: string, file?: string): ParsedManifest | undefined {
-  // `--justfile` where a sibling justfile is in the way — which just answers by
-  // refusing to run at all, rather than by picking one. Its own default working
-  // directory is the justfile's, the directory the task already runs in.
-  const runner = file ? ['just', '--justfile', file] : ['just'];
+function parseJustfile(text: string, file: string): ParsedManifest | undefined {
+  // just, handed a justfile, takes its parent as the working directory — which
+  // is the directory the task runs in anyway. Left to search, it refuses to run
+  // at all where a second candidate sits beside this one.
+  const runner = ['just', '--justfile', file];
   const tasks: RawTask[] = [];
   let doc = '';
   let priv = false;
@@ -1084,10 +1096,10 @@ function parseJustfile(text: string, file?: string): ParsedManifest | undefined 
  * top-level `tasks:` — so the block is found by indentation rather than by
  * parsing YAML, which would mean bundling a parser for a list of keys.
  */
-function parseTaskfile(text: string, file?: string): ParsedManifest | undefined {
-  // `--taskfile` where task's own order of Taskfile.yml, Taskfile.yaml and the
-  // dist variants would have opened a different one of them.
-  const runner = file ? ['task', '--taskfile', file] : ['task'];
+function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
+  // task has its own order for Taskfile.yml, Taskfile.yaml and the dist
+  // variants, and would otherwise open whichever of them it prefers.
+  const runner = ['task', '--taskfile', file];
   const lines = text.split(/\r?\n/);
   const start = lines.findIndex((line) => /^tasks:\s*(#.*)?$/.test(line));
   if (start < 0) {

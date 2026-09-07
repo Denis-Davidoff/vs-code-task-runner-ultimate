@@ -9,6 +9,7 @@ import {
   resetSources,
   scriptKey,
   ScriptEntry,
+  SOURCE_GLOB,
   WATCH_GLOB,
 } from './sources';
 
@@ -142,6 +143,39 @@ function invalidate(): void {
   void activePicker?.reload();
 }
 
+/** How long a burst of file events is given to settle before the list is rebuilt. */
+const INVALIDATE_DELAY = 150;
+let invalidateTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * `invalidate`, once a burst of file events has stopped.
+ *
+ * A branch switch, an `npm install`, a `cargo new` — anything that touches
+ * several watched files at once — arrives as a run of events, and each one on
+ * its own drops the cache, abandons the scan the event before it started, and
+ * asks for another. Bumping the generation mid-scan is what makes that waste
+ * real rather than merely repeated: the work already done is thrown away. One
+ * rescan after the last event of the run is the same answer for a fraction of
+ * it.
+ *
+ * Only the filesystem goes through this. A person pressing Refresh, or changing
+ * a setting that decides what is scanned, gets the rescan straight away — the
+ * cost of a wait there is felt, and there is no burst to collapse.
+ */
+function invalidateSoon(): void {
+  clearTimeout(invalidateTimer);
+  invalidateTimer = setTimeout(() => {
+    invalidateTimer = undefined;
+    invalidate();
+  }, INVALIDATE_DELAY);
+}
+
+/** Drops a rescan that has been scheduled but not run — for `deactivate`. */
+function cancelInvalidate(): void {
+  clearTimeout(invalidateTimer);
+  invalidateTimer = undefined;
+}
+
 /**
  * Repaints both surfaces from the scripts already in hand. For changes to how a
  * script is presented — starred, renamed — where the manifests themselves have
@@ -258,12 +292,25 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(...createTree());
 
   const watcher = vscode.workspace.createFileSystemWatcher(WATCH_GLOB);
-  // The events carry the changed URI, which `invalidate` has no use for.
-  watcher.onDidChange(() => invalidate());
-  watcher.onDidCreate(() => invalidate());
-  watcher.onDidDelete(() => invalidate());
+  // The events carry the changed URI, which `invalidate` has no use for, and
+  // they arrive in runs, which is what `invalidateSoon` is for.
+  watcher.onDidChange(() => invalidateSoon());
+  watcher.onDidCreate(() => invalidateSoon());
+  watcher.onDidDelete(() => invalidateSoon());
+
+  // The files that are a row by being there at all — see `SOURCE_GLOB`. Changes
+  // to what is inside them are ignored, which is the third argument: a crate
+  // gains and loses a `run` row by gaining and losing its `src/main.rs`, and
+  // rescans nothing while it is being written.
+  const sourceWatcher = vscode.workspace.createFileSystemWatcher(SOURCE_GLOB, false, true, false);
+  sourceWatcher.onDidCreate(() => invalidateSoon());
+  sourceWatcher.onDidDelete(() => invalidateSoon());
+
   context.subscriptions.push(
     watcher,
+    sourceWatcher,
+    // A rescan waiting on its timer must not outlive the extension.
+    { dispose: cancelInvalidate },
     vscode.workspace.onDidChangeWorkspaceFolders(() => invalidate()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       // Anything that decides which manifests are read, or what is read out of
@@ -288,6 +335,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+  cancelInvalidate();
   running.clear();
   clearHint();
 }

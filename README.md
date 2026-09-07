@@ -133,9 +133,9 @@ monorepo.
 | | `Pipfile` | `[scripts]` | `pipenv run <name>` |
 | | `tox.ini` | `envlist` and `[testenv:*]` | `tox -e <env>` |
 | | `noxfile.py` | `@nox.session` functions | `nox -s <session>` |
-| **Make** | `Makefile`, `makefile`, `GNUmakefile` | the targets | `make <target>` |
-| **just** | `justfile`, `Justfile`, `.justfile` | the recipes | `just <recipe>` |
-| **go-task** | `Taskfile.yml` and friends | `tasks:` | `task <name>` |
+| **Make** | `Makefile`, `makefile`, `GNUmakefile` | the targets | `make -f <file> <target>` |
+| **just** | `justfile`, `Justfile`, `.justfile` | the recipes | `just --justfile <file> <recipe>` |
+| **go-task** | `Taskfile.yml` and friends | `tasks:` | `task --taskfile <file> <name>` |
 | **Go** | `go.mod` | the standard subcommands | `go test ./...`, … |
 | **PHP** | `composer.json` | `scripts` | `composer run-script <name>` |
 | **mise** | `mise.toml`, `.mise.toml` | `[tasks.*]` | `mise run <name>` |
@@ -144,12 +144,13 @@ Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's
 opened at all, which is also the fastest way to quieten a repository carrying a `Makefile` nobody
 runs.
 
-Where one directory holds two files the same runner would look for — a `Makefile` next to a
-`GNUmakefile`, `Taskfile.yml` next to `Taskfile.yaml` — the file is named on the command line
-(`make -f GNUmakefile <target>`, `task --taskfile Taskfile.yaml <name>`). Each of those runners has
-its own idea of which file wins the search, so without it a row from the losing file would run the
-other file's task of the same name. A directory with one such file is left alone: the plain command
-already means what the row says.
+Make, just and go-task are the three that would otherwise go looking for their own file, and each
+has its own idea of which one wins: `make` prefers a `GNUmakefile` to a `Makefile`, `task` prefers
+`Taskfile.yml` to `Taskfile.yaml`, and `just` refuses to choose at all. So a row from one of them
+names the file it came from — `make -f Makefile build` — and runs that file's task rather than
+whichever the runner would have opened. It is named every time, including where the directory looks
+like it holds only one: a file left out by `exclude`, or beyond the 2000-manifest cap, is invisible
+to the scan and still there for the runner.
 
 Descriptions are used where a format has them (`desc:` in a Taskfile, `description` in cargo-make
 and tox, `help` in a pdm script, `## text` on a Make target, the comment above a `just` recipe), and
@@ -707,6 +708,17 @@ manifest in [the table above](#what-gets-scanned), and equally a lock or config 
 `poetry.lock` and the rest of the [detection signals](#runner-detection). Adding or removing a task
 shows up on its own, in both the tree and an open dropdown. A setting that decides what is scanned —
 `sources`, `exclude`, `cargoCommands`, `goCommands`, `pythonRunner` — does the same.
+
+File events arrive in runs — a branch switch, an `npm install`, a `cargo new` — so a rescan waits
+for the run to stop rather than starting one per event and abandoning it on the next. **Refresh** and
+a change to one of the settings above skip that wait: neither comes in a burst, and both are somebody
+waiting for an answer.
+
+Some rows are not written down in any manifest, and those files count too: a crate offers `run`
+because it has a `src/main.rs`, a `run: <name>` for every entry under `src/bin`, an
+`example: <name>` for every entry under `examples`, and a Go module offers `run` because its root
+has a `main.go`. Creating or deleting one of those refreshes the list as a manifest would; editing
+one does not, because what is inside them is the compiler's business and not the list's.
 
 Detected runners are dropped along with it. That matters because `packageManager` and `engines` live
 in the very file being edited: switching a package from npm to pnpm has to change how its scripts
