@@ -52,6 +52,11 @@ Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?
 
 Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/task-runner-ultimate
 
+## Try another useful extension: AI Browser🏆 Claude + Codex.
+Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?itemName=DenysDavydov.tab-browser-ultimate
+
+Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/tab-browser-ultimate
+
 ### ▶ in the toolbar of every file
 
 The play icon sits in the editor title bar, so the whole workspace is one click away from wherever
