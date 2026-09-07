@@ -97,8 +97,10 @@ monorepo.
   <kbd>Shift</kbd>+<kbd>Enter</kbd> restarts, with a cleared terminal.
 - **Two ways to start one task** — [click the row](#clicking-a-row-versus-pressing-run) and the terminal
   comes up with it; press ▶ and it starts in the background, leaving you where you were.
-- **Show Terminal** — right-click a running task to go to its output, without stopping or restarting
-  anything.
+- **Click, click again, double-click** — one row, three gestures: run it, go back to its terminal,
+  stop it. Nothing running is ever a single click away from being killed.
+- **Show Terminal** — click a running row, or right-click it, to go to its output without stopping
+  or restarting anything.
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
   at the line the task is on, in all nine ecosystems; on a heading, **Open Manifest File** opens the
   file itself.
@@ -211,8 +213,8 @@ without scrolling; inside a group nothing moves — a running task spins in the 
 had, because a row that jumps when you start it is a row you have to find again to stop it. Set
 `taskRunnerUltimate.pinRunningTasks` to `true` if you would rather have the opposite: running tasks
 then come first inside their own group, in the tree and in the dropdown alike. Clicking
-a row toggles it — run if stopped, stop if running — and hovering one reveals inline
-☆ / ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as a real VS Code
+a row runs it, clicking a running one goes to its terminal, and a double click stops it —
+and hovering one reveals inline ☆ / ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as a real VS Code
 badge.
 
 #### Clicking a row versus pressing Run
@@ -223,14 +225,20 @@ Clicking the row **runs it and shows its terminal**. The whole row is one gestur
 and what you wanted was the output — starting a dev server and then going to look for its terminal
 is a step the click already meant.
 
+Clicking a row that is **already running** goes back to that terminal, and nothing else: a second
+look at a dev server's log is what that click is nearly always for. **Stopping it is a double
+click**, so a task is never killed by a click meant to find its output. Both gestures are written
+into the right-click menu — **Run (Click)**, **Stop (Double-Click)**, **Show Terminal (Click)** —
+next to the inline ▶ and ■ buttons, which still act on one press.
+
 The inline ▶ (and ⟳) **start it and leave you where you are**. That is the other intent: kicking off
 a build or a codegen next to the file you are reading, without the panel taking the editor's place.
 The terminal is still created and still keeps every line of output — it is one click away in the
 terminal dropdown, and the row spins meanwhile — it just does not come to the front.
 
-The way back is right-click → **Show Terminal**, on any running row: it brings up that task's
-terminal and focuses it, without stopping or restarting anything. It is offered on the rows under
-**OTHER TASKS** too, so a watcher some other extension started is one right-click from its output as
+The way back is a click on the running row, or right-click → **Show Terminal**: either brings up
+that task's terminal and focuses it, without stopping or restarting anything. Both work on the rows
+under **OTHER TASKS** too, so a watcher some other extension started is one click from its output as
 well.
 
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
@@ -472,17 +480,19 @@ they are Unicode 15, and an older emoji font would draw three empty boxes instea
 
 ### Reaching the row commands
 
-**Add to Favorites**, **Remove from Favorites**, **Go to Script Definition**, **Open Manifest
-File**, **Show Terminal**, **Edit Title…** and **Colour** all act on the row they were invoked from,
-so they live where there is a row to invoke them on:
+**Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Go to Script Definition**,
+**Open Manifest File**, **Show Terminal**, **Edit Title…** and **Colour** all act on the row they
+were invoked from, so they live where there is a row to invoke them on:
 
 | Command | Where |
 | --- | --- |
+| Run (Click) | a click on an idle row, and right-click — the label names the gesture, since a mouse has no keybinding to show there |
+| Stop (Double-Click) | a double click on a running row, and right-click; ■ inline on hover stops on one press |
 | Add to Favorites | ☆ inline on hover, and right-click |
 | Remove from Favorites | ★ inline on hover, and right-click |
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
 | Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; OTHER TASKS names no file and does not offer it |
-| Show Terminal | right-click only, on a running row — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
+| Show Terminal | a click on a running row, and right-click — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
 | Edit Title… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
 

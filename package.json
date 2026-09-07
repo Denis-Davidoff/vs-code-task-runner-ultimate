@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -132,8 +132,20 @@
       },
       {
         "command": "taskRunnerUltimate.toggleItem",
-        "title": "Run or Stop",
+        "title": "Run, Show Terminal or Stop",
         "category": "Task & Script Explorer"
+      },
+      {
+        "command": "taskRunnerUltimate.runItemMenu",
+        "title": "Run (Click)",
+        "category": "Task & Script Explorer",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskRunnerUltimate.stopItemMenu",
+        "title": "Stop (Double-Click)",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "taskRunnerUltimate.addFavorite",
@@ -191,7 +203,7 @@
       },
       {
         "command": "taskRunnerUltimate.showTerminal",
-        "title": "Show Terminal",
+        "title": "Show Terminal (Click)",
         "category": "Task & Script Explorer",
         "icon": "$(terminal)"
       },
@@ -365,6 +377,16 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?:running$/"
         },
         {
+          "command": "taskRunnerUltimate.runItemMenu",
+          "group": "0_actions@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:idle:/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopItemMenu",
+          "group": "0_actions@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+        },
+        {
           "command": "taskRunnerUltimate.openScript",
           "group": "0_open@1",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:/"
@@ -495,6 +517,14 @@
         },
         {
           "command": "taskRunnerUltimate.toggleItem",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.runItemMenu",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.stopItemMenu",
           "when": "false"
         },
         {

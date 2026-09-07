@@ -156,10 +156,21 @@ export function activate(context: vscode.ExtensionContext): void {
     // The buttons on a row start a task without pulling the terminal to the
     // front; clicking the row itself is the one that also shows it. See
     // `startScript`.
+    //
+    // `toggleItem` keeps its id — a row click is bound to it and so may a user's
+    // keybinding be — but no longer toggles: see `activateNode`.
     vscode.commands.registerCommand('taskRunnerUltimate.runItem', (node?: TreeNode) => runNode(node, false)),
     vscode.commands.registerCommand('taskRunnerUltimate.stopItem', (node?: TreeNode) => stopNode(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.restartItem', (node?: TreeNode) => restartNode(node, false)),
-    vscode.commands.registerCommand('taskRunnerUltimate.toggleItem', (node?: TreeNode) => toggleNode(node, true)),
+    vscode.commands.registerCommand('taskRunnerUltimate.toggleItem', (node?: TreeNode) => activateNode(node, true)),
+    // The same two actions again under their own ids, for the context menu. A
+    // menu entry takes its label from the command, and these labels carry the
+    // mouse gesture that does the same thing — "Run (Click)", "Stop
+    // (Double-Click)" — which the inline ▶ and ■ tooltips must not say, since a
+    // button is pressed, not clicked twice. Run reveals the terminal here
+    // because that is what the click it is named after does.
+    vscode.commands.registerCommand('taskRunnerUltimate.runItemMenu', (node?: TreeNode) => runNode(node, true)),
+    vscode.commands.registerCommand('taskRunnerUltimate.stopItemMenu', (node?: TreeNode) => stopNode(node)),
     // Two ids for one action: a menu entry takes its label from the command, and
     // "the task" and "the manifest" are two different things to promise.
     vscode.commands.registerCommand('taskRunnerUltimate.openScript', (node?: TreeNode) => openManifest(node)),
@@ -2095,7 +2106,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     item.description = node.execution.task.source ? `${node.execution.task.source} task` : 'task';
     item.iconPath = runningIcon();
     item.contextValue = 'foreignTask';
-    item.command = { command: 'taskRunnerUltimate.toggleItem', title: 'Stop', arguments: [node] };
+    item.command = { command: 'taskRunnerUltimate.toggleItem', title: 'Show Terminal', arguments: [node] };
     return item;
   }
 
@@ -2124,7 +2135,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   item.contextValue = `script:${isRunning ? 'running' : 'idle'}:${isFavorite(node.script) ? 'fav' : 'nofav'}`;
   item.command = {
     command: 'taskRunnerUltimate.toggleItem',
-    title: isRunning ? 'Stop' : 'Run',
+    title: isRunning ? 'Show Terminal' : 'Run',
     arguments: [node],
   };
   return item;
@@ -2417,12 +2428,57 @@ async function restartGroup(node: TreeNode | undefined): Promise<void> {
   }
 }
 
-async function toggleNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
-  if (executionOf(node)) {
-    await stopNode(node);
-  } else {
-    await runNode(node, reveal);
+/**
+ * How close two clicks on the same row have to sit to count as one double click.
+ * The tree hands out one command invocation per click and has no double-click
+ * event of its own, so the gesture is reconstructed from the timing here.
+ */
+const DOUBLE_CLICK_MS = 400;
+
+/** The row the previous click landed on, for the double-click test below. */
+let lastClick: { id: string; at: number } | undefined;
+
+/**
+ * What the double-click test compares. A script is its own key, which is stable
+ * across repaints; a foreign row has only the task behind it to be named by.
+ */
+function clickId(node: TreeNode): string {
+  if (node.kind === 'script') {
+    return `script:${node.script.key}`;
   }
+  return node.kind === 'foreign' ? `foreign:${node.execution.task.name}` : node.id;
+}
+
+/**
+ * Everything a click on the row itself does, in the three states a row can be
+ * clicked in.
+ *
+ * An idle row starts its task and brings up the output — one gesture saying
+ * "run this", where the output was the point. Clicking it again goes back to
+ * that output, because that is what a second look at a running dev server is
+ * almost always for. Stopping it is the double click: the destructive half of
+ * the old toggle now needs a gesture nobody arrives at while hunting for a log.
+ */
+async function activateNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
+  if (!node || !executionOf(node)) {
+    // A click that starts a task is never the opening half of a double click —
+    // the second one would land on a task that has only just begun to run.
+    lastClick = undefined;
+    await runNode(node, reveal);
+    return;
+  }
+
+  const id = clickId(node);
+  const now = Date.now();
+  const isDouble = lastClick?.id === id && now - lastClick.at <= DOUBLE_CLICK_MS;
+  // A double click is consumed rather than remembered, so a third click starts
+  // counting again instead of stopping whatever was started in between.
+  lastClick = isDouble ? undefined : { id, at: now };
+  if (isDouble) {
+    await stopNode(node);
+    return;
+  }
+  await showTerminal(node);
 }
 
 /**

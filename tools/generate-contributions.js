@@ -259,7 +259,17 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'Task & Script Explorer', icon: '$(play)' },
   { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
   { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
-  { command: 'taskRunnerUltimate.toggleItem', title: 'Run or Stop', category: 'Task & Script Explorer' },
+  // What a click on the row does, all three states of it — run, show, stop. Not
+  // a toggle any more; the id is kept because a user's keybinding may name it.
+  { command: 'taskRunnerUltimate.toggleItem', title: 'Run, Show Terminal or Stop', category: 'Task & Script Explorer' },
+  // Run and Stop a second time, for the right-click menu alone. A menu entry
+  // takes its label from the command, and these two spell out the mouse gesture
+  // that does the same thing — the closest a click gets to the keybinding a menu
+  // entry would otherwise show on its right. The titles cannot go on `runItem`
+  // and `stopItem`: those are the inline ▶ and ■, whose tooltips would then
+  // promise a double click for a button that acts on one press.
+  { command: 'taskRunnerUltimate.runItemMenu', title: 'Run (Click)', category: 'Task & Script Explorer', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopItemMenu', title: 'Stop (Double-Click)', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
   { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task & Script Explorer', icon: '$(star-empty)' },
   { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task & Script Explorer', icon: '$(star-full)' },
   { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task & Script Explorer', icon: '$(edit)' },
@@ -276,7 +286,7 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.showGroup', title: 'Show Package', category: 'Task & Script Explorer', icon: '$(eye)' },
   { command: 'taskRunnerUltimate.openScript', title: 'Go to Script Definition', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
   { command: 'taskRunnerUltimate.openManifest', title: 'Open Manifest File', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
-  { command: 'taskRunnerUltimate.showTerminal', title: 'Show Terminal', category: 'Task & Script Explorer', icon: '$(terminal)' },
+  { command: 'taskRunnerUltimate.showTerminal', title: 'Show Terminal (Click)', category: 'Task & Script Explorer', icon: '$(terminal)' },
   { command: 'taskRunnerUltimate.openTerminalEditor', title: 'Open Terminal in Editor Area', category: 'Task & Script Explorer', icon: '$(open-preview)' },
   // The swatch rides in the title; see PALETTE above for why it is not an icon.
   // None of these reach the command palette (see commandPalette below), so the
@@ -351,6 +361,13 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.stopGroup', group: 'inline@3', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
     // Non-inline groups are what the right-click menu shows.
     //
+    // The two gestures the row itself answers to, named in the menu so they are
+    // discoverable without being tried: a click runs an idle row, a double click
+    // stops a running one. `0_actions` sorts above `0_open`, so they head the
+    // menu the way they lead the row.
+    { command: 'taskRunnerUltimate.runItemMenu', group: '0_actions@1', when: `${inTree} && viewItem =~ /^script:idle:/` },
+    { command: 'taskRunnerUltimate.stopItemMenu', group: '0_actions@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
+    //
     // Opening the file is the one action here that is about the manifest rather
     // than the task, and it is deliberately not an inline button: a row already
     // carries up to three of those, and a fourth would push the ones you press
@@ -406,6 +423,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.stopItem', when: 'false' },
     { command: 'taskRunnerUltimate.restartItem', when: 'false' },
     { command: 'taskRunnerUltimate.toggleItem', when: 'false' },
+    { command: 'taskRunnerUltimate.runItemMenu', when: 'false' },
+    { command: 'taskRunnerUltimate.stopItemMenu', when: 'false' },
     // All three act on the row they were invoked from, so they are useless
     // without one.
     { command: 'taskRunnerUltimate.addFavorite', when: 'false' },
