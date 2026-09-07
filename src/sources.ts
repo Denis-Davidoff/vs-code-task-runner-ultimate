@@ -89,6 +89,17 @@ const MANIFEST_KINDS: Record<string, SourceKind> = {
   '.mise.toml': 'mise',
 };
 
+/** The kind of manifest a path is, by its file name alone. */
+function manifestKind(uri: vscode.Uri): SourceKind | undefined {
+  const name = path.posix.basename(uri.path);
+  return Object.prototype.hasOwnProperty.call(MANIFEST_KINDS, name) ? MANIFEST_KINDS[name] : undefined;
+}
+
+/** The directory a manifest sits in, which is also the directory its tasks run in. */
+function directoryOf(uri: vscode.Uri): vscode.Uri {
+  return uri.with({ path: path.posix.dirname(uri.path) });
+}
+
 /**
  * The scan glob, built from the enabled ecosystems only. `MAX_MANIFESTS` is a
  * budget, and a repository full of Makefiles must not spend it once `make` is
@@ -317,14 +328,31 @@ async function runScan(): Promise<ScriptEntry[]> {
 
   const entries: ScriptEntry[] = [];
 
+  // How many files of one kind share a directory. A runner asked to find its own
+  // file picks by its own order — make prefers GNUmakefile to Makefile, task
+  // prefers Taskfile.yml to Taskfile.yaml, just refuses to choose at all — so
+  // where a directory holds two, neither row can leave the choice to the runner:
+  // the one it would not have picked would run the other file's task under its
+  // own name. Naming the file is the fix, and it is done only here, because a
+  // directory with one file is a command that already means what it says.
+  const rivals = new Map<string, number>();
   for (const manifest of manifests) {
-    const kind = MANIFEST_KINDS[path.posix.basename(manifest.path)];
+    const kind = manifestKind(manifest);
+    if (kind) {
+      const key = `${kind}\u0000${directoryOf(manifest)}`;
+      rivals.set(key, (rivals.get(key) ?? 0) + 1);
+    }
+  }
+
+  for (const manifest of manifests) {
+    const kind = manifestKind(manifest);
     if (!kind || !enabled.has(ECOSYSTEM_OF[kind])) {
       continue;
     }
 
-    const cwd = manifest.with({ path: path.posix.dirname(manifest.path) });
-    const parsed = await parseManifest(manifest, kind, cwd);
+    const cwd = directoryOf(manifest);
+    const shared = (rivals.get(`${kind}\u0000${cwd}`) ?? 0) > 1;
+    const parsed = await parseManifest(manifest, kind, cwd, shared);
     if (!parsed || parsed.tasks.length === 0) {
       continue;
     }
@@ -412,11 +440,17 @@ async function parseManifest(
   uri: vscode.Uri,
   kind: SourceKind,
   cwd: vscode.Uri,
+  /** Set when a file of the same kind sits beside this one; see `runScan`. */
+  shared = false,
 ): Promise<ParsedManifest | undefined> {
   const text = await readText(uri);
   if (text === undefined) {
     return undefined;
   }
+
+  // Passed to the runners that search for their own file, and only when the
+  // search has more than one answer in this directory.
+  const file = shared ? path.posix.basename(uri.path) : undefined;
 
   switch (kind) {
     case 'npm':
@@ -438,11 +472,11 @@ async function parseManifest(
     case 'nox':
       return parseNoxfile(text);
     case 'make':
-      return parseMakefile(text);
+      return parseMakefile(text, file);
     case 'just':
-      return parseJustfile(text);
+      return parseJustfile(text, file);
     case 'taskfile':
-      return parseTaskfile(text);
+      return parseTaskfile(text, file);
     case 'go':
       return parseGoMod(text, cwd);
     case 'mise':
@@ -920,7 +954,10 @@ export const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?!=)\s*(.*)$/;
 /** `build: deps ## Build everything` — the convention every self-documenting Makefile uses. */
 const MAKE_DOC = /##\s*(.*)$/;
 
-function parseMakefile(text: string): ParsedManifest | undefined {
+function parseMakefile(text: string, file?: string): ParsedManifest | undefined {
+  // `-f` only where a sibling makefile would otherwise win the search; see
+  // `runScan`. The row names one file, so it has to run that one.
+  const runner = file ? ['make', '-f', file] : ['make'];
   const tasks: RawTask[] = [];
   const seen = new Set<string>();
   let doc = '';
@@ -961,7 +998,7 @@ function parseMakefile(text: string): ParsedManifest | undefined {
       tasks.push({
         name,
         command: description || `make ${name}`,
-        argv: ['make', name],
+        argv: [...runner, name],
       });
     }
   }
@@ -980,7 +1017,11 @@ function parseMakefile(text: string): ParsedManifest | undefined {
  */
 export const JUST_RECIPE = /^@?([A-Za-z_][A-Za-z0-9_-]*)([^:\n]*):(?!=)/;
 
-function parseJustfile(text: string): ParsedManifest | undefined {
+function parseJustfile(text: string, file?: string): ParsedManifest | undefined {
+  // `--justfile` where a sibling justfile is in the way — which just answers by
+  // refusing to run at all, rather than by picking one. Its own default working
+  // directory is the justfile's, the directory the task already runs in.
+  const runner = file ? ['just', '--justfile', file] : ['just'];
   const tasks: RawTask[] = [];
   let doc = '';
   let priv = false;
@@ -1029,7 +1070,7 @@ function parseJustfile(text: string): ParsedManifest | undefined {
     tasks.push({
       name,
       command: description || `just ${name}${parameters ? ` ${parameters}` : ''}`,
-      argv: ['just', name],
+      argv: [...runner, name],
     });
   }
 
@@ -1043,7 +1084,10 @@ function parseJustfile(text: string): ParsedManifest | undefined {
  * top-level `tasks:` — so the block is found by indentation rather than by
  * parsing YAML, which would mean bundling a parser for a list of keys.
  */
-function parseTaskfile(text: string): ParsedManifest | undefined {
+function parseTaskfile(text: string, file?: string): ParsedManifest | undefined {
+  // `--taskfile` where task's own order of Taskfile.yml, Taskfile.yaml and the
+  // dist variants would have opened a different one of them.
+  const runner = file ? ['task', '--taskfile', file] : ['task'];
   const lines = text.split(/\r?\n/);
   const start = lines.findIndex((line) => /^tasks:\s*(#.*)?$/.test(line));
   if (start < 0) {
@@ -1089,7 +1133,7 @@ function parseTaskfile(text: string): ParsedManifest | undefined {
     tasks.push({
       name: entry.name,
       command: description || `task ${entry.name}`,
-      argv: ['task', entry.name],
+      argv: [...runner, entry.name],
     });
   }
 

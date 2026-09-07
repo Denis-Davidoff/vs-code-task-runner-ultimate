@@ -636,6 +636,13 @@
     "configuration": {
       "title": "Task & Script Explorer",
       "properties": {
+        "taskRunnerUltimate.title": {
+          "type": "string",
+          "default": "Task & Script Explorer",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Heading over the list, in the activity bar view and in the File Explorer section alike. 1 to 100 characters; left empty it falls back to \"Task & Script Explorer\". The tooltip on the activity bar icon itself is fixed when the extension is installed and keeps the extension's name."
+        },
         "taskRunnerUltimate.packageManager": {
           "type": "string",
           "enum": [

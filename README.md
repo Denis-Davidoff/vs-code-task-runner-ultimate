@@ -144,6 +144,13 @@ Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's
 opened at all, which is also the fastest way to quieten a repository carrying a `Makefile` nobody
 runs.
 
+Where one directory holds two files the same runner would look for — a `Makefile` next to a
+`GNUmakefile`, `Taskfile.yml` next to `Taskfile.yaml` — the file is named on the command line
+(`make -f GNUmakefile <target>`, `task --taskfile Taskfile.yaml <name>`). Each of those runners has
+its own idea of which file wins the search, so without it a row from the losing file would run the
+other file's task of the same name. A directory with one such file is left alone: the plain command
+already means what the row says.
+
 Descriptions are used where a format has them (`desc:` in a Taskfile, `description` in cargo-make
 and tox, `help` in a pdm script, `## text` on a Make target, the comment above a `just` recipe), and
 the command itself is shown when it does not.
@@ -290,6 +297,24 @@ The view header holds four actions. **Restart all** (⟳) and **stop all** (◼)
 something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
 the **menu** (☰) are always there. Stop-all and restart-all reach every running task, including ones
 this extension did not start.
+
+### Renaming the heading
+
+`taskRunnerUltimate.title` is what the section header says — `Task & Script Explorer` until you make
+it something shorter, or something in your own language:
+
+```json
+"taskRunnerUltimate.title": "Скрипты"
+```
+
+It lands on both places the tree is drawn: the view in the activity bar and the section at the foot
+of the File Explorer. One character is enough and a hundred is the ceiling; an empty string, or one
+with nothing but spaces in it, falls back to the default rather than leaving a header with nothing
+to read.
+
+What a rename does not reach is the tooltip on the activity bar icon itself. A view container's
+title is read out of the manifest when the extension is installed and there is no API to change it
+afterwards, so the icon keeps the extension's own name.
 
 ### The menu
 
@@ -619,6 +644,7 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 
 | Setting | Default | What it does |
 | --- | --- | --- |
+| `title` | `Task & Script Explorer` | The heading over the list — in the activity bar view and in the File Explorer section alike. 1 to 100 characters; left empty it goes back to the default. See [Renaming the heading](#renaming-the-heading). |
 | `sources` | all nine | Which ecosystems are scanned: `node`, `rust`, `python`, `make`, `just`, `task`, `go`, `php`, `mise`. A removed one is never read. |
 | `packageManager` | `auto` | Forces `npm`, `yarn`, `pnpm`, `bun` or `deno` instead of [detecting it](#runner-detection). Node only: `deno.json(c)` ignores it, and no other ecosystem is affected. |
 | `cargoCommands` | `run`, `build`, `test`, `clippy`, `fmt` | The cargo subcommands every crate gets — see [Rust](#rust). |

@@ -114,6 +114,15 @@ const SCAN_SETTINGS = ['exclude', 'sources', 'cargoCommands', 'goCommands', 'pyt
 /** Settings that only change how the list is drawn — no rescan, just a repaint. */
 const DISPLAY_SETTINGS = ['packageManager', 'categories', 'colorIcons', 'pinRunningTasks'];
 
+/**
+ * The heading the two views wear until the `title` setting says otherwise. The
+ * same string as the `name` in contributes.views, which is what VS Code draws
+ * before the extension has had a chance to say anything.
+ */
+const DEFAULT_TITLE = 'Task & Script Explorer';
+/** Longest heading accepted, matching the `maxLength` in the setting's schema. */
+const TITLE_LIMIT = 100;
+
 /** Script key -> its running task execution. */
 const running = new Map<string, vscode.TaskExecution>();
 
@@ -268,6 +277,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (event.affectsConfiguration('taskRunnerUltimate.showInStatusBar')) {
         syncStatusBar(context);
       }
+      if (event.affectsConfiguration('taskRunnerUltimate.title')) {
+        syncTitles();
+      }
     }),
   );
 
@@ -303,6 +315,42 @@ function onStateChanged(): void {
   for (const view of [treeView, explorerTreeView]) {
     if (view) {
       view.badge = badge;
+    }
+  }
+}
+
+/**
+ * The heading over the list: whatever the user called it, or the extension's own
+ * name.
+ *
+ * The bounds are enforced here as well as declared in the setting's schema. A
+ * settings.json edited by hand is only warned about, so the value still arrives:
+ * an empty heading would leave the section with nothing to read or click on, and
+ * a hundred characters is already more than the header row can show before the
+ * badge and the buttons are pushed off it.
+ */
+function viewTitle(): string {
+  // Read as `unknown` and typed here: a schema is what the settings editor
+  // enforces, not what `get` returns, and a heading that is a number by mistake
+  // would otherwise throw on its way to being trimmed — during activation.
+  const configured = vscode.workspace.getConfiguration('taskRunnerUltimate').get<unknown>('title');
+  const text = typeof configured === 'string' ? configured.trim() : '';
+  // Cut by code points rather than by `slice`, which counts UTF-16 units and
+  // would leave half an emoji behind at the boundary.
+  return text ? Array.from(text).slice(0, TITLE_LIMIT).join('') : DEFAULT_TITLE;
+}
+
+/**
+ * Puts that heading on both views. The activity bar container keeps the name it
+ * was installed with — a container's title is read from the manifest once and
+ * there is no API to change it — so what a rename reaches is the section header
+ * inside the sidebar, in the activity bar and in the File Explorer alike.
+ */
+function syncTitles(): void {
+  const title = viewTitle();
+  for (const view of [treeView, explorerTreeView]) {
+    if (view) {
+      view.title = title;
     }
   }
 }
@@ -1869,6 +1917,7 @@ function createTree(): vscode.Disposable[] {
     dragAndDropController,
   });
   explorerTreeView = explorerView;
+  syncTitles();
 
   const explorerFolds = [
     explorerView.onDidCollapseElement(({ element }) => rememberCollapse(element, true)),
@@ -2577,19 +2626,39 @@ function terminalFor(task: vscode.Task): vscode.Terminal | undefined {
   }
 
   // Nothing matched whole, so fall back to containment — which is what catches
-  // a naming form this list does not know yet. One hit is the answer.
-  const loose = vscode.window.terminals.filter((terminal) => terminal.name.includes(task.name));
+  // a naming form this list does not know yet. A terminal that names another of
+  // the workspace's folders is dropped first: `scripts: dev (a)` is not the
+  // terminal of folder b's `dev`, and it is the only terminal in the window
+  // holding that name, so without this it would be the single hit below.
+  const loose = vscode.window.terminals.filter(
+    (terminal) => terminal.name.includes(task.name) && !namesAnotherFolder(terminal.name, folder),
+  );
   if (loose.length <= 1) {
     return loose[0];
   }
-  // Several is a multi-root workspace where two folders each run a task of this
-  // name, and the folder is the only thing that tells their terminals apart.
-  // Taking the first would show one folder's log for the other folder's task, so
-  // an ambiguity nothing resolves is reported as a miss instead.
+  // Several left is a multi-root workspace where two folders each run a task of
+  // this name, and the folder is the only thing that tells their terminals
+  // apart. Taking the first would show one folder's log for the other folder's
+  // task, so an ambiguity nothing resolves is reported as a miss instead.
   const scoped = folder
     ? loose.filter((terminal) => terminal.name.includes(`(${folder.name})`))
     : [];
   return scoped.length === 1 ? scoped[0] : undefined;
+}
+
+/**
+ * Whether a terminal's name carries the mark of a workspace folder that is not
+ * the one asked about — `(other)`, the suffix VS Code adds in a multi-root
+ * window.
+ *
+ * Only the folders this window actually has count. Our own task names carry a
+ * parenthesised path of their own — `dev (packages/api)` — and rejecting every
+ * parenthesis would throw away the terminal that is the right answer.
+ */
+function namesAnotherFolder(name: string, folder: vscode.WorkspaceFolder | undefined): boolean {
+  return (vscode.workspace.workspaceFolders ?? []).some(
+    (other) => other.name !== folder?.name && name.includes(`(${other.name})`),
+  );
 }
 
 // --- picker ------------------------------------------------------------------
@@ -2908,8 +2977,31 @@ function waitForEnd(execution: vscode.TaskExecution): Promise<void> {
   });
 }
 
+/**
+ * Whether two task objects stand for the same task. Deliberately looser than
+ * identity: the task system can hand out a new `TaskExecution` for a task it is
+ * already running, and `waitForEnd` has to recognise the end of the one it was
+ * given even when the event carries a different object.
+ *
+ * The scope is part of the comparison because a definition need not carry the
+ * folder. Ours does — the manifest's URI is in it — but the built-in npm
+ * provider's is `{ type, script, path }`, identical for a `dev` script in the
+ * root of two workspace folders, and taking one folder's end event for the
+ * other's would let a restart start a second copy while the first still holds
+ * its port.
+ */
 function sameTask(a: vscode.Task, b: vscode.Task): boolean {
-  return a.name === b.name && a.source === b.source && JSON.stringify(a.definition) === JSON.stringify(b.definition);
+  return (
+    a.name === b.name &&
+    a.source === b.source &&
+    scopeKey(a) === scopeKey(b) &&
+    JSON.stringify(a.definition) === JSON.stringify(b.definition)
+  );
+}
+
+/** A task's scope as one comparable string: a folder's URI, or the scope itself. */
+function scopeKey(task: vscode.Task): string {
+  return typeof task.scope === 'object' ? task.scope.uri.toString() : String(task.scope ?? '');
 }
 
 function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
@@ -2925,9 +3017,7 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
     folder ?? vscode.TaskScope.Workspace,
     where ? `${script.name} (${where})` : script.name,
     TASK_SOURCE,
-    // The program and its arguments handed over as pieces rather than as one
-    // command line: see `launchArgv`, and `shellArgument` for the quoting.
-    new vscode.ShellExecution(argv[0], argv.slice(1).map(shellArgument), { cwd: script.cwd.fsPath }),
+    executionFor(argv, script.cwd.fsPath),
   );
   task.presentationOptions = {
     reveal: reveal ? vscode.TaskRevealKind.Always : vscode.TaskRevealKind.Never,
@@ -2938,6 +3028,49 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
     showReuseMessage: false,
   };
   return task;
+}
+
+/**
+ * How the argv actually gets run.
+ *
+ * A shell, normally, because that is where a project's tools are: PATH as the
+ * user's own profile leaves it — with the nvm, asdf and mise shims on it — is
+ * the difference between `pnpm` being found and not. The arguments reach it
+ * quoted; see `shellArgument`.
+ *
+ * Unless one of them cannot be quoted at all. Strong quoting wraps a value in
+ * the shell's quote character, and a value carrying that same character closes
+ * the quote early: `task'$(printf X)'` leaves `'…'` as `task`, a substitution
+ * and an empty string, which is a name from a manifest being read as code. Such
+ * a task is handed to the process runner instead, which passes the pieces to
+ * the OS and never builds a line for anything to interpret.
+ *
+ * What that costs is the shell's PATH, and the trade is the right way round: a
+ * name like that is somewhere between rare and hostile, and `npm` not being
+ * found is a better outcome than running what the manifest did not name.
+ */
+function executionFor(argv: string[], cwd: string): vscode.ShellExecution | vscode.ProcessExecution {
+  if (argv.every(quotable)) {
+    return new vscode.ShellExecution(argv[0], argv.slice(1).map(shellArgument), { cwd });
+  }
+  return new vscode.ProcessExecution(argv[0], argv.slice(1), { cwd });
+}
+
+/**
+ * Whether strong quoting is enough to make a value literal.
+ *
+ * A quote character of either kind is what breaks out of it, whichever shell is
+ * in play — `'` for sh and PowerShell, `"` for cmd.exe — so neither is let
+ * through. A control character goes with them: a newline inside a cmd.exe
+ * command line ends the line, and what follows it is the next command. And on
+ * Windows so does `%`, which cmd.exe expands inside double quotes, where the
+ * `^` that escapes it elsewhere is itself literal.
+ */
+function quotable(value: string): boolean {
+  if (/['"\u0000-\u001f]/.test(value)) {
+    return false;
+  }
+  return process.platform !== 'win32' || !value.includes('%');
 }
 
 /**
