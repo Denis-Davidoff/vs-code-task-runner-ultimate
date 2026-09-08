@@ -233,6 +233,15 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('taskRunnerUltimate.addFavorite', (node?: TreeNode) => setFavorite(node, true)),
     vscode.commands.registerCommand('taskRunnerUltimate.removeFavorite', (node?: TreeNode) => setFavorite(node, false)),
+    // The two halves of one toggle. Two ids rather than one, for the same reason
+    // the star has two: a menu entry takes its label from the command, and the
+    // row has to say which way pressing it goes.
+    vscode.commands.registerCommand('taskRunnerUltimate.addConfirmation', (node?: TreeNode) =>
+      setConfirmation(node, true),
+    ),
+    vscode.commands.registerCommand('taskRunnerUltimate.removeConfirmation', (node?: TreeNode) =>
+      setConfirmation(node, false),
+    ),
     vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
     // The two eyes on a package heading, one edit to one group each, so they take
     // the row they were clicked on and nothing else. Reordering has no command of
@@ -444,6 +453,7 @@ const GROUP_ORDER_KEY = 'groupOrder';
 const COLLAPSED_KEY = 'collapsed';
 const COLORS_KEY = 'colors';
 const ICONS_KEY = 'icons';
+const CONFIRM_KEY = 'confirmations';
 
 let storage: vscode.Memento | undefined;
 /** This extension's `publisher.name`, for the query that filters the settings editor. */
@@ -503,6 +513,77 @@ async function setFavorite(node: TreeNode | undefined, favorite: boolean): Promi
   }
   await storage?.update(FAVORITES_KEY, refs);
   repaint();
+}
+
+// --- run confirmations -------------------------------------------------------
+
+/**
+ * The tasks that ask before they start or stop.
+ *
+ * A toggle on the row rather than a setting, because what wants a second thought
+ * is one `deploy` among forty and naming it in settings.json would mean spelling
+ * out a ref nobody ever sees. Stored as a list of script refs, the favorites'
+ * shape: being in the list is the "on", and there is no "off" entry to keep.
+ *
+ * Only a script row can carry one. A package heading runs nothing of its own, and
+ * a foreign task is somebody else's execution, alive only while it runs, so
+ * neither has anything stable to file a flag against.
+ */
+function confirmRefs(): string[] {
+  const stored = storage?.get<unknown>(CONFIRM_KEY);
+  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+}
+
+function needsConfirmation(script: ScriptEntry): boolean {
+  return confirmRefs().includes(scriptRef(script));
+}
+
+/** The two halves of the toggle in the context menu, one command each. */
+async function setConfirmation(node: TreeNode | undefined, on: boolean): Promise<void> {
+  if (node?.kind !== 'script') {
+    return;
+  }
+  const ref = scriptRef(node.script);
+  const refs = confirmRefs().filter((item) => item !== ref);
+  if (on) {
+    refs.push(ref);
+  }
+  await storage?.update(CONFIRM_KEY, refs);
+  repaint();
+}
+
+/**
+ * What the dialog says, per action. Restart is its own entry rather than a run
+ * asked after a stop: one gesture is one question, and a row that asked twice
+ * would be a row nobody restarts.
+ */
+const CONFIRM_ACTIONS = {
+  run: { button: 'Run', detail: 'This task asks before it starts.' },
+  stop: { button: 'Stop', detail: 'This task asks before it stops.' },
+  restart: { button: 'Restart', detail: 'This task asks before it stops and starts again.' },
+} as const;
+
+type ConfirmAction = keyof typeof CONFIRM_ACTIONS;
+
+/**
+ * Whether the action may go ahead: straight through for a row with no
+ * confirmation on it, and after a modal for one that has.
+ *
+ * Only the actions aimed at a single row ask. Stop All, and the stop and restart
+ * on a package heading, are already the deliberate gesture the flag exists to
+ * make you perform — a dialog per row there would turn one decision into ten.
+ */
+async function confirmScript(script: ScriptEntry, action: ConfirmAction): Promise<boolean> {
+  if (!needsConfirmation(script)) {
+    return true;
+  }
+  const { button, detail } = CONFIRM_ACTIONS[action];
+  const answer = await vscode.window.showWarningMessage(
+    `${button} "${displayName(script)}"?`,
+    { modal: true, detail: `${detail} Turn that off with "Remove Confirmation" in its context menu.` },
+    button,
+  );
+  return answer === button;
 }
 
 function customTitles(): Record<string, string> {
@@ -1225,7 +1306,96 @@ function pinRunning(scripts: ScriptEntry[]): ScriptEntry[] {
  * is the order a drag reads and rewrites.
  */
 async function savedOrder(): Promise<ScriptEntry[]> {
-  return orderedGroups(orderedScripts(await collectScripts()));
+  const scripts = await collectScripts();
+  // Done here rather than in the scan itself: this is the one call both surfaces
+  // go through, and it is the only place that holds a fresh list and the stores
+  // that annotate it at the same time.
+  await pruneStaleRefs(scripts);
+  return orderedGroups(orderedScripts(scripts));
+}
+
+// --- pruning what the manifests no longer declare -----------------------------
+
+/**
+ * The group half of a ref — everything before the `::` that `scriptRef` joins
+ * with. `undefined` when there is no `::` in it at all, which is a group's own
+ * ref or one of the built-in group ids: a manifest path never contains the
+ * separator, so a ref without one is not a task's.
+ */
+function groupOfRef(ref: string): string | undefined {
+  const at = ref.indexOf('::');
+  return at === -1 ? undefined : ref.slice(0, at);
+}
+
+/** The scan the prune below has already run against, so it runs once per scan. */
+let prunedScan: ScriptEntry[] | undefined;
+
+/**
+ * Forgets every stored annotation whose task its manifest no longer declares.
+ *
+ * A `deploy` script deleted from a package.json used to leave its star, its
+ * colour and its rename behind forever — invisible, but counted by the menu and
+ * ready to reattach itself to a future script that happens to take the name back.
+ *
+ * The test is deliberately narrow: a ref goes only when the manifest it names was
+ * part of this scan and did not declare it. That is the difference between "the
+ * task is gone" and "the file is not here right now" — a closed workspace folder,
+ * an ecosystem switched off in `sources`, a scan cut short at the manifest cap —
+ * and refs of the second kind keep everything, which is the rule the favorites
+ * and the saved order already followed.
+ *
+ * Only the stores keyed by a task are touched. Hidden packages, folded groups and
+ * the order of the headings are keyed by a manifest, and a manifest losing a
+ * script says nothing about whether the manifest is still there.
+ */
+async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
+  if (prunedScan === scripts) {
+    return;
+  }
+  prunedScan = scripts;
+
+  const scanned = new Set(scripts.map(groupRef));
+  const live = new Set(scripts.map(scriptRef));
+  const gone = (ref: string): boolean => {
+    const group = groupOfRef(ref);
+    return group !== undefined && scanned.has(group) && !live.has(ref);
+  };
+
+  for (const [key, refs] of [
+    [FAVORITES_KEY, favoriteRefs()],
+    [CONFIRM_KEY, confirmRefs()],
+  ] as const) {
+    const kept = refs.filter((ref) => !gone(ref));
+    if (kept.length !== refs.length) {
+      await storage?.update(key, kept);
+    }
+  }
+
+  for (const [key, entries] of [
+    [TITLES_KEY, customTitles()],
+    [COLORS_KEY, customColors()],
+    [ICONS_KEY, customIcons()],
+  ] as const) {
+    const kept = Object.fromEntries(Object.entries(entries).filter(([ref]) => !gone(ref)));
+    if (Object.keys(kept).length !== Object.keys(entries).length) {
+      await storage?.update(key, kept);
+    }
+  }
+
+  const orders = manualOrders();
+  const nextOrders: Record<string, string[]> = {};
+  for (const [scope, refs] of Object.entries(orders)) {
+    const kept = refs.filter((ref) => !gone(ref));
+    // A scope with nothing left in it is a key with nothing behind it, and the
+    // menu counts scopes rather than refs — an empty one would read as a list
+    // still waiting to be put back.
+    if (kept.length > 0) {
+      nextOrders[scope] = kept;
+    }
+  }
+  if (JSON.stringify(nextOrders) !== JSON.stringify(orders)) {
+    await storage?.update(ORDER_KEY, nextOrders);
+  }
 }
 
 /**
@@ -1315,11 +1485,12 @@ async function showMenu(): Promise<void> {
   const favorites = favoriteRefs().length;
   const colors = Object.keys(customColors()).length;
   const icons = Object.keys(customIcons()).length;
+  const confirmations = confirmRefs().length;
   const hidden = hiddenRefs().length;
   const collapsed = foldedRefs().size;
   const reordered = orders + (groupOrder().length > 0 ? 1 : 0);
   const appliedStyles = titles + colors + icons;
-  const allChanges = appliedStyles + reordered + favorites + hidden + collapsed;
+  const allChanges = appliedStyles + reordered + favorites + confirmations + hidden + collapsed;
 
   const resetStyles: ResetStore = {
     keys: [TITLES_KEY, COLORS_KEY, ICONS_KEY],
@@ -1381,6 +1552,15 @@ async function showMenu(): Promise<void> {
       confirm: 'Remove favorites',
       detail: 'The starred rows at the top disappear. The tasks themselves stay in their packages.',
     },
+    {
+      keys: [CONFIRM_KEY],
+      icon: 'question',
+      name: 'Reset all confirmations',
+      count: confirmations,
+      held: `${confirmations} guarded`,
+      confirm: 'Reset confirmations',
+      detail: 'Every task that asks before it starts or stops goes back to starting and stopping straight away.',
+    },
   ];
 
   const showHidden: ResetStore = {
@@ -1401,6 +1581,7 @@ async function showMenu(): Promise<void> {
       ORDER_KEY,
       GROUP_ORDER_KEY,
       FAVORITES_KEY,
+      CONFIRM_KEY,
       HIDDEN_KEY,
       COLLAPSED_KEY,
     ],
@@ -1410,7 +1591,7 @@ async function showMenu(): Promise<void> {
     held: `${allChanges} saved ${allChanges === 1 ? 'change' : 'changes'}`,
     confirm: 'Reset project',
     detail:
-      'Every custom title, colour, icon, favorite, hidden package, manual sort order, and saved folded state is cleared for this project.',
+      'Every custom title, colour, icon, favorite, confirmation, hidden package, manual sort order, and saved folded state is cleared for this project.',
     alwaysConfirm: true,
   };
 
@@ -2224,7 +2405,15 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   // the storage ref, which trades uniqueness for portability.
   item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
   item.description = scriptDescription(node.script, node.inFavorites);
-  item.tooltip = `${commandFor(node.script)}\n${node.script.location}`;
+  // The confirmation has nothing on the row itself — a badge for a state you set
+  // once and then want to forget about would cost a column of every row to say
+  // nothing about most of them — so the tooltip is where it is readable without
+  // opening the context menu that toggles it.
+  item.tooltip = [
+    commandFor(node.script),
+    node.script.location,
+    ...(needsConfirmation(node.script) ? ['Asks before it starts or stops.'] : []),
+  ].join('\n');
   const tint = nodeColor(node);
   item.iconPath = iconFor(node.script, isRunning, tint);
   // A painted task carries the same decoration trick the headings do, which is
@@ -2236,9 +2425,17 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (tint) {
     item.resourceUri = decorationUri(tint, scriptRef(node.script));
   }
-  // Three independent axes in one value, matched a piece at a time by the
-  // `when` clauses in contributes.menus.
-  item.contextValue = `script:${isRunning ? 'running' : 'idle'}:${isFavorite(node.script) ? 'fav' : 'nofav'}`;
+  // Four independent axes in one value, matched a piece at a time by the
+  // `when` clauses in contributes.menus. Each pair is spelled so that neither
+  // half is a substring of the other at a `:` boundary — `:fav:` cannot be found
+  // inside `:nofav:` — which is what lets one axis be matched without the three
+  // around it having to be written out.
+  item.contextValue = [
+    'script',
+    isRunning ? 'running' : 'idle',
+    isFavorite(node.script) ? 'fav' : 'nofav',
+    needsConfirmation(node.script) ? 'confirm' : 'noconfirm',
+  ].join(':');
   item.command = {
     command: 'taskRunnerUltimate.toggleItem',
     title: isRunning ? 'Show Terminal' : 'Run',
@@ -2463,16 +2660,20 @@ function executionOf(node: TreeNode | undefined): vscode.TaskExecution | undefin
 }
 
 async function runNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
-  if (node?.kind === 'script') {
+  if (node?.kind === 'script' && (await confirmScript(node.script, 'run'))) {
     await startScript(node.script, reveal);
   }
 }
 
 async function stopNode(node: TreeNode | undefined): Promise<void> {
   const execution = executionOf(node);
-  if (execution) {
-    await stopExecution(execution);
+  if (!execution) {
+    return;
   }
+  if (node?.kind === 'script' && !(await confirmScript(node.script, 'stop'))) {
+    return;
+  }
+  await stopExecution(execution);
 }
 
 async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
@@ -2484,8 +2685,20 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
     await vscode.tasks.executeTask(task);
     return;
   }
-  await stopNode(node);
-  await runNode(node, reveal);
+  if (node?.kind !== 'script') {
+    return;
+  }
+  // Asked once, for the restart, and then carried out through the primitives
+  // rather than through `stopNode` and `runNode` — those would ask again, twice,
+  // for the halves of the one thing that has already been agreed to.
+  if (!(await confirmScript(node.script, 'restart'))) {
+    return;
+  }
+  const execution = executionOf(node);
+  if (execution) {
+    await stopExecution(execution);
+  }
+  await startScript(node.script, reveal);
 }
 
 /** Stops everything the task system currently runs, ours and foreign alike. */
@@ -2761,7 +2974,15 @@ async function showScriptPicker(): Promise<void> {
   picker.placeholder = 'Enter — run / stop · Shift+Enter or ⟳ — restart';
   picker.matchOnDescription = true;
 
+  // A confirmation modal takes the focus, which closes the quick pick under it,
+  // so a handler that started before the modal can come back to a picker that is
+  // gone. The flag is what keeps it from writing to one.
+  let gone = false;
+
   const render = () => {
+    if (gone) {
+      return;
+    }
     const previous = picker.activeItems[0];
     picker.items = buildItems(scripts);
     const restored = picker.items.find(
@@ -2802,9 +3023,12 @@ async function showScriptPicker(): Promise<void> {
     }
     if (item.script && !running.has(item.script.key)) {
       // Starting: hide so the task terminal is not covered by the picker.
-      const script = item.script;
+      // Through `runNode` rather than `startScript`, so a task that asks before
+      // it starts asks here too — a modal would dismiss the picker anyway, which
+      // is what the hide above has already done.
+      const node = nodeOf(item);
       picker.hide();
-      await startScript(script, true);
+      await runNode(node, true);
       return;
     }
     await stopNode(nodeOf(item));
@@ -2812,6 +3036,7 @@ async function showScriptPicker(): Promise<void> {
   });
 
   picker.onDidHide(() => {
+    gone = true;
     activePicker = undefined;
     void vscode.commands.executeCommand('setContext', CONTEXT_PICKER_OPEN, false);
     picker.dispose();

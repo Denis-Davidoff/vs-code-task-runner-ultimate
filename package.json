@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.6.8",
+  "version": "0.7.0",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -158,6 +158,18 @@
         "title": "Remove from Favorites",
         "category": "Task & Script Explorer",
         "icon": "$(star-full)"
+      },
+      {
+        "command": "taskRunnerUltimate.addConfirmation",
+        "title": "Add Confirmation",
+        "category": "Task & Script Explorer",
+        "icon": "$(question)"
+      },
+      {
+        "command": "taskRunnerUltimate.removeConfirmation",
+        "title": "Remove Confirmation",
+        "category": "Task & Script Explorer",
+        "icon": "$(question)"
       },
       {
         "command": "taskRunnerUltimate.editTitle",
@@ -344,12 +356,12 @@
         {
           "command": "taskRunnerUltimate.addFavorite",
           "group": "inline@0",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:nofav$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:nofav:/"
         },
         {
           "command": "taskRunnerUltimate.removeFavorite",
           "group": "inline@0",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:fav$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:fav:/"
         },
         {
           "command": "taskRunnerUltimate.runItem",
@@ -409,12 +421,22 @@
         {
           "command": "taskRunnerUltimate.addFavorite",
           "group": "1_favorites@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:nofav$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:nofav:/"
         },
         {
           "command": "taskRunnerUltimate.removeFavorite",
           "group": "1_favorites@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:fav$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:fav:/"
+        },
+        {
+          "command": "taskRunnerUltimate.addConfirmation",
+          "group": "1_favorites@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:noconfirm$/"
+        },
+        {
+          "command": "taskRunnerUltimate.removeConfirmation",
+          "group": "1_favorites@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:confirm$/"
         },
         {
           "command": "taskRunnerUltimate.editTitle",
@@ -533,6 +555,14 @@
         },
         {
           "command": "taskRunnerUltimate.removeFavorite",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.addConfirmation",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.removeConfirmation",
           "when": "false"
         },
         {

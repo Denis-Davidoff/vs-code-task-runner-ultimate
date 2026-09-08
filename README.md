@@ -336,11 +336,12 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | **Reset all colours** | Every [painted](#painting-a-row) row and group heading goes back to the colour its category gives it. |
 | **Reset all icons** | Every customized row and group heading goes back to its default icon. |
 | **Remove favorites** | Unstars everything, so the rows at the top disappear. The tasks stay where they are, in their own packages. |
+| **Reset all confirmations** | Every [guarded](#asking-before-a-task-starts-or-stops) task goes back to starting and stopping straight away. |
 | **Show hidden packages** | Restores every hidden package to its saved place in the tree. This entry is separated at the bottom of the individual resets. |
 | **Reset all changes for this project** | Clears all list customizations for this project, including favorites, hidden packages, ordering and folded state. |
 
 Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `4 painted`,
-`5 starred` — and asks once before it does it. The two broad resets are separated from the
+`5 starred`, `2 guarded` — and asks once before it does it. The two broad resets are separated from the
 individual actions they bracket. Refresh is also in the command palette under
 **Task & Script Explorer: Refresh Scripts**.
 
@@ -379,6 +380,41 @@ of the list and running it from its package group are the same task, and both ro
 puts it at the top too, but lists it **once** — flattened into a single list, a second copy four rows
 down reads as a duplicate rather than as a shortcut, so the row is lifted out of its package and
 says where it came from instead.
+
+### Asking before a task starts or stops
+
+Right-click a task → **Add Confirmation**. From then on that one row asks before it does anything:
+
+```
+┌──────────────────────────────────────────────┐
+│  Run "deploy"?                               │
+│                                              │
+│  This task asks before it starts. Turn that  │
+│  off with "Remove Confirmation" in its       │
+│  context menu.                               │
+│                                              │
+│                        [ Cancel ]  [ Run ]   │
+└──────────────────────────────────────────────┘
+```
+
+It is a toggle, so the same place turns it back off — the entry reads **Remove Confirmation** once it
+is on, and there is only ever one of the two on the menu. A guarded row says so in its tooltip
+(*Asks before it starts or stops*) and looks like every other row otherwise: a badge for a state you
+set once and then want to stop thinking about would cost a column of every row to say nothing about
+most of them.
+
+It covers every way a single row is started or stopped — the ▶ and ■ buttons, the click and the
+double click, **Run** and **Stop** in the right-click menu, the dropdown, and Shift+Enter. A restart
+asks **once**, for the restart, rather than once for the stop and again for the start.
+
+What it deliberately does not cover is the actions that are already about more than this row:
+**Stop All Running Tasks**, **Restart All Running Tasks**, and the stop and restart on a package
+heading. Those are the deliberate gesture the flag exists to make you perform, and a dialog per row
+there would turn one decision into ten.
+
+The flag is a task at a time, and only tasks — a package heading runs nothing itself, and a task
+under OTHER TASKS belongs to whoever started it. [The menu](#the-menu) clears the lot with **Reset
+all confirmations**.
 
 ### Reordering rows
 
@@ -511,9 +547,10 @@ they are Unicode 15, and an older emoji font would draw three empty boxes instea
 
 ### Reaching the row commands
 
-**Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Go to Script Definition**,
-**Open Manifest File**, **Show Terminal**, **Edit Title…** and **Colour** all act on the row they
-were invoked from, so they live where there is a row to invoke them on:
+**Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Add Confirmation**,
+**Remove Confirmation**, **Go to Script Definition**, **Open Manifest File**, **Show Terminal**,
+**Edit Title…** and **Colour** all act on the row they were invoked from, so they live where there is
+a row to invoke them on:
 
 | Command | Where |
 | --- | --- |
@@ -521,6 +558,8 @@ were invoked from, so they live where there is a row to invoke them on:
 | Stop (Double-Click) | a double click on a running row, and right-click; ■ inline on hover stops on one press |
 | Add to Favorites | ☆ inline on hover, and right-click |
 | Remove from Favorites | ★ inline on hover, and right-click |
+| Add Confirmation | right-click only, on a script row — one half of a toggle, shown while the row starts and stops straight away |
+| Remove Confirmation | right-click only, on a script row — the other half, shown while the row [asks first](#asking-before-a-task-starts-or-stops) |
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
 | Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; OTHER TASKS names no file and does not offer it |
 | Show Terminal | a click on a running row, and right-click — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
@@ -534,8 +573,8 @@ palette keeps the five that stand on their own: **Show Scripts**, **Menu**, **Re
 ### Where list customizations are stored
 
 In VS Code's own workspace storage (`ExtensionContext.workspaceState`) — not in your `package.json`,
-and not in `.vscode/settings.json`. Titles, colours, icons, task and package order, favorites, hidden
-packages and folded groups have separate stores. That storage is already scoped to this extension
+and not in `.vscode/settings.json`. Titles, colours, icons, task and package order, favorites,
+confirmations, hidden packages and folded groups have separate stores. That storage is already scoped to this extension
 and this workspace, so no key can collide with anything and none of them show up in a diff.
 [The menu](#the-menu) can empty each user-facing customization separately or clear all of them.
 
@@ -556,8 +595,20 @@ chance of one shadowing the other. Colours are filed under those same two kinds 
 their own, and hold the colour's name — `green` — rather than the theme colour id behind it.
 
 A favorite whose manifest is temporarily out of the workspace is hidden, not forgotten: it stays in
-storage and comes back with its folder. Deleting the script for real leaves a dead entry that costs
-nothing and never shows.
+storage and comes back with its folder.
+
+Deleting the script for real is the other case, and it is cleaned up. After every scan, each stored
+title, colour, icon, star, confirmation and drag position is checked against the manifest it names,
+and the ones whose manifest was just read *without* that task in it are dropped. So a `deploy` script
+taken out of a `package.json` takes its star and its colour with it, and does not silently reattach
+them to a future script that happens to take the name back.
+
+The check is narrow on purpose: a ref goes only when its own manifest was part of that scan. "The
+file is not here right now" is not "the task is gone", so a closed workspace folder, an ecosystem
+switched off in `taskRunnerUltimate.sources`, and a scan cut short at the manifest cap all keep
+everything they had. Hidden packages, folded groups and the order of the headings are keyed by a
+manifest rather than by a task, and are never touched by this — a manifest losing a script says
+nothing about whether the manifest is still there.
 
 ## In the dropdown
 
