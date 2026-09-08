@@ -383,21 +383,21 @@ says where it came from instead.
 
 ### Asking before a task starts or stops
 
-Right-click a task → **Add Confirmation**. From then on that one row asks before it does anything:
+Right-click a task → **Enable Confirmation**. From then on that one row asks before it does anything:
 
 ```
 ┌──────────────────────────────────────────────┐
 │  Run "deploy"?                               │
 │                                              │
 │  This task asks before it starts. Turn that  │
-│  off with "Remove Confirmation" in its       │
+│  off with "Disable Confirmation" in its      │
 │  context menu.                               │
 │                                              │
 │                        [ Cancel ]  [ Run ]   │
 └──────────────────────────────────────────────┘
 ```
 
-It is a toggle, so the same place turns it back off — the entry reads **Remove Confirmation** once it
+It is a toggle, so the same place turns it back off — the entry reads **Disable Confirmation** once it
 is on, and there is only ever one of the two on the menu. A guarded row says so in its tooltip
 (*Asks before it starts or stops*) and looks like every other row otherwise: a badge for a state you
 set once and then want to stop thinking about would cost a column of every row to say nothing about
@@ -547,8 +547,8 @@ they are Unicode 15, and an older emoji font would draw three empty boxes instea
 
 ### Reaching the row commands
 
-**Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Add Confirmation**,
-**Remove Confirmation**, **Go to Script Definition**, **Open Manifest File**, **Show Terminal**,
+**Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Enable Confirmation**,
+**Disable Confirmation**, **Go to Script Definition**, **Open Manifest File**, **Show Terminal**,
 **Edit Title…** and **Colour** all act on the row they were invoked from, so they live where there is
 a row to invoke them on:
 
@@ -558,8 +558,8 @@ a row to invoke them on:
 | Stop (Double-Click) | a double click on a running row, and right-click; ■ inline on hover stops on one press |
 | Add to Favorites | ☆ inline on hover, and right-click |
 | Remove from Favorites | ★ inline on hover, and right-click |
-| Add Confirmation | right-click only, on a script row — one half of a toggle, shown while the row starts and stops straight away |
-| Remove Confirmation | right-click only, on a script row — the other half, shown while the row [asks first](#asking-before-a-task-starts-or-stops) |
+| Enable Confirmation | right-click only, on a script row — one half of a toggle, shown while the row starts and stops straight away |
+| Disable Confirmation | right-click only, on a script row — the other half, shown while the row [asks first](#asking-before-a-task-starts-or-stops) |
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
 | Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; OTHER TASKS names no file and does not offer it |
 | Show Terminal | a click on a running row, and right-click — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |

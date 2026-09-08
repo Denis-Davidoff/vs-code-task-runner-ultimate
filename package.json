@@ -160,14 +160,14 @@
         "icon": "$(star-full)"
       },
       {
-        "command": "taskRunnerUltimate.addConfirmation",
-        "title": "Add Confirmation",
+        "command": "taskRunnerUltimate.enableConfirmation",
+        "title": "Enable Confirmation",
         "category": "Task & Script Explorer",
         "icon": "$(question)"
       },
       {
-        "command": "taskRunnerUltimate.removeConfirmation",
-        "title": "Remove Confirmation",
+        "command": "taskRunnerUltimate.disableConfirmation",
+        "title": "Disable Confirmation",
         "category": "Task & Script Explorer",
         "icon": "$(question)"
       },
@@ -429,12 +429,12 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:fav:/"
         },
         {
-          "command": "taskRunnerUltimate.addConfirmation",
+          "command": "taskRunnerUltimate.enableConfirmation",
           "group": "1_favorites@2",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:noconfirm$/"
         },
         {
-          "command": "taskRunnerUltimate.removeConfirmation",
+          "command": "taskRunnerUltimate.disableConfirmation",
           "group": "1_favorites@2",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:confirm$/"
         },
@@ -558,11 +558,11 @@
           "when": "false"
         },
         {
-          "command": "taskRunnerUltimate.addConfirmation",
+          "command": "taskRunnerUltimate.enableConfirmation",
           "when": "false"
         },
         {
-          "command": "taskRunnerUltimate.removeConfirmation",
+          "command": "taskRunnerUltimate.disableConfirmation",
           "when": "false"
         },
         {

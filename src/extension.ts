@@ -236,10 +236,10 @@ export function activate(context: vscode.ExtensionContext): void {
     // The two halves of one toggle. Two ids rather than one, for the same reason
     // the star has two: a menu entry takes its label from the command, and the
     // row has to say which way pressing it goes.
-    vscode.commands.registerCommand('taskRunnerUltimate.addConfirmation', (node?: TreeNode) =>
+    vscode.commands.registerCommand('taskRunnerUltimate.enableConfirmation', (node?: TreeNode) =>
       setConfirmation(node, true),
     ),
-    vscode.commands.registerCommand('taskRunnerUltimate.removeConfirmation', (node?: TreeNode) =>
+    vscode.commands.registerCommand('taskRunnerUltimate.disableConfirmation', (node?: TreeNode) =>
       setConfirmation(node, false),
     ),
     vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
@@ -580,7 +580,7 @@ async function confirmScript(script: ScriptEntry, action: ConfirmAction): Promis
   const { button, detail } = CONFIRM_ACTIONS[action];
   const answer = await vscode.window.showWarningMessage(
     `${button} "${displayName(script)}"?`,
-    { modal: true, detail: `${detail} Turn that off with "Remove Confirmation" in its context menu.` },
+    { modal: true, detail: `${detail} Turn that off with "Disable Confirmation" in its context menu.` },
     button,
   );
   return answer === button;
