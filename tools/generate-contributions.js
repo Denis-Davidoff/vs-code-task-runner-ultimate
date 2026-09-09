@@ -293,7 +293,12 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.stopItemMenu', title: 'Stop (Double-Click)', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
   { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task & Script Explorer', icon: '$(star-empty)' },
   { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task & Script Explorer', icon: '$(star-full)' },
-  { command: 'taskRunnerUltimate.editTitle', title: 'Edit Title…', category: 'Task & Script Explorer', icon: '$(edit)' },
+  // Asking before a row runs, and not asking any more. Two commands rather than
+  // one toggle for the same reason the star is two: a menu entry says what the
+  // click will do, and "Confirmation" alone says only what the row is.
+  { command: 'taskRunnerUltimate.enableConfirmation', title: 'Enable Confirmation', category: 'Task & Script Explorer', icon: '$(question)' },
+  { command: 'taskRunnerUltimate.disableConfirmation', title: 'Disable Confirmation', category: 'Task & Script Explorer', icon: '$(question)' },
+  { command: 'taskRunnerUltimate.editTitle', title: 'Rename…', category: 'Task & Script Explorer', icon: '$(edit)' },
   // Putting a group away and bringing it back. Only the second is a button on the
   // row — see the menus below — and the icon on the first is declared all the
   // same: a context menu drops icons, but the command palette and any keybinding
@@ -369,12 +374,15 @@ manifest.contributes.menus = {
     // the command palette still has it under its own name.
     { command: 'taskRunnerUltimate.menu', group: 'navigation@4', when: inTree },
   ],
-  // Script rows carry a composed contextValue — `script:<idle|running>:<fav|nofav>`
-  // (see `treeItemFor`) — so a `when` clause can match on any one of the three
-  // axes without a combinatorial list of context values.
+  // Script rows carry a composed contextValue —
+  // `script:<idle|running>:<fav|nofav>:<confirm|noconfirm>` (see `treeItemFor`) —
+  // so a `when` clause can match on any one of the four axes without a
+  // combinatorial list of context values. Each half of a pair is matched with its
+  // `:` boundaries, which is what keeps `:fav:` from being found inside
+  // `:nofav:`.
   'view/item/context': [
-    { command: 'taskRunnerUltimate.addFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:nofav$/` },
-    { command: 'taskRunnerUltimate.removeFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:fav$/` },
+    { command: 'taskRunnerUltimate.addFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:nofav:/` },
+    { command: 'taskRunnerUltimate.removeFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },
     { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^script:idle:/` },
     { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
@@ -403,8 +411,12 @@ manifest.contributes.menus = {
     // that has a ■ button — ours and the foreign ones alike.
     { command: 'taskRunnerUltimate.showTerminal', group: '0_open@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     { command: 'taskRunnerUltimate.openTerminalEditor', group: '0_open@3', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
-    { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav$/` },
-    { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav$/` },
+    { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav:/` },
+    { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },
+    // Under the star and above the rename: turning the prompt on is the same kind
+    // of decision about a row as starring it, taken once and left alone.
+    { command: 'taskRunnerUltimate.enableConfirmation', group: '1_favorites@2', when: `${inTree} && viewItem =~ /^script:.+:noconfirm$/` },
+    { command: 'taskRunnerUltimate.disableConfirmation', group: '1_favorites@2', when: `${inTree} && viewItem =~ /^script:.+:confirm$/` },
     { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^script:/` },
     // The same command on a package heading. FAVORITES and the foreign-task
     // group are labels of ours rather than names read off disk, and carry the
@@ -450,6 +462,8 @@ manifest.contributes.menus = {
     // without one.
     { command: 'taskRunnerUltimate.addFavorite', when: 'false' },
     { command: 'taskRunnerUltimate.removeFavorite', when: 'false' },
+    { command: 'taskRunnerUltimate.enableConfirmation', when: 'false' },
+    { command: 'taskRunnerUltimate.disableConfirmation', when: 'false' },
     { command: 'taskRunnerUltimate.editTitle', when: 'false' },
     { command: 'taskRunnerUltimate.hideGroup', when: 'false' },
     { command: 'taskRunnerUltimate.showGroup', when: 'false' },
