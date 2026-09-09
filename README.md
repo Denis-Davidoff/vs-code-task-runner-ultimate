@@ -177,7 +177,10 @@ from a fixed list — a library gets no `run` row, because `cargo run` in a libr
 Alongside that, `taskRunnerUltimate.cargoCommands` lists the subcommands every crate gets — `run`,
 `build`, `test`, `clippy` and `fmt` by default. Add `check`, `bench`, `doc`, `clean` or `update`, or
 anything else, which runs as `cargo <name>`. Binaries are found the way cargo finds them: `[[bin]]`
-entries, `src/main.rs` named after the package, and every `src/bin/*.rs`.
+entries, `src/main.rs` named after the package, and every `src/bin/*.rs` — plus a `src/bin/<name>/`
+directory when it holds a `main.rs`, which is what makes it a binary rather than a folder of shared
+modules. Examples follow the same rule under `examples/`, and `autobins = false` or
+`autoexamples = false` turns the walk off exactly as it does for cargo.
 
 `go.mod` works the same way through `taskRunnerUltimate.goCommands`, and drops `run` for a module
 whose root is not itself a program.
@@ -304,6 +307,11 @@ The view header holds four actions. **Restart all** (⟳) and **stop all** (◼)
 something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
 the **menu** (☰) are always there. Stop-all and restart-all reach every running task, including ones
 this extension did not start.
+
+A restart waits for the stop to actually happen before it starts anything back up, and if a task will
+not go — fifteen seconds after being asked, still listed as running — it says so and stops there
+rather than launching a second copy beside the first. Restart-all calls the whole round off on one
+such task; a restart on a package heading skips only that row.
 
 ### Renaming the heading
 
@@ -772,8 +780,8 @@ a change to one of the settings above skip that wait: neither comes in a burst, 
 waiting for an answer.
 
 Some rows are not written down in any manifest, and those files count too: a crate offers `run`
-because it has a `src/main.rs`, a `run: <name>` for every entry under `src/bin`, an
-`example: <name>` for every entry under `examples`, and a Go module offers `run` because its root
+because it has a `src/main.rs`, a `run: <name>` for every binary under `src/bin`, an
+`example: <name>` for every example under `examples`, and a Go module offers `run` because its root
 has a `main.go`. Creating or deleting one of those refreshes the list as a manifest would; editing
 one does not, because what is inside them is the compiler's business and not the list's.
 

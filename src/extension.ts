@@ -4,6 +4,7 @@ import { locateTask } from './locate';
 import {
   collectScripts,
   commandFor,
+  emptyManifests,
   launchArgv,
   plainArgument,
   resetSources,
@@ -292,7 +293,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.tasks.onDidEndTask(({ execution }) => {
       const key = keyForTask(execution.task);
       if (key) {
-        running.delete(key);
+        forgetExecution(execution, key);
       }
       onStateChanged();
     }),
@@ -347,6 +348,10 @@ export function deactivate(): void {
   cancelInvalidate();
   running.clear();
   clearHint();
+  // The module outlives a deactivate when the host keeps it loaded, so the flag
+  // goes back with it: a second `activate` gets a new `context`, and the entry
+  // that disposes the status bar has to be put in that one.
+  statusBarRegistered = false;
 }
 
 // --- running state -----------------------------------------------------------
@@ -460,13 +465,67 @@ let storage: vscode.Memento | undefined;
 let extensionId: string | undefined;
 
 /**
+ * Storage identity of a workspace folder. Its name, which is what the workspace
+ * itself calls it — until two folders answer to the same one.
+ *
+ * A multi-root workspace is free to hold `/work/frontend/app` beside
+ * `/work/backend/app`, and both are named `app`. Left at that, every ref under
+ * them collides: a rename, a colour or a star put on one folder's `dev` lands on
+ * the other's as well, and the tree draws the second folder's script under the
+ * first folder's favorites. So a name shared by more than one folder is grown
+ * leftwards along its own path until the colliding folders no longer match —
+ * `frontend/app` and `backend/app`.
+ *
+ * Only the folders in a collision pay for it, and only while it lasts: adding a
+ * second `app` to a workspace does move the first one's stored annotations out
+ * of reach, which is the price of not silently merging two folders' settings.
+ * Everything else keeps the plain name it has always been stored under.
+ */
+function folderRef(folder: vscode.WorkspaceFolder): string {
+  const others = (vscode.workspace.workspaceFolders ?? []).filter(
+    (other) => other !== folder && other.name === folder.name,
+  );
+  if (others.length === 0) {
+    return folder.name;
+  }
+  const segments = folder.uri.fsPath.split(path.sep).filter(Boolean);
+  const tails = others.map((other) => other.uri.fsPath.split(path.sep).filter(Boolean));
+  for (let depth = 2; depth <= segments.length; depth++) {
+    const suffix = segments.slice(-depth);
+    const shared = tails.some(
+      (tail) => tail.slice(-depth).join('/') === suffix.join('/'),
+    );
+    if (!shared) {
+      return suffix.join('/');
+    }
+  }
+  // Two folders with the same absolute path are the same folder; nothing else
+  // reaches here, and the whole path is as unique as anything gets.
+  return segments.join('/');
+}
+
+/**
+ * Storage identity of a manifest — its workspace folder plus where in it the file
+ * sits, e.g. `my-app/packages/api/package.json`. Read off the URI rather than
+ * taken from `ScriptEntry.location` so that a manifest with no tasks left in it
+ * can be named too; the two are the same string by construction.
+ */
+function manifestRef(manifest: vscode.Uri): string {
+  const folder = vscode.workspace.getWorkspaceFolder(manifest);
+  if (!folder) {
+    return manifest.toString();
+  }
+  const relative = path.relative(folder.uri.fsPath, manifest.fsPath).split(path.sep).join('/');
+  return `${folderRef(folder)}/${relative || path.posix.basename(manifest.path)}`;
+}
+
+/**
  * Storage identity of the group a script belongs to — its manifest, named the
  * way the workspace sees it, e.g. `my-app/packages/api/package.json`. Doubles as
  * the scope a drag is allowed to move a script inside of.
  */
 function groupRef(script: ScriptEntry): string {
-  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
-  return folder ? `${folder.name}/${script.location}` : script.manifest.toString();
+  return manifestRef(script.manifest);
 }
 
 /**
@@ -1344,6 +1403,10 @@ let prunedScan: ScriptEntry[] | undefined;
  * and refs of the second kind keep everything, which is the rule the favorites
  * and the saved order already followed.
  *
+ * A manifest counts as scanned when it produced a row and when it produced none:
+ * the last script of a package.json is exactly the one whose star would otherwise
+ * outlive it, since with it goes the only entry that named the file.
+ *
  * Only the stores keyed by a task are touched. Hidden packages, folded groups and
  * the order of the headings are keyed by a manifest, and a manifest losing a
  * script says nothing about whether the manifest is still there.
@@ -1354,7 +1417,7 @@ async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
   }
   prunedScan = scripts;
 
-  const scanned = new Set(scripts.map(groupRef));
+  const scanned = new Set([...scripts.map(groupRef), ...emptyManifests().map(manifestRef)]);
   const live = new Set(scripts.map(scriptRef));
   const gone = (ref: string): boolean => {
     const group = groupOfRef(ref);
@@ -2673,7 +2736,9 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
     // A foreign task is restarted as its owner defined it, terminal and all:
     // the presentation is part of that definition and not ours to override.
     const task = node.execution.task;
-    await stopExecution(node.execution);
+    if (!(await stopExecution(node.execution))) {
+      return;
+    }
     await vscode.tasks.executeTask(task);
     return;
   }
@@ -2686,23 +2751,38 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
   if (!(await confirmScript(node.script, 'restart'))) {
     return;
   }
+  // A restart that could not stop what is running is not a restart: starting on
+  // top of a task that never let go is how two dev servers end up fighting over
+  // one port. `stopExecution` has already said so on screen.
   const execution = executionOf(node);
-  if (execution) {
-    await stopExecution(execution);
+  if (execution && !(await stopExecution(execution))) {
+    return;
   }
   await startScript(node.script, reveal);
 }
 
-/** Stops everything the task system currently runs, ours and foreign alike. */
-async function stopAllTasks(): Promise<void> {
-  await Promise.all([...vscode.tasks.taskExecutions].map((execution) => stopExecution(execution)));
+/**
+ * Stops everything the task system currently runs, ours and foreign alike, and
+ * reports whether every one of them went.
+ */
+async function stopAllTasks(): Promise<boolean> {
+  const results = await Promise.all(
+    [...vscode.tasks.taskExecutions].map((execution) => stopExecution(execution)),
+  );
+  return results.every(Boolean);
 }
 
 /** Restarts every running task. Unlike Refresh, this touches processes, not the script list. */
 async function restartAllTasks(): Promise<void> {
   // Snapshot the tasks first: the executions are gone once they are terminated.
   const tasks = [...vscode.tasks.taskExecutions].map((execution) => execution.task);
-  await stopAllTasks();
+  // One task that would not stop is enough to call the whole thing off. Starting
+  // the rest back up would leave the workspace half restarted and one task
+  // running twice, which is harder to see and harder to undo than not having
+  // restarted at all.
+  if (!(await stopAllTasks())) {
+    return;
+  }
   for (const task of tasks) {
     await vscode.tasks.executeTask(task);
   }
@@ -2732,8 +2812,10 @@ async function stopGroup(node: TreeNode | undefined): Promise<void> {
 async function restartGroup(node: TreeNode | undefined): Promise<void> {
   for (const script of runningScriptsOf(node)) {
     const execution = running.get(script.key);
-    if (execution) {
-      await stopExecution(execution);
+    // Only this row is skipped when it will not stop; the rest of the group has
+    // nothing to do with it and is restarted as asked.
+    if (execution && !(await stopExecution(execution))) {
+      continue;
     }
     await startScript(script, false);
   }
@@ -2993,7 +3075,12 @@ async function showScriptPicker(): Promise<void> {
   };
 
   render();
-  activePicker = { refresh: render, reload, activeItem: () => picker.activeItems[0] };
+  // Held by identity, because showing this picker hides any earlier one and the
+  // hide handler of that one runs after this line. Without the check below it
+  // would clear the picker on screen instead of itself, taking Shift+Enter and
+  // the live refresh with it.
+  const handle: ActivePicker = { refresh: render, reload, activeItem: () => picker.activeItems[0] };
+  activePicker = handle;
   void vscode.commands.executeCommand('setContext', CONTEXT_PICKER_OPEN, true);
 
   picker.onDidTriggerItemButton(async ({ item, button }) => {
@@ -3029,8 +3116,10 @@ async function showScriptPicker(): Promise<void> {
 
   picker.onDidHide(() => {
     gone = true;
-    activePicker = undefined;
-    void vscode.commands.executeCommand('setContext', CONTEXT_PICKER_OPEN, false);
+    if (activePicker === handle) {
+      activePicker = undefined;
+      void vscode.commands.executeCommand('setContext', CONTEXT_PICKER_OPEN, false);
+    }
     picker.dispose();
   });
 
@@ -3190,27 +3279,70 @@ async function startScript(script: ScriptEntry, reveal: boolean): Promise<void> 
   onStateChanged();
 }
 
-async function stopExecution(execution: vscode.TaskExecution): Promise<void> {
-  const ended = waitForEnd(execution);
-  execution.terminate();
-  await ended;
-
-  const key = keyForTask(execution.task);
-  if (key) {
+/**
+ * Drops an execution from the running map, and only the execution — the same
+ * script started twice shares one key there, once through our task and once
+ * through the built-in npm provider, and one of the two ending says nothing
+ * about the other. What is left alive takes over the key, so the row keeps
+ * spinning and the count keeps counting while a copy of it is still up.
+ *
+ * The ended execution is filtered out by identity rather than trusted to be gone
+ * from `taskExecutions` already: the two orders differ between the event and the
+ * poll in `waitForEnd`, and neither is ours to depend on.
+ */
+function forgetExecution(execution: vscode.TaskExecution, key: string): void {
+  const alive = vscode.tasks.taskExecutions.find(
+    (item) => item !== execution && keyForTask(item.task) === key,
+  );
+  if (alive) {
+    running.set(key, alive);
+  } else {
     running.delete(key);
   }
-  onStateChanged();
 }
 
 /**
- * Resolves when the execution ends. The event is the real signal; the poll
+ * Stops a task and says whether it actually stopped.
+ *
+ * A `false` is the deadline in `waitForEnd` running out with the task still
+ * listed. The row stays as it is when that happens — dropping it from `running`
+ * would draw a stopped task over a live process, and a restart on top of that
+ * would raise a second copy beside the first, which is the failure the wait was
+ * there to prevent in the first place.
+ */
+async function stopExecution(execution: vscode.TaskExecution): Promise<boolean> {
+  const ended = waitForEnd(execution);
+  execution.terminate();
+  const stopped = await ended;
+
+  if (!stopped) {
+    void vscode.window.showWarningMessage(
+      `"${execution.task.name}" did not stop. It is still running — its terminal has the last word on why.`,
+    );
+    onStateChanged();
+    return false;
+  }
+
+  const key = keyForTask(execution.task);
+  if (key) {
+    forgetExecution(execution, key);
+  }
+  onStateChanged();
+  return true;
+}
+
+/**
+ * Resolves `true` when the execution ends. The event is the real signal; the poll
  * covers the cases where it never arrives, and — unlike a flat grace period —
  * it keeps waiting while the execution is still listed, so a process that takes
  * its time dying after `terminate()` is not declared gone while it still holds
  * its port, which is what would let a restart raise a second copy beside it.
- * The deadline is the way out when the task system itself never lets go.
+ *
+ * The deadline is the way out when the task system itself never lets go, and it
+ * resolves `false`: a wait that gave up has learnt nothing about the process, and
+ * reporting that as an ending is how a live task gets drawn as a stopped one.
  */
-function waitForEnd(execution: vscode.TaskExecution): Promise<void> {
+function waitForEnd(execution: vscode.TaskExecution): Promise<boolean> {
   const alive = () =>
     vscode.tasks.taskExecutions.some(
       (item) => item === execution || sameTask(item.task, execution.task),
@@ -3218,14 +3350,16 @@ function waitForEnd(execution: vscode.TaskExecution): Promise<void> {
 
   return new Promise((resolve) => {
     const deadline = Date.now() + 15_000;
-    const finish = () => {
+    const finish = (ended: boolean) => {
       clearTimeout(timer);
       subscription.dispose();
-      resolve();
+      resolve(ended);
     };
     const poll = () => {
-      if (!alive() || Date.now() >= deadline) {
-        finish();
+      if (!alive()) {
+        finish(true);
+      } else if (Date.now() >= deadline) {
+        finish(false);
       } else {
         timer = setTimeout(poll, 500);
       }
@@ -3234,7 +3368,7 @@ function waitForEnd(execution: vscode.TaskExecution): Promise<void> {
 
     const subscription = vscode.tasks.onDidEndTask((event) => {
       if (event.execution === execution || sameTask(event.execution.task, execution.task)) {
-        finish();
+        finish(true);
       }
     });
   });
@@ -3355,6 +3489,17 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 /** Restart-all / stop-all buttons, shown to the right of the main item only while something runs. */
 let statusBarRestartItem: vscode.StatusBarItem | undefined;
 let statusBarStopItem: vscode.StatusBarItem | undefined;
+/** Whether `context.subscriptions` already holds the one entry that disposes them. */
+let statusBarRegistered = false;
+
+function disposeStatusBar(): void {
+  statusBarItem?.dispose();
+  statusBarRestartItem?.dispose();
+  statusBarStopItem?.dispose();
+  statusBarItem = undefined;
+  statusBarRestartItem = undefined;
+  statusBarStopItem = undefined;
+}
 
 function syncStatusBar(context: vscode.ExtensionContext): void {
   const enabled = vscode.workspace
@@ -3362,12 +3507,7 @@ function syncStatusBar(context: vscode.ExtensionContext): void {
     .get<boolean>('showInStatusBar', true);
 
   if (!enabled) {
-    statusBarItem?.dispose();
-    statusBarRestartItem?.dispose();
-    statusBarStopItem?.dispose();
-    statusBarItem = undefined;
-    statusBarRestartItem = undefined;
-    statusBarStopItem = undefined;
+    disposeStatusBar();
     return;
   }
 
@@ -3387,7 +3527,14 @@ function syncStatusBar(context: vscode.ExtensionContext): void {
     statusBarStopItem.text = '$(debug-stop)';
     statusBarStopItem.tooltip = 'Stop all running tasks';
 
-    context.subscriptions.push(statusBarItem, statusBarRestartItem, statusBarStopItem);
+    // One subscription for the life of the extension, not one per rebuild: the
+    // items are made again every time `showInStatusBar` is turned back on, and
+    // pushing each new trio would grow the list by three dead disposables per
+    // toggle. This one disposes whichever trio is current when the window closes.
+    if (!statusBarRegistered) {
+      statusBarRegistered = true;
+      context.subscriptions.push({ dispose: disposeStatusBar });
+    }
   }
 
   updateStatusBar(runningCount());

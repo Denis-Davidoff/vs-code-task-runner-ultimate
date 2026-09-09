@@ -293,7 +293,16 @@ class Reader {
         throw new Error('unterminated string');
       }
       if (this.text.startsWith(delimiter, this.index)) {
-        this.index += 3;
+        // A run of quotes at the end closes on its last three, so `"""a""""`
+        // is the string `a"` rather than `a` followed by a stray quote — and
+        // the stray quote is not a small mistake: it reads as the start of the
+        // next key, and the whole manifest comes back unparsed.
+        let run = 0;
+        while (this.text[this.index + run] === delimiter[0]) {
+          run++;
+        }
+        out += delimiter[0].repeat(run - 3);
+        this.index += run;
         return out;
       }
       const char = this.char();

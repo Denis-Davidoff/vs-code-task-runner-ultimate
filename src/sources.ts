@@ -164,6 +164,9 @@ const ENGINE_KEYS: ReadonlyArray<PackageManager> = ['deno', 'bun', 'pnpm', 'yarn
 /** The tool a `[project.scripts]` entry has to be run through, and the lock file that names it. */
 type PythonRunner = 'uv' | 'poetry' | 'pdm' | 'rye' | 'pipenv' | 'hatch';
 
+/** The runners a `pythonRunner` setting is allowed to name. */
+const PYTHON_RUNNERS: ReadonlyArray<PythonRunner> = ['uv', 'poetry', 'pdm', 'rye', 'pipenv', 'hatch'];
+
 const PYTHON_LOCKS: ReadonlyArray<[string, PythonRunner]> = [
   ['uv.lock', 'uv'],
   ['poetry.lock', 'poetry'],
@@ -288,6 +291,15 @@ let generation = 0;
 const detected = new Map<string, PackageManager>();
 /** package.json detection fields, by manifest URI, collected during the scan. */
 const nodeHints = new Map<string, NodeHints>();
+/**
+ * The manifests the last scan read and understood but found no task in — a
+ * package.json emptied down to `"scripts": {}`, a Makefile with nothing but
+ * variables. They produce no `ScriptEntry`, so nothing else in the list says
+ * they were seen at all, and "the file declares nothing" is indistinguishable
+ * from "the file was not scanned" without them. `pruneStaleRefs` is the caller
+ * that needs to tell the two apart.
+ */
+let empty: vscode.Uri[] = [];
 
 /**
  * Drops everything derived from the manifests.
@@ -305,6 +317,12 @@ export function resetSources(): void {
   generation++;
   detected.clear();
   nodeHints.clear();
+  empty = [];
+}
+
+/** The manifests of the last scan that parsed cleanly and declared no tasks. */
+export function emptyManifests(): ReadonlyArray<vscode.Uri> {
+  return empty;
 }
 
 export async function collectScripts(): Promise<ScriptEntry[]> {
@@ -348,6 +366,7 @@ async function runScan(): Promise<ScriptEntry[]> {
   manifests.sort((a, b) => a.fsPath.length - b.fsPath.length || a.fsPath.localeCompare(b.fsPath));
 
   const entries: ScriptEntry[] = [];
+  const blank: vscode.Uri[] = [];
 
   for (const manifest of manifests) {
     const kind = manifestKind(manifest);
@@ -357,7 +376,11 @@ async function runScan(): Promise<ScriptEntry[]> {
 
     const cwd = directoryOf(manifest);
     const parsed = await parseManifest(manifest, kind, cwd);
-    if (!parsed || parsed.tasks.length === 0) {
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.tasks.length === 0) {
+      blank.push(manifest);
       continue;
     }
     // Only while this scan is still the current one: a `resetSources` during the
@@ -413,6 +436,7 @@ async function runScan(): Promise<ScriptEntry[]> {
   // entries describe manifests that have already changed.
   if (started === generation) {
     cache = entries;
+    empty = blank;
   }
   return entries;
 }
@@ -672,6 +696,26 @@ async function parseCargo(text: string, cwd: vscode.Uri): Promise<ParsedManifest
 }
 
 /**
+ * Whether cargo discovers targets of this kind on its own, or only runs what the
+ * manifest declares. `autobins` / `autoexamples` in `[package]` are what turn the
+ * walk off; anything that is not an explicit `false` leaves it on, which is the
+ * default and what nearly every crate has.
+ */
+function autoDiscovers(toml: Record<string, unknown>, key: 'autobins' | 'autoexamples'): boolean {
+  return tomlTable(toml, 'package')?.[key] !== false;
+}
+
+/**
+ * A directory under `src/bin` or `examples` is a target only if it holds a
+ * `main.rs` — that file is the target, and the directory is the crate's way of
+ * giving it modules of its own. A folder of shared helpers beside the binaries is
+ * the same shape without the `main.rs`, and cargo does not run it either.
+ */
+async function isDirectoryTarget(parent: vscode.Uri, name: string): Promise<boolean> {
+  return exists(vscode.Uri.joinPath(parent, name, 'main.rs'));
+}
+
+/**
  * The crate's binaries: the ones `[[bin]]` declares, plus the two cargo finds on
  * its own — `src/main.rs`, named after the package, and every `src/bin/*.rs`.
  */
@@ -687,21 +731,34 @@ async function cargoBins(
     }
   };
 
+  const declared = tomlTables(toml, 'bin');
+  // A `[[bin]]` that points at `src/main.rs` is that file's target, named — so
+  // the implicit one is not there to be found any more. Adding it anyway invents
+  // a `--bin <package>` cargo answers with "no bin target named ...".
+  const claimsMain = declared.some(
+    (bin) => typeof bin.path === 'string' && bin.path.replace(/\\/g, '/').replace(/^\.\//, '') === 'src/main.rs',
+  );
+  const auto = autoDiscovers(toml, 'autobins');
+
   // `src/main.rs` first: it is the crate's own program, and the one anyone
   // reaching for "run" means. Cargo finds it whether or not `[[bin]]` sections
   // are present, so the two lists are additive rather than exclusive.
-  if (packageName && (await exists(vscode.Uri.joinPath(cwd, 'src', 'main.rs')))) {
+  if (auto && !claimsMain && packageName && (await exists(vscode.Uri.joinPath(cwd, 'src', 'main.rs')))) {
     add(packageName);
   }
-  for (const bin of tomlTables(toml, 'bin')) {
+  for (const bin of declared) {
     if (typeof bin.name === 'string') {
       add(bin.name);
     }
   }
-  for (const [name, type] of await listDirectory(vscode.Uri.joinPath(cwd, 'src', 'bin'))) {
+  if (!auto) {
+    return bins;
+  }
+  const dir = vscode.Uri.joinPath(cwd, 'src', 'bin');
+  for (const [name, type] of await listDirectory(dir)) {
     if (type === vscode.FileType.File && name.endsWith('.rs')) {
       add(name.slice(0, -3));
-    } else if (type === vscode.FileType.Directory) {
+    } else if (type === vscode.FileType.Directory && (await isDirectoryTarget(dir, name))) {
       add(name);
     }
   }
@@ -721,10 +778,14 @@ async function cargoExamples(toml: Record<string, unknown>, cwd: vscode.Uri): Pr
       add(example.name);
     }
   }
-  for (const [name, type] of await listDirectory(vscode.Uri.joinPath(cwd, 'examples'))) {
+  if (!autoDiscovers(toml, 'autoexamples')) {
+    return examples;
+  }
+  const dir = vscode.Uri.joinPath(cwd, 'examples');
+  for (const [name, type] of await listDirectory(dir)) {
     if (type === vscode.FileType.File && name.endsWith('.rs')) {
       add(name.slice(0, -3));
-    } else if (type === vscode.FileType.Directory) {
+    } else if (type === vscode.FileType.Directory && (await isDirectoryTarget(dir, name))) {
       add(name);
     }
   }
@@ -828,8 +889,14 @@ async function pythonRunner(
   if (configured === 'none') {
     return undefined;
   }
-  if (configured && configured !== 'auto') {
-    return configured as PythonRunner;
+  // Matched against the known runners rather than trusted, the same way
+  // `resolvePackageManager` matches its own: this string becomes `argv[0]`, and a
+  // settings.json — a workspace's `.vscode/settings.json` included — can hold
+  // anything at all. Anything unrecognised, 'auto' included, falls through to
+  // detection.
+  const chosen = PYTHON_RUNNERS.find((runner) => runner === configured);
+  if (chosen) {
+    return chosen;
   }
 
   for (const [file, runner] of PYTHON_LOCKS) {
@@ -1477,9 +1544,11 @@ async function detectPackageManagers(entries: ScriptEntry[], started: number): P
     if (started !== generation) {
       return;
     }
-    if (found) {
-      detected.set(dir, found);
-    }
+    // The miss is recorded too. `npm` is what `resolvePackageManager` falls back
+    // to anyway, so writing it down is storing the answer rather than guessing
+    // one — and it is what keeps a 40-script package with no lock file from
+    // walking its parent directories 40 times over.
+    detected.set(dir, found ?? 'npm');
   }
 }
 
