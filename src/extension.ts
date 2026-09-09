@@ -2189,12 +2189,13 @@ function createTree(): vscode.Disposable[] {
  * One group per manifest. Scripts keep the order the manifest declares them in,
  * running or not — a row that moves when you start it is a row you have to find
  * again to stop it — unless `pinRunningTasks` says otherwise, which `listScripts`
- * has already applied by the time the rows get here. Groups are the exception:
- * one with something running floats to the top, here and in the picker alike,
- * so whatever is alive is on screen without scrolling.
+ * has already applied by the time the rows get here. The groups themselves never
+ * move: the scan order and the user's drags are the only things that place them,
+ * so starting a script in the third package does not shuffle the tree under the
+ * hand that started it.
  */
 function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
-  const groups: Array<{ node: TreeNode & { kind: 'group' }; hasRunning: boolean }> = [];
+  const groups: Array<TreeNode & { kind: 'group' }> = [];
   const byManifest = new Map<string, (typeof groups)[number]>();
   const crowded = crowdedFolders(scripts);
 
@@ -2207,45 +2208,36 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       // arrow carries the file name that tells them apart.
       const shared = crowded.has(manifestFolder(script));
       group = {
-        node: {
-          kind: 'group',
-          id: `group:${key}`,
-          label: manifestTitle(script),
-          detail: packagePath(script),
-          folder: shared ? packagePath(script) : packageFolder(script),
-          place: packageHeading(script, shared),
-          icon: GROUP_ICON,
-          scope: groupRef(script),
-          ref: groupRef(script),
-          manifest: script.manifest,
-          children: [],
-        },
-        hasRunning: false,
+        kind: 'group',
+        id: `group:${key}`,
+        label: manifestTitle(script),
+        detail: packagePath(script),
+        folder: shared ? packagePath(script) : packageFolder(script),
+        place: packageHeading(script, shared),
+        icon: GROUP_ICON,
+        scope: groupRef(script),
+        ref: groupRef(script),
+        manifest: script.manifest,
+        children: [],
       };
       byManifest.set(key, group);
       groups.push(group);
     }
 
-    group.node.children.push({ kind: 'script', script });
-    if (running.has(script.key)) {
-      group.hasRunning = true;
-    }
+    group.children.push({ kind: 'script', script });
   }
 
   // A heading the user put away leaves the list it was in and goes to the pile at
   // the bottom, taking its tasks with it. It keeps its slot in the saved order all
   // the while, so the eye that brings it back puts it back where it was.
   const buried = new Set(hiddenRefs());
-  const shown = groups.filter((group) => !(group.node.ref && buried.has(group.node.ref)));
-  const away = groups.filter((group) => group.node.ref && buried.has(group.node.ref));
+  const shown = groups.filter((group) => !(group.ref && buried.has(group.ref)));
+  const away = groups.filter((group) => group.ref && buried.has(group.ref));
 
-  // Groups with something running come first — the same order the picker
-  // shows and the README promises. Each half keeps the saved order, and inside
-  // a group nothing moves unless `pinRunningTasks` lifts the rows too.
-  const roots: TreeNode[] = [
-    ...shown.filter((group) => group.hasRunning).map((group) => group.node),
-    ...shown.filter((group) => !group.hasRunning).map((group) => group.node),
-  ];
+  // The saved order, whole: what is running inside a group is no reason to move
+  // the group, here or in the picker. Inside one nothing moves either, unless
+  // `pinRunningTasks` lifts the rows.
+  const roots: TreeNode[] = [...shown];
 
   // Tasks that are not backed by a manifest have no group of their own.
   const foreign = foreignExecutions();
@@ -2261,8 +2253,8 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     });
   }
 
-  // Favorites sit above everything, including running groups: a pinned list is
-  // only worth pinning if it does not move. They are rows at the root rather
+  // Favorites sit above everything: a pinned list is only worth pinning if it
+  // does not move. They are rows at the root rather
   // than a group of their own — a heading over the two or three tasks you run
   // all day is a fold to open before you can click them, and the shortest list
   // in the tree is the one that least needs a lid.
@@ -2287,7 +2279,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       label: `hidden (${away.length})`,
       icon: 'eye-closed',
       hidden: true,
-      children: away.map((group) => ({ ...group.node, hidden: true })),
+      children: away.map((group) => ({ ...group, hidden: true })),
     });
   }
 
@@ -3049,10 +3041,10 @@ const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemK
 
 /**
  * The tree's shape, flattened into separators and rows: the starred tasks, then
- * the tasks that came from outside a manifest, then one block per package — the
- * packages with something running first, and inside each of them the same order
- * the tree uses. Two surfaces showing the same list in two different orders is two
- * things to learn instead of one.
+ * the tasks that came from outside a manifest, then one block per package, in the
+ * order the tree has them and with the same order inside each. Two surfaces
+ * showing the same list in two different orders is two things to learn instead of
+ * one.
  *
  * It takes the saved order and applies the pin itself, because it is re-run on
  * every start and stop while the picker stays open. Pinning before this point
@@ -3095,7 +3087,7 @@ function buildItems(saved: ScriptEntry[]): Item[] {
   }
 
   // One block per package, keeping the order the scan produced.
-  const blocks = new Map<string, { label: string; items: Item[]; hasRunning: boolean }>();
+  const blocks = new Map<string, { label: string; items: Item[] }>();
   for (const script of scripts) {
     if (starred.has(script.key)) {
       continue;
@@ -3103,20 +3095,18 @@ function buildItems(saved: ScriptEntry[]): Item[] {
     const key = script.manifest.toString();
     let block = blocks.get(key);
     if (!block) {
-      block = { label: packageLabel(script), items: [], hasRunning: false };
+      block = { label: packageLabel(script), items: [] };
       blocks.set(key, block);
     }
     block.items.push(scriptItem(script, false));
-    block.hasRunning ||= running.has(script.key);
   }
 
   // A separator is the only thing that closes the block above it off, so package
   // headings appear as soon as there is anything above them — including in a
   // single-package workspace, where on their own they would be pure noise.
   const headings = multiPackage || items.length > 0;
-  const ordered = [...blocks.values()];
 
-  for (const block of [...ordered.filter((b) => b.hasRunning), ...ordered.filter((b) => !b.hasRunning)]) {
+  for (const block of blocks.values()) {
     if (headings) {
       items.push(separator(block.label));
     }

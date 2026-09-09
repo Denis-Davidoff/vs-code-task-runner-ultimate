@@ -6,8 +6,8 @@ restart without ever going looking for a terminal tab.**
 ![Task & Script Explorer in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
 - 📋 **[A panel in the left bar](#the-task--script-explorer-view)** — every task of the workspace as a
-  tree, grouped by the manifest it came from. Groups with something running float to the top and the
-  number of running tasks rides on the activity bar icon as a real VS Code badge.
+  tree, grouped by the manifest it came from. Nothing moves when a task starts, and the number of
+  running tasks rides on the activity bar icon as a real VS Code badge.
 - ⚡ **[A button in every editor's toolbar](#-in-the-toolbar-of-every-file)** — the ▶ icon, so the
   whole list is one click away from wherever you happen to be.
 - ⌨️ **[A hotkey, from anywhere](#keyboard-shortcuts)** — <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>T</kbd>
@@ -76,8 +76,8 @@ the editor, the terminal, anywhere. Both defaults were picked because VS Code le
 Always there, whatever the active editor is: every task of every manifest, **grouped by the file it
 came from**, each row carrying **its own icon and colour** for what it actually does — ▶ for dev
 servers, a beaker for tests, a rocket for releases, a database for migrations. A running task spins
-where it stands, groups with something running float to the top, and the count rides on the activity
-bar icon as a real VS Code badge.
+where it stands — no row and no group moves because something started inside it — and the count
+rides on the activity bar icon as a real VS Code badge.
 
 Two buttons appear in the panel header the moment anything is running: **stop everything** and
 **restart everything**. Killing five watchers before a rebase, or bringing the whole stack back up
@@ -221,9 +221,10 @@ there is the activity bar view, plus the status bar entry and the keyboard short
 
 The activity bar icon opens a tree with the same content as the dropdown, in this order: the
 [starred tasks](#favorites) first, as loose rows with no heading over them, then **OTHER TASKS** —
-anything running that this extension did not start — then one group per manifest. Groups with something running float above the idle ones, so whatever is alive is on screen
-without scrolling; inside a group nothing moves — a running task spins in the place it has always
-had, because a row that jumps when you start it is a row you have to find again to stop it. Set
+anything running that this extension did not start — then one group per manifest, in the order the
+scan found them in and [your drags](#reordering-rows) put them in. Nothing moves because something
+started: neither the groups nor the rows inside them — a running task spins in the place it has
+always had, because a row that jumps when you start it is a row you have to find again to stop it. Set
 `taskRunnerUltimate.pinRunningTasks` to `true` if you would rather have the opposite: running tasks
 then come first inside their own group, in the tree and in the dropdown alike. Clicking
 a row runs it, clicking a running one goes to its terminal, and a double click stops it —
@@ -352,8 +353,8 @@ do "what the toolbar icon does". If you would rather have the dropdown anyway, s
 ### Favorites
 
 The ☆ on a row — hover it, right-click → **Add to Favorites**, or [drag the row onto another starred
-row](#reordering-rows) — pins that script to the very top of the tree, above even the packages that
-have something running. In a monorepo the two or three scripts you actually use stop being buried
+row](#reordering-rows) — pins that script to the very top of the tree, above every package. In a
+monorepo the two or three scripts you actually use stop being buried
 under twenty you never touch.
 
 There is no folder over them. A heading above the two or three tasks you run all day is a fold to
@@ -449,7 +450,7 @@ list scrambled the moment it stopped.
 
 ### Renaming a row
 
-Right-click a script → **Edit Title…** to call it whatever you actually call it. `dev` becomes
+Right-click a script → **Rename…** to call it whatever you actually call it. `dev` becomes
 `API server`, and the row keeps the real script name in the dimmed text beside it, so you can still
 see what runs:
 
@@ -467,7 +468,7 @@ the package manager is given.
 
 #### Renaming a group heading
 
-The same **Edit Title…** on a group heading renames the package instead. A scoped name in a deep
+The same **Rename…** on a group heading renames the package instead. A scoped name in a deep
 monorepo spends the row on saying where it is twice over, and a title of your own stands in for
 everything before the bullet:
 
@@ -549,7 +550,7 @@ they are Unicode 15, and an older emoji font would draw three empty boxes instea
 
 **Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Enable Confirmation**,
 **Disable Confirmation**, **Go to Script Definition**, **Open Manifest File**, **Show Terminal**,
-**Edit Title…** and **Colour** all act on the row they were invoked from, so they live where there is
+**Rename…** and **Colour** all act on the row they were invoked from, so they live where there is
 a row to invoke them on:
 
 | Command | Where |
@@ -563,7 +564,7 @@ a row to invoke them on:
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
 | Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; OTHER TASKS names no file and does not offer it |
 | Show Terminal | a click on a running row, and right-click — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
-| Edit Title… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
+| Rename… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
 
 All of them are deliberately hidden from the command palette, which has no row to hand them. The
@@ -633,8 +634,8 @@ Makefile ───────────────────────�
 ```
 
 Favorites first, then anything running that did not come from a manifest, then one block per
-manifest — manifests with something running above the idle ones, and inside a block the order the
-tree shows, drags and all. On a workspace with a single manifest and nothing starred the headings
+manifest — the manifests in the order the tree has them, and inside a block the order the tree
+shows, drags and all. On a workspace with a single manifest and nothing starred the headings
 are dropped entirely, since the only one there would be repeating the picker's own title.
 
 | Action | Effect |
