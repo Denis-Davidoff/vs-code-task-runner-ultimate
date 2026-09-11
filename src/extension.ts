@@ -284,17 +284,17 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     }),
     vscode.tasks.onDidStartTask(({ execution }) => {
+      clearEnded(execution);
       const key = keyForTask(execution.task);
       if (key) {
         running.set(key, execution);
       }
       onStateChanged();
     }),
+    // Every ending is noted, ours and a foreign task's alike: the count is over
+    // both, and a task with no row of its own still puts a number on the badge.
     vscode.tasks.onDidEndTask(({ execution }) => {
-      const key = keyForTask(execution.task);
-      if (key) {
-        forgetExecution(execution, key);
-      }
+      forgetExecution(execution);
       onStateChanged();
     }),
   );
@@ -340,6 +340,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  clearStaleBadges();
   syncStatusBar(context);
   onStateChanged();
 }
@@ -347,6 +348,7 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   cancelInvalidate();
   running.clear();
+  endedExecutions.clear();
   clearHint();
   // The module outlives a deactivate when the host keeps it loaded, so the flag
   // goes back with it: a second `activate` gets a new `context`, and the entry
@@ -356,13 +358,129 @@ export function deactivate(): void {
 
 // --- running state -----------------------------------------------------------
 
-/** Task executions that are running but are not backed by a package.json script. */
-function foreignExecutions(): vscode.TaskExecution[] {
-  return vscode.tasks.taskExecutions.filter((exec) => !keyForTask(exec.task));
+/**
+ * Executions the task system has announced the end of while still listing them.
+ *
+ * `onDidEndTask` and `vscode.tasks.taskExecutions` are not in step — the same
+ * lag `waitForEnd` polls around — so a count taken while the end event is being
+ * handled can still see the task that has just ended. Counting it once would
+ * correct itself if anything else were coming, and for a task that ends on its
+ * own nothing is: that event is the last one there will be, and the count it
+ * leaves behind is the badge sitting on a sidebar over a list where nothing is
+ * running.
+ *
+ * An entry lives here until the listing itself lets go of it, so every count
+ * taken in between — not only the one inside the handler — is taken without it.
+ */
+const endedExecutions = new Set<vscode.TaskExecution>();
+
+/**
+ * Whether two executions stand for the same run. Identity first, since that is
+ * what the events carry, and `sameTask` behind it because the task system may
+ * hand out a fresh `TaskExecution` object for a task it is already running.
+ */
+function sameExecution(a: vscode.TaskExecution, b: vscode.TaskExecution): boolean {
+  return a === b || sameTask(a.task, b.task);
 }
 
+/** Notes that an execution has ended, for as long as it is still being listed. */
+function markEnded(execution: vscode.TaskExecution): void {
+  endedExecutions.add(execution);
+}
+
+/**
+ * Clears any note held against a task that has just started again.
+ *
+ * A restart is a stop and a start of the same task, and `sameExecution` cannot
+ * tell the new run from the old one it matches. A start event can: it is the
+ * task system saying this task is alive, which is the one thing a note about
+ * its previous run must not be allowed to contradict.
+ */
+function clearEnded(execution: vscode.TaskExecution): void {
+  for (const ended of endedExecutions) {
+    if (sameExecution(ended, execution)) {
+      endedExecutions.delete(ended);
+    }
+  }
+}
+
+/**
+ * The executions the task system lists, minus the ones it has already ended.
+ *
+ * The notes are dropped here rather than on a timer: an execution the listing
+ * no longer carries is one nothing can count any more, so the note has nothing
+ * left to do — and a note kept past that would hide the next run of the same
+ * task instead.
+ */
+function liveExecutions(): vscode.TaskExecution[] {
+  const listed = vscode.tasks.taskExecutions;
+  for (const ended of endedExecutions) {
+    if (!listed.includes(ended)) {
+      endedExecutions.delete(ended);
+    }
+  }
+  return listed.filter((item) => ![...endedExecutions].some((ended) => sameExecution(item, ended)));
+}
+
+/** Task executions that are running but are not backed by a package.json script. */
+function foreignExecutions(): vscode.TaskExecution[] {
+  return liveExecutions().filter((exec) => !keyForTask(exec.task));
+}
+
+/**
+ * Drops the rows whose task the system no longer runs, and re-points the ones it
+ * still does at the execution it is listing for them.
+ *
+ * The map is kept by events, and an event that never arrives — or that carries a
+ * key the one that opened the row did not — leaves an entry behind that nothing
+ * afterwards is going to remove. Everything reads that entry: the badge, the
+ * status bar, the spinner on the row, the stop button offered over it. Checking
+ * it against the task system costs a pass over a handful of executions and takes
+ * the whole class of leftovers out at once, rather than one event's worth.
+ */
+function pruneRunning(): void {
+  const live = liveExecutions();
+  for (const key of [...running.keys()]) {
+    const alive = live.find((exec) => keyForTask(exec.task) === key);
+    if (alive) {
+      running.set(key, alive);
+    } else {
+      running.delete(key);
+    }
+  }
+}
+
+/**
+ * How many tasks are running. The map is reconciled against the task system
+ * first: a count is exactly where a leftover entry shows itself, and a number
+ * read off a stale map is the badge that outlives the task.
+ */
 function runningCount(): number {
+  pruneRunning();
   return running.size + foreignExecutions().length;
+}
+
+/**
+ * Wipes whatever number the sidebar icon came up wearing.
+ *
+ * The views are new objects every activation; the badge on the icon need not be.
+ * A window that closed with a task running reopens with that number still drawn,
+ * and a fresh view's badge is `undefined` as far as the API is concerned — so
+ * assigning `undefined` to it is not a change, nothing is sent, and the number
+ * stays on an icon over a list where nothing is running. Pushing an empty badge
+ * first gives the clear that follows something to be a change from.
+ *
+ * `onStateChanged` runs straight after and puts the real count back when there
+ * is one, so the two assignments are one tick of the extension host and never a
+ * badge anyone can see.
+ */
+function clearStaleBadges(): void {
+  for (const view of [treeView, explorerTreeView]) {
+    if (view) {
+      view.badge = { value: 0, tooltip: '' };
+      view.badge = undefined;
+    }
+  }
 }
 
 function onStateChanged(): void {
@@ -1504,6 +1622,10 @@ async function saveOrder(scope: string, refs: string[]): Promise<void> {
 async function refreshScripts(): Promise<void> {
   invalidate();
   await collectScripts();
+  // Refresh re-reads the world, and the task system is part of it: the count on
+  // the badge and in the status bar is checked against what is actually running,
+  // which is the way back for anyone looking at a number they cannot explain.
+  onStateChanged();
   vscode.window.setStatusBarMessage('Task & Script Explorer: reloaded', 2000);
 }
 
@@ -2766,16 +2888,20 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
  * reports whether every one of them went.
  */
 async function stopAllTasks(): Promise<boolean> {
-  const results = await Promise.all(
-    [...vscode.tasks.taskExecutions].map((execution) => stopExecution(execution)),
-  );
+  // What the task system still lists is not always what it still runs, so the
+  // ones it has already ended are left out: terminating a finished execution is
+  // a wait on an end that has already happened, and fifteen seconds of it before
+  // Stop All can report anything.
+  const results = await Promise.all(liveExecutions().map((execution) => stopExecution(execution)));
   return results.every(Boolean);
 }
 
 /** Restarts every running task. Unlike Refresh, this touches processes, not the script list. */
 async function restartAllTasks(): Promise<void> {
   // Snapshot the tasks first: the executions are gone once they are terminated.
-  const tasks = [...vscode.tasks.taskExecutions].map((execution) => execution.task);
+  // Only the live ones — a task that has already ended is not restarted here,
+  // since starting it would be this command raising something nobody was running.
+  const tasks = liveExecutions().map((execution) => execution.task);
   // One task that would not stop is enough to call the whole thing off. Starting
   // the rest back up would leave the workspace half restarted and one task
   // running twice, which is harder to see and harder to undo than not having
@@ -3280,25 +3406,21 @@ async function startScript(script: ScriptEntry, reveal: boolean): Promise<void> 
 }
 
 /**
- * Drops an execution from the running map, and only the execution — the same
- * script started twice shares one key there, once through our task and once
+ * Drops an ended execution from the running map, and only the execution — the
+ * same script started twice shares one key there, once through our task and once
  * through the built-in npm provider, and one of the two ending says nothing
  * about the other. What is left alive takes over the key, so the row keeps
  * spinning and the count keeps counting while a copy of it is still up.
  *
- * The ended execution is filtered out by identity rather than trusted to be gone
- * from `taskExecutions` already: the two orders differ between the event and the
- * poll in `waitForEnd`, and neither is ours to depend on.
+ * The ending is noted rather than the listing trusted to have caught up with it:
+ * the two orders differ between the event and the poll in `waitForEnd`, and
+ * neither is ours to depend on. `pruneRunning` then reads the listing with that
+ * note applied, so what takes over the key is something else that is genuinely
+ * running and not the run that has just finished.
  */
-function forgetExecution(execution: vscode.TaskExecution, key: string): void {
-  const alive = vscode.tasks.taskExecutions.find(
-    (item) => item !== execution && keyForTask(item.task) === key,
-  );
-  if (alive) {
-    running.set(key, alive);
-  } else {
-    running.delete(key);
-  }
+function forgetExecution(execution: vscode.TaskExecution): void {
+  markEnded(execution);
+  pruneRunning();
 }
 
 /**
@@ -3323,10 +3445,7 @@ async function stopExecution(execution: vscode.TaskExecution): Promise<boolean> 
     return false;
   }
 
-  const key = keyForTask(execution.task);
-  if (key) {
-    forgetExecution(execution, key);
-  }
+  forgetExecution(execution);
   onStateChanged();
   return true;
 }
