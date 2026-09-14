@@ -210,7 +210,7 @@ plus one `up: <service>` row each, which is eleven rows for six services rather 
 full commands × services grid would be:
 
 ```
-compose • docker-compose.yml
+docker-compose.yml • services/stack
   ▶ up              docker compose -f docker-compose.yml up
   ▶ up: web         docker compose -f docker-compose.yml up web
   ▶ up: db          docker compose -f docker-compose.yml up db
@@ -244,6 +244,33 @@ does to the file it chose for itself.
 `taskRunnerUltimate.dockerCompose` chooses between `docker compose` (the default — the v1 binary has
 been end-of-life since July 2023) and `docker-compose`. There is no `auto`: the only honest way to
 tell them apart is to run `docker compose version`, and a scan never starts a process.
+
+#### Knowing what is actually up
+
+A row spins while **this window** is running it, which is honest and incomplete: a stack you brought
+up from a terminal, from Docker Desktop, or with `up -d` leaves every row looking stopped.
+
+**Check containers** in [the ☰ menu](#the-menu) asks Docker. It runs `docker compose ps` once per
+compose file and marks the rows whose containers are up — the `up: <service>` row for each running
+service, and the bare `up` row whenever anything in that file is up. A marked row keeps its own icon,
+takes the running colour, and reads `up ·` before its command.
+
+It is a question you ask, not a background poll: that would mean a process per compose file on a
+timer, in every workspace, for something most of them never need. The answer is refreshed on its own
+in one place only — after a compose task of *this* window ends, which is the one moment it is known
+to be stale. Everything else waits for the next time you ask.
+
+When Docker cannot answer — not installed, daemon down, the call times out after five seconds — the
+rows keep whatever they last said rather than claiming everything stopped. "I could not ask" is not
+"your stack is down".
+
+■ on a row marked this way runs `docker compose stop` for that file or service, as an ordinary task
+with its own terminal. `stop` and not `down`, because the square promises a stop: `down` would also
+delete the containers and their networks, and the `down` row is there for that.
+
+This is the one thing in the extension that starts a process. Everything else reads the workspace
+through VS Code's own file API, which is what keeps it working over Remote SSH and in Dev Containers;
+the code for this lives in a file of its own, `src/containers.ts`, so the boundary is visible.
 
 ### Shell scripts
 
@@ -342,7 +369,7 @@ something beside it — they reach across every folder under the project root �
 inside the project's own heading:
 
 ```
-acme • (root)
+acme
   ▶ dev
   ▶ build
   🖥 docker-compose.yml
@@ -366,6 +393,11 @@ A compose file is named by its file, since a folder can hold `docker-compose.yml
 `docker-compose.dev.yml` at once. A script folder is named by where it sits relative to the project —
 `scripts`, `bin`, `tools/ci` — and `shell` is what is left when that is the project's own folder.
 
+Whatever a heading leads with, the half after the bullet is the **folder** it lives in and never the
+file name again: `docker-compose.yml • apps/web`, not `docker-compose.yml • apps/web/docker-compose.yml`.
+Where that folder would only repeat the name, or where there is no path left to show, the bullet goes
+too — a lone `compose.yaml` in the root is just `compose.yaml`. The full path stays in the tooltip.
+
 Nothing about this is stored: the relationship is the paths, worked out on every repaint. That is
 also why a drag cannot move one of these rows out of its project — the order would be rewritten and
 the next repaint would put the row straight back, so the drop is refused with a note in the status
@@ -387,7 +419,7 @@ Rust (1)
   engine • crates/engine
     ▶ run
 Docker (1)
-  docker-compose.yml • (root)
+  docker-compose.yml
     ▶ up
 Shell (1)
   scripts
@@ -437,17 +469,24 @@ well.
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
 `justfile` side by side gets three, all in the same folder.
 
-Every group starts expanded, and one you fold shut stays shut — through a repaint and across a
-restart. Like the stars and the renames, the folds live in the workspace's own storage, so they are
+Every group starts expanded bar two, and one you fold shut stays shut — through a repaint and across
+a restart. Like the stars and the renames, the folds live in the workspace's own storage, so they are
 per-workspace and per-machine and never reach `git status`.
+
+The two that start shut are **hidden**, whose whole point is to be out of the way, and a **compose
+file**: one file is seven rows where a `package.json` is seven scripts, and most of them — `build`,
+`logs`, `ps` — are rows you go looking for rather than press. Shut, the heading is one line saying
+which stack lives here, which is what a heading is for. Open one and it stays open, the same way a
+fold stays shut.
 
 Every heading is read in the same two parts — **name, bullet, path**:
 
 ```
-acme-platform • package.json
+acme-platform
 @acme/api-gateway • packages/services/api-gateway
 @acme/frontend • apps/web
 engine • crates/engine
+docker-compose.yml • infra
 ```
 
 The name comes first: what the package calls itself — `name` in a `package.json`, `[package] name`
@@ -456,11 +495,14 @@ in a `Cargo.toml`, `module` in a `go.mod`. That is the name the package is known
 always the folder it lives in: `@acme/frontend` checked out at `apps/web` reads as itself, not as
 `web`. A manifest that names nothing — a Makefile, a justfile, a `package.json` with no `name` —
 falls back to the folder it sits in, and to the file name where that folder holds another manifest
-as well, since there the file name is the only half that tells the two groups apart.
+as well, since there the file name is the only half that tells the two groups apart. A compose file
+always leads with its own file name, because one folder can hold several.
 
-Then, after the bullet, the path to it, so it can be pasted into a terminal. In a multi-root
-workspace the path begins with the workspace folder, which is what keeps two packages of the same
-name in two projects apart.
+Then, after the bullet, the **folder** it lives in — never the file name a second time — so it can be
+pasted into a terminal. In a multi-root workspace the path begins with the workspace folder, which is
+what keeps two packages of the same name in two projects apart. Where the folder would only repeat
+the name, or where there is none left to show, the bullet goes with it: a root `package.json` named
+`acme-platform` is just that, and so is a lone `compose.yaml` in the root.
 
 The project is not repeated on every row. It opened every heading once and in a monorepo that meant
 printing one word down the whole sidebar — a masthead that is on every row is not a masthead. It is
@@ -475,7 +517,8 @@ Any heading can be [renamed](#renaming-a-group-heading) when what it says is lon
 has room for.
 
 Every group heading carries an icon for what it is: ∿ for the tasks this extension did not start,
-and its ecosystem's own glyph for a package — a box for Node, a gear for Rust, a terminal for shell.
+and its ecosystem's own glyph for a package — a box for Node, a gear for Rust, a crate for Docker,
+a terminal for shell.
 Only the glyph varies; the colour of a heading is the same on all of them unless you
 [paint one](#painting-a-row), which is what keeps the column from competing with the rows under it.
 `taskRunnerUltimate.groupIcons: "uniform"` puts a single stack (≣) back on every heading.
@@ -516,6 +559,7 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | --- | --- |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
+| **Check containers** | Asks Docker which compose services are actually running and marks those rows — see [Knowing what is actually up](#knowing-what-is-actually-up). Nothing happens in the background; this is the question. |
 | **Group by ecosystem** | Toggles [the hierarchical layout](#grouping-by-ecosystem), saying `on` or `off` as it stands now. Written to your user settings, so a click here never adds `.vscode/settings.json` to the project's `git status`. |
 | **Reset all applied styles** | Restores every custom title, colour and icon while leaving favorites, visibility, ordering and folded groups untouched. |
 | **Reset all titles** | Every [renamed](#renaming-a-row) row and group heading goes back to the name its manifest gives it. |
@@ -754,8 +798,8 @@ a row to invoke them on:
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
 
 All of them are deliberately hidden from the command palette, which has no row to hand them. The
-palette keeps the five that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
-**Stop All Running Tasks** and **Restart All Running Tasks**.
+palette keeps the six that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
+**Check Containers**, **Stop All Running Tasks** and **Restart All Running Tasks**.
 
 ### Where list customizations are stored
 
@@ -936,9 +980,13 @@ test icon. A rule that repeats a built-in token overrides the built-in:
 
 `icon` is a [codicon](https://microsoft.github.io/vscode-codicons/dist/codicon.html) id and `color`
 a theme colour id — either one of `taskRunnerUltimate.category.*` or any built-in such as
-`charts.green`. The built-in categories are run, test, quality, build, release, data and clean, and
-each has a `taskRunnerUltimate.category.<name>` colour you can override in
+`charts.green`. The built-in categories are run, test, quality, build, release, data, clean and stop,
+and each has a `taskRunnerUltimate.category.<name>` colour you can override in
 `workbench.colorCustomizations`.
+
+`up` and `down` are the one pair spelled out on their own: a filled ▶ in the run green for the row
+that brings a stack up, a hollow ■ in red for the one that takes it down — the same solid-versus-hollow
+pair the row's own buttons use. `stop`, `kill`, `teardown` and `destroy` read as `down` does.
 
 ## Behaviour
 

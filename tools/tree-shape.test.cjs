@@ -107,7 +107,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [] } = {}
     storage = memento;
     keyForTask = () => undefined;
     repaint = () => {};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, running };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, running, containers };
   `,
     Object.assign(context, { memento }),
   );
@@ -541,4 +541,159 @@ test('two compose files sharing a `name:` stay tellable apart', () => {
   assert.deepEqual([...inside].map((n) => n.place), ['docker-compose.yml', 'docker-compose.dev.yml']);
   // The name it calls itself survives where there is room for it.
   assert.deepEqual([...inside].map((n) => n.label), ['acme', 'acme']);
+});
+
+// --- the half after the bullet -------------------------------------------------
+
+/** A manifest as the scan reports one inside a workspace folder at `/repo`. */
+function inRepo(manifest, name, kind, packageName) {
+  const location = path.posix.relative('/repo', manifest);
+  return {
+    key: `file://${manifest}::${name}`,
+    name,
+    command: name,
+    manifest: uri(manifest),
+    kind,
+    packageName,
+    cwd: uri(path.posix.dirname(manifest)),
+    location,
+    directory: location.includes('/') ? location.slice(0, location.lastIndexOf('/')) : '',
+  };
+}
+
+test('the bullet carries the folder a heading lives in, never its file name again', () => {
+  // `compose.yaml • compose.yaml` was the symptom: once the heading leads with a
+  // file name, the path after the bullet has to say where that file is.
+  const scan = [
+    inRepo('/repo/compose.yaml', 'up', 'docker-compose'),
+    inRepo('/repo/apps/web/docker-compose.yml', 'up', 'docker-compose'),
+    inRepo('/repo/svc/Cargo.toml', 'build', 'cargo', 'engine'),
+    inRepo('/repo/svc/Makefile', 'all', 'make'),
+    inRepo('/repo/tools/Makefile', 'all', 'make'),
+  ];
+  const h = harness({ settings: { grouping: 'ecosystem' }, scan });
+  const headings = [];
+  const walk = (nodes) => {
+    for (const node of nodes) {
+      if (node.kind !== 'group') continue;
+      if (node.ref) headings.push(h.treeItemFor(node).label);
+      walk(node.children);
+    }
+  };
+  walk(h.buildTreeRoots(scan));
+
+  // Docker leads, since the compose file is the first entry the scan reports.
+  assert.deepEqual(headings, [
+    // Nothing left to add for a compose file in the workspace root.
+    'compose.yaml',
+    'docker-compose.yml • apps/web',
+    // A crowded folder leads with the file name and says which folder it is in.
+    'engine • svc',
+    'Makefile • svc',
+    // A manifest alone in a folder is named by that folder, so the bullet would
+    // only say it twice.
+    'tools',
+  ]);
+});
+
+// --- the two rows a stack is read by -------------------------------------------
+
+test('up is filled and green, down is hollow and red', () => {
+  const h = harness({});
+  const glyph = (name) => {
+    const entry = {
+      ...script('/repo/docker-compose.yml', name, 'docker-compose'),
+      command: `docker compose -f docker-compose.yml ${name}`,
+    };
+    const icon = h.iconFor(entry, false, undefined);
+    return [icon.id, icon.color && icon.color.id];
+  };
+
+  // Solid triangle for the row that starts everything, hollow square for the one
+  // that stops it — the same pair as the row's own ▶ and ■ buttons.
+  assert.deepEqual(glyph('up'), ['debug-start', 'taskRunnerUltimate.category.run']);
+  assert.deepEqual(glyph('up: web'), ['debug-start', 'taskRunnerUltimate.category.run']);
+  assert.deepEqual(glyph('down'), ['debug-stop', 'taskRunnerUltimate.category.stop']);
+
+  // And the ordinary run words are untouched: `up` earning its own glyph must
+  // not have dragged every dev server along with it.
+  const dev = { ...script('/repo/package.json', 'dev', 'npm'), command: 'vite' };
+  const icon = h.iconFor(dev, false, undefined);
+  assert.deepEqual([icon.id, icon.color.id], ['play', 'taskRunnerUltimate.category.run']);
+});
+
+// --- what Docker said ----------------------------------------------------------
+
+test('a compose row whose containers are up says so, and carries a stop', () => {
+  const h = harness({});
+  const row = (name) => ({
+    ...script('/repo/docker-compose.yml', name, 'docker-compose'),
+    command: `docker compose -f docker-compose.yml ${name}`,
+  });
+  const item = (name) => h.treeItemFor({ kind: 'script', script: row(name) });
+
+  // Nobody has asked Docker yet: an empty map is not "nothing is running".
+  assert.equal(item('up').contextValue.startsWith('script:idle:'), true);
+
+  h.containers.set('file:///repo/docker-compose.yml', new Set(['web']));
+
+  // The bare `up` stands for the whole file, so any service up marks it.
+  const all = item('up');
+  assert.equal(all.contextValue.startsWith('script:up:'), true);
+  assert.equal(all.description.startsWith('up · '), true);
+  // Its own glyph, in the running colour — not the spinner, which would promise
+  // a process of ours to stop.
+  assert.equal(all.iconPath.id, 'debug-start');
+  assert.equal(all.iconPath.color.id, 'taskRunnerUltimate.runningForeground');
+
+  // A per-service row is marked only for its own service.
+  assert.equal(item('up: web').contextValue.startsWith('script:up:'), true);
+  assert.equal(item('up: db').contextValue.startsWith('script:idle:'), true);
+  // And the rows that are not about state are left alone.
+  assert.equal(item('down').contextValue.startsWith('script:idle:'), true);
+});
+
+test('a run of ours outranks what Docker last said', () => {
+  const h = harness({});
+  const up = {
+    ...script('/repo/docker-compose.yml', 'up', 'docker-compose'),
+    command: 'docker compose -f docker-compose.yml up',
+  };
+  h.containers.set('file:///repo/docker-compose.yml', new Set(['web']));
+  h.running.set(up.key, { task: { name: 'up' } });
+
+  // While our own task runs, the row is a running row: the spinner is the better
+  // answer, and its stop terminates the execution instead of shelling out.
+  const item = h.treeItemFor({ kind: 'script', script: up });
+  assert.equal(item.contextValue.startsWith('script:running:'), true);
+  assert.equal(item.iconPath.id, 'loading~spin');
+  assert.equal(item.description.startsWith('up · '), false);
+});
+
+// --- what a heading looks like the first time it is seen ------------------------
+
+test('a compose heading starts shut, and the store remembers opening it', () => {
+  const PKG = script('/repo/package.json', 'dev', 'npm');
+  const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
+  const SCRIPTS = shell('/repo/scripts', 'deploy.sh');
+  const scan = [PKG, COMPOSE, SCRIPTS];
+
+  const h = harness({ scan });
+  const roots = h.buildTreeRoots(scan);
+  const state = (node) => h.treeItemFor(node).collapsibleState;
+  const [compose, scripts] = roots[0].children.filter((node) => node.kind === 'group');
+
+  // Seven rows for one file, most of them read rather than pressed: shut.
+  assert.equal(state(compose), 1, 'compose starts collapsed');
+  // Everything else is unchanged — the project and its script folder open.
+  assert.equal(state(roots[0]), 2, 'the project starts expanded');
+  assert.equal(state(scripts), 2, 'a script folder starts expanded');
+
+  // For a group that starts shut the store holds the opposite exception, so a
+  // ref in it means the user opened this one.
+  const opened = harness({ scan, stored: { collapsed: ['file:///repo/docker-compose.yml'] } });
+  const composeAgain = opened
+    .buildTreeRoots(scan)[0]
+    .children.filter((node) => node.kind === 'group')[0];
+  assert.equal(opened.treeItemFor(composeAgain).collapsibleState, 2, 'a remembered open stays open');
 });

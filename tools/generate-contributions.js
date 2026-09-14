@@ -324,6 +324,7 @@ manifest.contributes.commands = [
   })),
   { command: CLEAR_COLOUR, title: 'Default', category: 'Task & Script Explorer' },
   { command: 'taskRunnerUltimate.pickIcon', title: 'Change Icon…', category: 'Task & Script Explorer', icon: '$(symbol-misc)' },
+  { command: 'taskRunnerUltimate.checkContainers', title: 'Check Containers', category: 'Task & Script Explorer', icon: '$(archive)' },
   { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task & Script Explorer', icon: '$(menu)' },
   {
     command: 'taskRunnerUltimate.stopAll',
@@ -387,7 +388,10 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.removeFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },
     { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^script:idle:/` },
     { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
-    { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
+    // `script:up:` is a compose row whose containers are up without anything of
+    // ours running them — see `treeItemFor`. It gets a stop and nothing else:
+    // there is no terminal of ours to show and no execution to restart.
+    { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ /^(script:(running|up):|foreignTask$)/` },
     { command: 'taskRunnerUltimate.restartGroup', group: 'inline@2', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
     { command: 'taskRunnerUltimate.stopGroup', group: 'inline@3', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
     // Non-inline groups are what the right-click menu shows.
@@ -397,7 +401,7 @@ manifest.contributes.menus = {
     // stops a running one. `0_actions` sorts above `0_open`, so they head the
     // menu the way they lead the row.
     { command: 'taskRunnerUltimate.runItemMenu', group: '0_actions@1', when: `${inTree} && viewItem =~ /^script:idle:/` },
-    { command: 'taskRunnerUltimate.stopItemMenu', group: '0_actions@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
+    { command: 'taskRunnerUltimate.stopItemMenu', group: '0_actions@2', when: `${inTree} && viewItem =~ /^(script:(running|up):|foreignTask$)/` },
     //
     // Opening the file is the one action here that is about the manifest rather
     // than the task, and it is deliberately not an inline button: a row already

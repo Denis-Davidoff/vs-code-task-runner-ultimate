@@ -297,6 +297,12 @@
         "icon": "$(symbol-misc)"
       },
       {
+        "command": "taskRunnerUltimate.checkContainers",
+        "title": "Check Containers",
+        "category": "Task & Script Explorer",
+        "icon": "$(archive)"
+      },
+      {
         "command": "taskRunnerUltimate.menu",
         "title": "Menu",
         "category": "Task & Script Explorer",
@@ -386,7 +392,7 @@
         {
           "command": "taskRunnerUltimate.stopItem",
           "group": "inline@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:(running|up):|foreignTask$)/"
         },
         {
           "command": "taskRunnerUltimate.restartGroup",
@@ -406,7 +412,7 @@
         {
           "command": "taskRunnerUltimate.stopItemMenu",
           "group": "0_actions@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:(running|up):|foreignTask$)/"
         },
         {
           "command": "taskRunnerUltimate.openScript",
@@ -1034,6 +1040,16 @@
           "light": "#767676",
           "highContrast": "#B0B0B0",
           "highContrastLight": "#5A5A5A"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.category.stop",
+        "description": "Icon colour in the Task & Script Explorer view: Taking something down — `down`, `stop`, `kill`.",
+        "defaults": {
+          "dark": "#F14C4C",
+          "light": "#C9291F",
+          "highContrast": "#FF8A8A",
+          "highContrastLight": "#8E0000"
         }
       },
       {

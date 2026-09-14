@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { composeState } from './containers';
 import { locateTask } from './locate';
 import {
   ALL_ECOSYSTEMS,
@@ -43,7 +44,22 @@ interface CategoryRule {
  */
 const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
   {
-    match: ['dev', 'run', 'start', 'serve', 'server', 'watch', 'preview', 'storybook', 'up', 'example'],
+    // Bringing a stack up, and taking it down. These two lead the list because
+    // `up` is also a `run` word below, and here it earns a glyph of its own: the
+    // pair is what a compose group is read by at a glance, so the one that
+    // starts everything is filled in and the one that stops it is hollow — the
+    // same solid-versus-outline pair the row's own ▶ and ■ buttons use.
+    match: ['up'],
+    icon: 'debug-start',
+    color: 'taskRunnerUltimate.category.run',
+  },
+  {
+    match: ['down', 'stop', 'kill', 'teardown', 'destroy'],
+    icon: 'debug-stop',
+    color: 'taskRunnerUltimate.category.stop',
+  },
+  {
+    match: ['dev', 'run', 'start', 'serve', 'server', 'watch', 'preview', 'storybook', 'example'],
     icon: 'play',
     color: 'taskRunnerUltimate.category.run',
   },
@@ -306,6 +322,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // One command for every icon, unlike the colours: an icon picker is a list
     // of thirty, which is a quick pick's size and three columns past a submenu's.
     vscode.commands.registerCommand('taskRunnerUltimate.pickIcon', (node?: TreeNode) => pickIcon(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.checkContainers', () => checkContainers(true)),
     vscode.commands.registerCommand('taskRunnerUltimate.menu', showMenu),
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
@@ -333,6 +350,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.tasks.onDidEndTask(({ execution }) => {
       forgetExecution(execution);
       onStateChanged();
+      // A compose task of ours has just changed what is running, and this is the
+      // one moment the answer is known to be stale without anyone asking. Only
+      // for the file it touched, and only once it has ended.
+      void recheckAfter(execution.task);
     }),
   );
 
@@ -1118,7 +1139,9 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
       { id: 'zap', name: 'Zap' },
       { id: 'flame', name: 'Flame' },
       { id: 'play-circle', name: 'Play' },
+      { id: 'debug-start', name: 'Start' },
       { id: 'stop-circle', name: 'Stop' },
+      { id: 'debug-stop', name: 'Stop (Square)' },
       { id: 'record', name: 'Record' },
       { id: 'check', name: 'Check' },
       { id: 'checklist', name: 'Checklist' },
@@ -2028,6 +2051,12 @@ async function showMenu(): Promise<void> {
       run: async () => openSettings(),
     },
     {
+      label: '$(archive) Check containers',
+      description: 'ask Docker what is up',
+      detail: 'Marks the compose rows whose containers are running, including a stack started outside this window.',
+      run: () => checkContainers(true),
+    },
+    {
       label: '$(list-tree) Group by ecosystem',
       // The same idiom the resets below use for a state: what it is now, on the
       // right, where the eye is already going for the count.
@@ -2176,8 +2205,10 @@ const GROUP_ICON = 'layers';
  * brand logo of our own — cannot resolve a `ThemeColor`, so six tinted codicons
  * beside a handful of fixed-colour SVGs would read as a bug rather than a set.
  * Where no codicon is brand-shaped (nothing is, for npm, Rust, Go, PHP, Deno or
- * Docker) the nearest honest glyph is used: Rust's own mark *is* a gear, a
- * compose file is a set of machines, a shell script is `terminal-bash`.
+ * Docker) the nearest honest glyph is used: Rust's own mark *is* a gear, and a
+ * shell script is `terminal-bash`. Docker gets the crate — the font carries no
+ * whale, no cube and no container, and of what it does carry a box is what the
+ * industry draws a container as. `package`, the other box, is npm's.
  *
  * `mise` keeps its own casing, which is the rule the rest of the tree already
  * applies to the names a project gives itself.
@@ -2198,7 +2229,7 @@ const ECOSYSTEMS: Record<Ecosystem, { label: string; icon: string }> = {
   go: { label: 'Go', icon: 'symbol-event' },
   php: { label: 'PHP', icon: 'globe' },
   mise: { label: 'mise', icon: 'versions' },
-  docker: { label: 'Docker', icon: 'vm' },
+  docker: { label: 'Docker', icon: 'archive' },
   shell: { label: 'Shell', icon: 'terminal-bash' },
 };
 
@@ -2787,13 +2818,22 @@ function collapseRef(node: TreeNode): string | undefined {
 
 /**
  * Whether a group is drawn open the first time it is seen. Everything is, bar
- * HIDDEN: it is the one group whose point is to be out of the way, and the store
- * holds its exception the other way round — a ref present there means the user
- * opened it, not that they shut it. One store, one meaning per group, and the
- * default each group wants.
+ * two — and for those the store holds the exception the other way round: a ref
+ * present there means the user opened it, not that they shut it. One store, one
+ * meaning per group, and the default each group wants.
+ *
+ * HIDDEN is the one whose whole point is to be out of the way. A compose file is
+ * the other: it is seven rows for one file where a package.json is seven rows
+ * for seven scripts, most of them — `build`, `logs`, `ps` — the ones you go
+ * looking for rather than press, and in `flat` mode they sit inside a project
+ * heading that has its own tasks to show first. Shut, it is one line saying
+ * which stack is here, which is what a heading is for.
  */
 function startsOpen(node: TreeNode): boolean {
-  return !(node.kind === 'group' && node.id === HIDDEN_GROUP_ID);
+  if (node.kind !== 'group') {
+    return true;
+  }
+  return node.id !== HIDDEN_GROUP_ID && node.source !== 'docker-compose';
 }
 
 function isCollapsed(node: TreeNode): boolean {
@@ -2928,18 +2968,24 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     let group = byManifest.get(key);
     if (!group) {
       // A folder with a second manifest in it — a Cargo.toml beside a Makefile —
-      // has two headings that name the same folder, so there the path after the
-      // arrow carries the file name that tells them apart.
-      // A compose file is always titled by its file name, crowded folder or
-      // not: a folder can hold `docker-compose.yml` and `docker-compose.dev.yml`
-      // at once, and the `name:` inside them is as often as not the same word.
+      // has two headings that would otherwise name the same folder, so there the
+      // file name is what the heading leads with instead.
+      //
+      // A compose file always does, crowded folder or not: a folder can hold
+      // `docker-compose.yml` and `docker-compose.dev.yml` at once, and the
+      // `name:` inside them is as often as not the same word.
       const shared = crowded.has(manifestFolder(script)) || script.kind === 'docker-compose';
       group = {
         kind: 'group',
         id: `group:${key}`,
         label: manifestTitle(script),
         detail: packagePath(script),
-        folder: shared ? packagePath(script) : packageFolder(script),
+        // The directory and never the file, whichever half leads: once the
+        // heading leads with a file name, repeating it after the bullet said
+        // nothing twice — `compose.yaml • compose.yaml`. What the eye wants
+        // there is where the file lives. The full path keeps its place in the
+        // tooltip, which is what `detail` above is for.
+        folder: packageFolder(script),
         place: packageHeading(script, shared),
         icon: GROUP_ICON,
         scope: groupRef(script),
@@ -3209,7 +3255,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // The path is spelled as it is on disk, for the same reason as the folder
     // above: it is a path, and a path that has been re-cased is one you cannot
     // paste into a terminal.
-    const heading = node.folder ? `${title} • ${node.folder}` : title;
+    //
+    // And no bullet at all when the path would only repeat the name: a manifest
+    // alone in `tools/` is `tools`, not `tools • tools`, and a compose file in
+    // the root of a single-folder workspace has no path left to show.
+    const heading = node.folder && node.folder !== title ? `${title} • ${node.folder}` : title;
     // Open unless the user has folded this one shut before: a tree you have never
     // touched shows everything it found, and one you have shows it as you left it.
     const item = new vscode.TreeItem(
@@ -3283,13 +3333,18 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   }
 
   const isRunning = running.has(node.script.key);
+  // Reported by Docker rather than by the task system, and only worth saying
+  // when nothing of ours is running — there the spinner is the better answer.
+  const up = !isRunning && containersUp(node.script);
   const item = new vscode.TreeItem(displayName(node.script));
   // A starred script is on screen twice, at the top of the list and in its own
   // group. Without ids of its own the tree cannot tell the two rows apart, and
   // the selection would jump between them. Built from the absolute `key` rather than
   // the storage ref, which trades uniqueness for portability.
   item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
-  item.description = scriptDescription(node.script, node.inFavorites);
+  item.description = up
+    ? `up · ${scriptDescription(node.script, node.inFavorites)}`
+    : scriptDescription(node.script, node.inFavorites);
   // The confirmation has nothing on the row itself — a badge for a state you set
   // once and then want to forget about would cost a column of every row to say
   // nothing about most of them — so the tooltip is where it is readable without
@@ -3300,7 +3355,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     ...(needsConfirmation(node.script) ? ['Asks before it starts or stops.'] : []),
   ].join('\n');
   const tint = nodeColor(node);
-  item.iconPath = iconFor(node.script, isRunning, tint);
+  item.iconPath = iconFor(node.script, isRunning, tint, up);
   // A painted task carries the same decoration trick the headings do, which is
   // the only way a tree label takes a colour at all. The description goes with it
   // — the decoration lands on the whole resource label and `.label-description`
@@ -3315,9 +3370,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   // half is a substring of the other at a `:` boundary — `:fav:` cannot be found
   // inside `:nofav:` — which is what lets one axis be matched without the three
   // around it having to be written out.
+  // `up` rides on the first axis rather than adding a fifth: the last one is
+  // matched with a `$` anchor, and a segment appended after it would stop every
+  // one of those clauses matching at all.
   item.contextValue = [
     'script',
-    isRunning ? 'running' : 'idle',
+    isRunning ? 'running' : up ? 'up' : 'idle',
     isFavorite(node.script) ? 'fav' : 'nofav',
     needsConfirmation(node.script) ? 'confirm' : 'noconfirm',
   ].join(':');
@@ -3354,6 +3412,165 @@ function scriptDescription(script: ScriptEntry, inFavorites = false): string {
 /** Namespace a script belongs to: its package's name, or where the manifest lives. */
 function packageOrigin(script: ScriptEntry): string {
   return customGroupTitle(script) ?? script.packageName ?? packagePath(script);
+}
+
+// --- containers --------------------------------------------------------------
+
+/**
+ * What Docker last said about each compose file, by manifest URI: the services
+ * it reported up.
+ *
+ * Asked for rather than watched. A background poll would mean a process per
+ * compose file on a timer, which is a cost every workspace would pay for a
+ * question most of them never ask — so this is filled by the Check Containers
+ * command and refreshed after a compose task of ours ends, and is empty until
+ * then. An empty map is not "nothing is running"; it is "nobody has asked".
+ */
+const containers = new Map<string, Set<string>>();
+
+/** The service an `up` row stands for, or nothing for the row that means all of them. */
+function composeService(script: ScriptEntry): string | undefined {
+  const at = script.name.indexOf(': ');
+  return script.name.slice(0, at < 0 ? undefined : at) === 'up' && at > 0
+    ? script.name.slice(at + 2)
+    : undefined;
+}
+
+/** Whether a row is one of the two that stand for containers being up. */
+function isComposeUp(script: ScriptEntry): boolean {
+  return script.kind === 'docker-compose' && (script.name === 'up' || script.name.startsWith('up: '));
+}
+
+/**
+ * Whether Docker last reported containers up for this row — the whole file for a
+ * bare `up`, one service for an `up: <service>`.
+ */
+function containersUp(script: ScriptEntry): boolean {
+  if (!isComposeUp(script)) {
+    return false;
+  }
+  const reported = containers.get(script.manifest.toString());
+  if (!reported) {
+    return false;
+  }
+  const service = composeService(script);
+  return service ? reported.has(service) : reported.size > 0;
+}
+
+/**
+ * The words in front of the subcommand on a compose row — the program, the
+ * `-f`s, and nothing else. Read back off a row rather than rebuilt, so the
+ * override file and the `dockerCompose` spelling the parser settled on are the
+ * ones the probe uses too.
+ */
+function composePrefix(script: ScriptEntry): string[] | undefined {
+  const argv = script.argv;
+  const service = composeService(script);
+  const at = argv ? argv.length - (service ? 2 : 1) : -1;
+  return argv && at > 0 && argv[at] === 'up' ? argv.slice(0, at) : undefined;
+}
+
+/**
+ * The command that stops what an `up` row started, built from that row's own
+ * argv so it names the same files.
+ *
+ * `stop` and not `down`: the button is a stop, and `down` would also delete the
+ * containers and their networks, which is a different thing than the one the
+ * square promises.
+ */
+function composeStopArgv(script: ScriptEntry): string[] | undefined {
+  const prefix = composePrefix(script);
+  const service = composeService(script);
+  return prefix ? [...prefix, 'stop', ...(service ? [service] : [])] : undefined;
+}
+
+/**
+ * Asks Docker about every compose file in the scan and repaints.
+ *
+ * A file that cannot be asked about keeps whatever it last said rather than
+ * being marked stopped: "the daemon is down" is not "your stack is down", and
+ * the second is a thing a row must not claim on the strength of a failed call.
+ */
+async function checkContainers(announce: boolean): Promise<void> {
+  const scripts = await collectScripts();
+  // One probe per compose file, not per row: all the `up` rows of a file share a
+  // prefix and would ask the same question.
+  const files = new Map<string, ScriptEntry>();
+  for (const script of scripts) {
+    if (isComposeUp(script) && !files.has(script.manifest.toString())) {
+      files.set(script.manifest.toString(), script);
+    }
+  }
+
+  if (files.size === 0) {
+    if (announce) {
+      void vscode.window.showInformationMessage('No compose files in this workspace to check.');
+    }
+    return;
+  }
+
+  let asked = 0;
+  await Promise.all(
+    [...files].map(async ([key, script]) => {
+      const prefix = composePrefix(script);
+      const state = prefix ? await composeState(prefix, script.cwd.fsPath) : undefined;
+      if (state) {
+        asked++;
+        containers.set(key, state.running);
+      }
+    }),
+  );
+
+  repaint();
+  if (!announce) {
+    return;
+  }
+  if (asked === 0) {
+    void vscode.window.showWarningMessage(
+      'Could not ask Docker about any compose file. Is Docker running, and is ' +
+        '"taskRunnerUltimate.dockerCompose" the command this machine has?',
+    );
+    return;
+  }
+  const up = [...containers.values()].reduce((count, services) => count + services.size, 0);
+  vscode.window.setStatusBarMessage(
+    up > 0
+      ? `Task & Script Explorer: ${up} ${up === 1 ? 'service' : 'services'} up`
+      : 'Task & Script Explorer: nothing running',
+    3000,
+  );
+}
+
+/**
+ * Asks again about the compose file a finished task belongs to, if it was one.
+ *
+ * Deliberately not a general "something ended, re-probe everything": that would
+ * turn every npm script in the workspace into a Docker call. And nothing at all
+ * until somebody has asked once — an empty map means the question has not been
+ * put, and answering it unprompted is the background poll this avoids.
+ */
+async function recheckAfter(task: vscode.Task): Promise<void> {
+  const key = keyForTask(task);
+  if (!key || containers.size === 0) {
+    return;
+  }
+  const script = (await collectScripts()).find((entry) => entry.key === key);
+  if (script?.kind === 'docker-compose') {
+    await refreshContainers(script);
+  }
+}
+
+/** Asks again about one compose file, after something of ours touched it. */
+async function refreshContainers(script: ScriptEntry): Promise<void> {
+  const prefix = composePrefix(script);
+  if (!prefix) {
+    return;
+  }
+  const state = await composeState(prefix, script.cwd.fsPath);
+  if (state) {
+    containers.set(script.manifest.toString(), state.running);
+    repaint();
+  }
 }
 
 // --- script categories -------------------------------------------------------
@@ -3418,11 +3635,19 @@ function userCategories(): CategoryRule[] {
  * row is answering "this one is busy", and that answer is the same green on
  * every row for as long as it is the one worth finding.
  */
-function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string): vscode.ThemeIcon {
+function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string, up = false): vscode.ThemeIcon {
   if (isRunning) {
     return runningIcon();
   }
   const category = categoryFor(script);
+  // Containers of this row's are up, but nothing of ours is running: the row
+  // keeps its own glyph and takes the running colour, which says "this is alive"
+  // without the spinner claiming a process of ours to stop. A colour the user
+  // painted still wins, as it does over a category.
+  if (up && !tint) {
+    const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? 'play';
+    return new vscode.ThemeIcon(glyph, new vscode.ThemeColor(RUNNING_COLOR));
+  }
   const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   const color = tint ?? (category && colored ? category.color : undefined);
   // An icon the user picked wins over the category's for the same reason the
@@ -3598,6 +3823,12 @@ async function runNode(node: TreeNode | undefined, reveal: boolean): Promise<voi
 async function stopNode(node: TreeNode | undefined): Promise<void> {
   const execution = executionOf(node);
   if (!execution) {
+    // Nothing of ours is running, but Docker said this row's containers are —
+    // somebody brought the stack up outside this window. The square still means
+    // stop, so it runs the compose command that does it.
+    if (node?.kind === 'script' && containersUp(node.script)) {
+      await stopContainers(node.script);
+    }
     return;
   }
   if (node?.kind === 'script' && !(await confirmScript(node.script, 'stop'))) {
@@ -3634,6 +3865,35 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
     return;
   }
   await startScript(node.script, reveal);
+}
+
+/**
+ * Takes down containers this window did not start, by running compose's own
+ * `stop` for them and asking again once it has finished.
+ *
+ * A task like any other, so it gets a terminal, a row in the task list and the
+ * same stop button everything else has while it runs — which matters, because
+ * stopping a large stack is not instant and a button that looked like it did
+ * nothing would be pressed again.
+ */
+async function stopContainers(script: ScriptEntry): Promise<void> {
+  const argv = composeStopArgv(script);
+  if (!argv) {
+    return;
+  }
+  if (!(await confirmScript(script, 'stop'))) {
+    return;
+  }
+  const service = composeService(script);
+  await vscode.tasks.executeTask(
+    buildTask({
+      ...script,
+      name: service ? `stop: ${service}` : 'stop',
+      key: scriptKey(script.manifest.toString(), service ? `stop: ${service}` : 'stop'),
+      command: argv.join(' '),
+      argv,
+    }),
+  );
 }
 
 /**
