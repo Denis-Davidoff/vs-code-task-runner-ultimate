@@ -332,6 +332,10 @@ manifest.contributes.commands = [
   { command: CLEAR_COLOUR, title: 'Default', category: 'Task & Script Explorer' },
   { command: 'taskRunnerUltimate.pickIcon', title: 'Change Icon…', category: 'Task & Script Explorer', icon: '$(symbol-misc)' },
   { command: 'taskRunnerUltimate.checkContainers', title: 'Check Containers', category: 'Task & Script Explorer', icon: '$(archive)' },
+  // One switch, two commands: a header button can show the mode it puts you in
+  // or the mode you are in, never both, and the first is the one worth a click.
+  { command: 'taskRunnerUltimate.groupByEcosystem', title: 'Group by Ecosystem', category: 'Task & Script Explorer', icon: '$(list-tree)' },
+  { command: 'taskRunnerUltimate.groupFlat', title: 'Show as a Flat List', category: 'Task & Script Explorer', icon: '$(list-flat)' },
   { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task & Script Explorer', icon: '$(menu)' },
   {
     command: 'taskRunnerUltimate.stopAll',
@@ -392,9 +396,16 @@ manifest.contributes.menus = {
       when: `${inTree} && taskRunnerUltimate.runningCount > 0`,
     },
     { command: 'taskRunnerUltimate.show', group: 'navigation@3', when: inTree },
+    // The grouping switch, drawn as whichever half is not the current mode —
+    // `taskRunnerUltimate.hierarchical` is the setting mirrored into a context
+    // key, since a `when` clause cannot read a setting. Beside ☰ rather than
+    // inside it: it is the one view-wide state worth changing mid-task, and a
+    // tree redrawn one way or the other is the whole of what it does.
+    { command: 'taskRunnerUltimate.groupByEcosystem', group: 'navigation@4', when: `${inTree} && !taskRunnerUltimate.hierarchical` },
+    { command: 'taskRunnerUltimate.groupFlat', group: 'navigation@4', when: `${inTree} && taskRunnerUltimate.hierarchical` },
     // Refresh lives inside the menu: it is the rarest of the header actions, and
     // the command palette still has it under its own name.
-    { command: 'taskRunnerUltimate.menu', group: 'navigation@4', when: inTree },
+    { command: 'taskRunnerUltimate.menu', group: 'navigation@5', when: inTree },
   ],
   // Script rows carry a composed contextValue —
   // `script:<idle|running>:<fav|nofav>:<confirm|noconfirm>` (see `treeItemFor`) —
@@ -634,11 +645,21 @@ const COMPOSE_GLOBS = [
  * activation narrower than the scan is a workspace whose rows exist but whose
  * status bar and badge never appear, because those are built in `activate`.
  *
- * Deliberately still not every `.sh` at every depth: that matches in very nearly
- * every repository, and an extension that wakes up everywhere is one nobody can
- * account for. The third entry is the workspace root alone.
+ * Which is what happened when the scan grew from `.sh` to seven extensions and
+ * this list did not: a repository whose tasks are all `scripts/*.ps1` woke the
+ * extension only when somebody clicked the view open.
+ *
+ * `SHELL_EXTENSIONS` in `src/sources.ts` is the other half of this pair, and the
+ * two are mirrored by hand — as `MANIFEST_FILES` and `COMPOSE_GLOBS` above
+ * already are, since this script runs before anything is compiled. One brace
+ * group per pattern and no nesting: that is as much as a glob is read with.
+ *
+ * Deliberately still not every script at every depth: that matches in very
+ * nearly every repository, and an extension that wakes up everywhere is one
+ * nobody can account for. The third entry is the workspace root alone.
  */
-const SHELL_FOLDERS = ['**/scripts/**/*.sh', '**/bin/**/*.sh', '*.sh'];
+const SHELL_FILES = '*.{sh,bash,zsh,ksh,ps1,bat,cmd}';
+const SHELL_FOLDERS = [`**/scripts/**/${SHELL_FILES}`, `**/bin/**/${SHELL_FILES}`, SHELL_FILES];
 
 manifest.activationEvents = [
   ...MANIFEST_FILES.map((file) => `workspaceContains:**/${file}`),

@@ -92,9 +92,9 @@
     "workspaceContains:**/compose.*.yaml",
     "workspaceContains:**/docker-compose.*.yml",
     "workspaceContains:**/docker-compose.*.yaml",
-    "workspaceContains:**/scripts/**/*.sh",
-    "workspaceContains:**/bin/**/*.sh",
-    "workspaceContains:*.sh",
+    "workspaceContains:**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
+    "workspaceContains:**/bin/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
+    "workspaceContains:*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
     "onTaskType:taskRunnerUltimate",
     "onView:taskRunnerUltimate.tree",
     "onView:taskRunnerUltimate.explorer"
@@ -322,6 +322,18 @@
         "icon": "$(archive)"
       },
       {
+        "command": "taskRunnerUltimate.groupByEcosystem",
+        "title": "Group by Ecosystem",
+        "category": "Task & Script Explorer",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "taskRunnerUltimate.groupFlat",
+        "title": "Show as a Flat List",
+        "category": "Task & Script Explorer",
+        "icon": "$(list-flat)"
+      },
+      {
         "command": "taskRunnerUltimate.menu",
         "title": "Menu",
         "category": "Task & Script Explorer",
@@ -382,8 +394,18 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/"
         },
         {
-          "command": "taskRunnerUltimate.menu",
+          "command": "taskRunnerUltimate.groupByEcosystem",
           "group": "navigation@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && !taskRunnerUltimate.hierarchical"
+        },
+        {
+          "command": "taskRunnerUltimate.groupFlat",
+          "group": "navigation@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && taskRunnerUltimate.hierarchical"
+        },
+        {
+          "command": "taskRunnerUltimate.menu",
+          "group": "navigation@5",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/"
         }
       ],
@@ -833,7 +855,7 @@
               "composer.json (scripts).",
               "mise.toml and .mise.toml ([tasks]).",
               "docker-compose.yml, compose.yml and their .yaml spellings — the compose subcommands.",
-              "Shell scripts (*.sh) under scripts/, bin/ and the workspace root."
+              "Shell scripts (.sh, .bash, .zsh, .ksh, .ps1, .bat, .cmd) under scripts/, bin/ and the workspace root."
             ]
           },
           "markdownDescription": "Which kinds of manifest are scanned. Remove an entry to stop reading that ecosystem entirely — the files are then never opened, which is also the fastest way to quieten a repository that carries a `Makefile` nobody runs."
@@ -904,7 +926,7 @@
             "The v2 plugin, which is what a current Docker installs.",
             "The standalone v1 binary, end-of-life since July 2023."
           ],
-          "markdownDescription": "How compose is invoked. Spelled as the command and split on whitespace, so what is written here is what reaches the terminal.\n\nThere is no `auto`: the only honest way to tell the two apart is to run `docker compose version`, and a scan never starts a process.\n\nMachine-scoped: this is the one setting whose value is run as a program rather than typed into a task terminal, so a repository’s own `.vscode/settings.json` cannot choose it for you."
+          "markdownDescription": "How compose is invoked. Spelled as the command and split on whitespace, so what is written here is what reaches the terminal.\n\nThere is no `auto`: the only honest way to tell the two apart is to run `docker compose version`, and a scan never starts a process.\n\nMachine-scoped, as `#taskRunnerUltimate.shellRunner#` and `#taskRunnerUltimate.shellRunners#` are: the value is run as a program rather than typed into a task terminal, so a repository’s own `.vscode/settings.json` cannot choose it for you."
         },
         "taskRunnerUltimate.dockerComposeCommands": {
           "type": "array",
@@ -937,10 +959,12 @@
         "taskRunnerUltimate.shellRunner": {
           "type": "string",
           "default": "bash",
-          "markdownDescription": "What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through, from the workspace folder root: `bash ./scripts/deploy.sh`. Leave empty to run the path on its own, which then needs both the executable bit and a shebang.\n\nOn Windows this wants Git Bash or WSL on the `PATH`. The Windows extensions are started by `#taskRunnerUltimate.shellRunners#` instead."
+          "scope": "machine",
+          "markdownDescription": "What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through, from the workspace folder root: `bash ./scripts/deploy.sh`. Leave empty to run the path on its own, which then needs both the executable bit and a shebang.\n\nOn Windows this wants Git Bash or WSL on the `PATH`. The Windows extensions are started by `#taskRunnerUltimate.shellRunners#` instead.\n\nMachine-scoped, like `#taskRunnerUltimate.dockerCompose#`: this value is run as a program rather than typed into a task terminal, so a repository’s own `.vscode/settings.json` cannot choose it for you."
         },
         "taskRunnerUltimate.shellRunners": {
           "type": "object",
+          "scope": "machine",
           "default": {
             "ps1": "powershell -NoProfile -File",
             "bat": "",
@@ -949,7 +973,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "markdownDescription": "What each extension is run through, keyed by extension — the map that covers what `#taskRunnerUltimate.shellRunner#` does not. An extension that appears here is started with these words in front of the path; one that does not falls back to `shellRunner`.\n\n`powershell` and not `pwsh`: Windows PowerShell 5.1 ships with the OS, where PowerShell 7 is an install away. On 7, set `pwsh -NoProfile -File`. If an execution policy blocks the script, `powershell -NoProfile -ExecutionPolicy Bypass -File` is the usual answer — deliberately not the default.\n\n`.bat` and `.cmd` are run as themselves, with no runner at all: they are programs to Windows already, and the PowerShell a task starts in takes the `./path/to/x.bat` this builds. With `cmd.exe` as the terminal profile, set `cmd /c` for both."
+          "markdownDescription": "What each extension is run through, keyed by extension — the map that covers what `#taskRunnerUltimate.shellRunner#` does not. An extension that appears here is started with these words in front of the path; one that does not falls back to `shellRunner`.\n\n`powershell` and not `pwsh`: Windows PowerShell 5.1 ships with the OS, where PowerShell 7 is an install away. On 7, set `pwsh -NoProfile -File`. If an execution policy blocks the script, `powershell -NoProfile -ExecutionPolicy Bypass -File` is the usual answer — deliberately not the default.\n\n`.bat` and `.cmd` are run as themselves, with no runner at all: they are programs to Windows already, and the PowerShell a task starts in takes the `./path/to/x.bat` this builds. With `cmd.exe` as the terminal profile, set `cmd /c` for both.\n\nMachine-scoped, like `#taskRunnerUltimate.dockerCompose#`: this value is run as a program rather than typed into a task terminal, so a repository’s own `.vscode/settings.json` cannot choose it for you."
         },
         "taskRunnerUltimate.colorIcons": {
           "type": "boolean",
@@ -985,7 +1009,7 @@
             "Each heading wears the icon its own file has in your file icon theme.",
             "Every heading wears the same stack glyph."
           ],
-          "markdownDescription": "What a package heading is drawn with. `type` asks your **file icon theme** for the icon that manifest has in the Explorer — the real npm, Rust and Docker marks, which no icon font carries; a folder of shell scripts gets the theme’s folder icon. `uniform` is the quieter column the tree used to have, for when the headings should stay out of the way of the rows under them.\n\nThe colour is separate either way: a heading is tinted when you paint it, and the tint lands on the text and leaves the icon its own colours. An icon picked by hand on a row wins over both.\n\nEcosystem rows are not covered — they name no file, so they keep their own glyph in both modes."
+          "markdownDescription": "What a package heading is drawn with. `type` asks your **file icon theme** for the icon that manifest has in the Explorer — the real npm, Rust and Docker marks, which no icon font carries; a folder of shell scripts has no file for a theme to match on, so it wears a terminal. `uniform` is the quieter column the tree used to have, for when the headings should stay out of the way of the rows under them.\n\nThe colour is separate either way: a heading is tinted when you paint it, and the tint lands on the text and leaves the icon its own colours. An icon picked by hand on a row wins over both.\n\nEcosystem rows are not covered — they name no file, so they keep their own glyph in both modes. Nor is a `shell` heading that stands for several folders, which is the same kind of row."
         },
         "taskRunnerUltimate.categories": {
           "type": "array",

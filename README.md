@@ -42,9 +42,9 @@ restart without ever going looking for a terminal tab.**
   them.
 - 💻 **[Shell scripts, as tasks](#shell-scripts)** — `.sh`, `.bash`, `.zsh` and `.ksh`, and on Windows
   `.ps1`, `.bat` and `.cmd`, picked up from `scripts/`, `bin/` and the workspace root at any depth.
-  Each project's scripts gather under one `shell` folder with a terminal icon, every row wears the
-  shell it is read by, the dimmed text is the script's own first comment, and each extension is
-  started by the runner that can start it. **Add to Terminal** puts the command line in a fresh
+  Each project's scripts gather under one `shell` folder with a terminal icon, a row no category
+  claimed wears the shell it is read by, the dimmed text is the script's own first comment, and each
+  extension is started by the runner that can start it. **Add to Terminal** puts the command line in a fresh
   terminal unrun, for when a script takes arguments.
 - 🧠 **[Knows how to run things](#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
   package from `packageManager`, `engines` and the lock files; everything else named by the table it
@@ -246,8 +246,10 @@ opened at all:
 ▶ runs that file's bare `up` — the whole stack, the same row and the same confirmation as pressing ▶
 inside. ■ appears once the containers are known to be up: while a run of *this* window is behind them
 it stops that run, and otherwise it runs `docker compose stop` for the file, exactly as the ■ on the
-`up` row does. The two are never on the row at once, and a file whose commands were narrowed to a
-list without `up` gets neither — there is then no such thing as bringing it up.
+`up` row does. While the stack is up both are on the row — ▶ re-attaches or starts what is missing,
+exactly as it does on the `up` row inside — and the two squares are the ones that never appear
+together: a run of ours puts Stop All in Package in that slot instead. A file whose commands were
+narrowed to a list without `up` gets neither button; there is then no such thing as bringing it up.
 
 The heading also **spins while any part of the file is running** — one `up: web` out of six services
 counts — so a compose file, which starts folded, still says it is busy without being opened. It is
@@ -290,7 +292,9 @@ A row spins while **this window** is running it, which is honest and incomplete:
 up from a terminal, from Docker Desktop, or with `up -d` leaves every row looking stopped.
 
 **Check containers** in [the ☰ menu](#the-menu) asks Docker. It runs `docker compose ps` once per
-compose file and marks the rows whose containers are up — the `up: <service>` row for each running
+compose file — `--format json`, and if the runner turns out not to have that flag (the standalone v1
+binary does not) the same question again as `ps --services --filter status=running`, which v1 does
+understand — and marks the rows whose containers are up — the `up: <service>` row for each running
 service, and the bare `up` row whenever anything in that file is up. A marked row keeps its own icon,
 takes the running colour, and reads `up ·` before its command.
 
@@ -368,7 +372,9 @@ $ bash ./scripts/deploy.sh ▏          ← the cursor is here; type the rest an
 ```
 
 Nothing is remembered and nothing is prompted for: it is a terminal, with a line in it to finish,
-edit or throw away.
+edit or throw away. Anything in the line that is not a plain path or task name is quoted literally
+for the shell that terminal opens in — a script checked out as `$(id).sh` is typed as text, not as a
+substitution waiting for the Enter key.
 
 The executable bit is deliberately not consulted. It is invisible through VS Code's own file API —
 `FilePermission` carries only `Readonly` — so reading it would mean importing `node:fs`, and that is
@@ -442,7 +448,9 @@ out — a colour nobody chose on every row is the one job the paint is for, and 
 column made the headings the loudest thing on screen.
 
 Ecosystem rows are the exception, since they name no file: those keep a glyph of their own in both
-modes — a box for Node, a gear for Rust, a crate for Docker, a terminal for shell.
+modes — a box for Node, a gear for Rust, a crate for Docker, a terminal for shell. A `shell` heading
+standing for several folders is the same kind of row and keeps its terminal too; one standing for a
+single folder is that folder, and follows `groupIcons` like any other heading.
 
 #### What a project takes in with it
 
@@ -1035,7 +1043,11 @@ That *adds* a shortcut. To retire the default as well, disable it with a leading
 ## Settings
 
 Everything lives under `taskRunnerUltimate.*` and works in user settings as well as in a workspace's
-`.vscode/settings.json`, so a repository can pin its own runner for everyone who opens it.
+`.vscode/settings.json`, so a repository can pin its own runner for everyone who opens it. Three
+exceptions, and they are deliberate: `dockerCompose`, `shellRunner` and `shellRunners` are
+machine-scoped, because each of those values is the name of a program this extension executes rather
+than text typed into a task terminal — and a program name is not something a repository you cloned
+gets to choose for the machine that opens it. Those three are set in your own settings.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -1115,7 +1127,10 @@ manifest in [the table above](#what-gets-scanned), and equally a lock or config 
 `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `package-lock.json`, `deno.lock`, `uv.lock`,
 `poetry.lock` and the rest of the [detection signals](#runner-detection). Adding or removing a task
 shows up on its own, in both the tree and an open dropdown. A setting that decides what is scanned —
-`sources`, `exclude`, `cargoCommands`, `goCommands`, `pythonRunner` — does the same.
+`sources`, `exclude`, `cargoCommands`, `goCommands`, `pythonRunner` — does the same, and so does one
+that decides how a row is *launched* when the answer is written into the row at scan time rather than
+worked out when it starts: `dockerCompose`, `dockerComposeCommands`, `shellScripts`, `shellRunner`
+and `shellRunners`.
 
 File events arrive in runs — a branch switch, an `npm install`, a `cargo new` — so a rescan waits
 for the run to stop rather than starting one per event and abandoning it on the next. **Refresh** and

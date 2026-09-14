@@ -13,16 +13,20 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-/** @param reply what the stubbed `execFile` answers: a string, or an Error */
+/**
+ * @param reply what the stubbed `execFile` answers: a string, an Error, a
+ * function, or an array of those — one per call, for the probes that ask twice.
+ */
 function harness(reply) {
   const calls = [];
   const execFile = (program, args, options, done) => {
     calls.push({ program, args, options });
-    if (typeof reply === 'function') {
-      reply(done);
+    const answer = Array.isArray(reply) ? reply[calls.length - 1] : reply;
+    if (typeof answer === 'function') {
+      answer(done);
       return;
     }
-    setImmediate(() => (reply instanceof Error ? done(reply, '') : done(null, reply)));
+    setImmediate(() => (answer instanceof Error ? done(answer, '') : done(null, answer ?? '')));
   };
   const context = vm.createContext({
     exports: {},
@@ -101,6 +105,56 @@ test('output that is not json at all is read as nothing being up', async () => {
   // not having been able to ask, and is stored as one.
   const h = harness('no configuration file provided\n');
   assert.deepEqual(services(await h.composeState(['docker', 'compose'], '/repo')), []);
+});
+
+/** The v1 binary's answer to a flag it does not have. */
+function noSuchOption() {
+  const error = new Error('no such option: --format');
+  error.code = 2;
+  return error;
+}
+
+test('a compose that has no --format json is asked the way v1 understands', async () => {
+  // The standalone v1 binary is still what `dockerCompose: docker-compose` means
+  // on plenty of machines, and it rejects `--format` outright — every probe then
+  // failed exactly as a stopped daemon does, so no row was ever marked up.
+  const h = harness([noSuchOption(), 'web\ndb\n']);
+  assert.deepEqual(services(await h.composeState(['docker-compose', '-f', 'compose.yml'], '/repo')), [
+    'db',
+    'web',
+  ]);
+  assert.equal(h.calls.length, 2);
+  // Filtered, and not a bare `--services`: that lists every service the file
+  // declares, which would report a stopped stack as up.
+  assert.deepEqual([...h.calls[1].args], [
+    '-f',
+    'compose.yml',
+    'ps',
+    '--services',
+    '--filter',
+    'status=running',
+  ]);
+});
+
+test('a line that is not a service name is not believed to be one', async () => {
+  const h = harness([noSuchOption(), 'WARNING: something\nweb\n\n']);
+  assert.deepEqual(services(await h.composeState(['docker-compose'], '/repo')), ['web']);
+});
+
+test('a daemon that never answers is not asked a second time', async () => {
+  // `killed` is how `execFile` reports its own timeout. Asking again in another
+  // spelling would only double the wait a person is sitting through.
+  const timeout = new Error('timed out');
+  timeout.killed = true;
+  const h = harness([timeout, 'web\n']);
+  assert.equal(await h.composeState(['docker', 'compose'], '/repo'), undefined);
+  assert.equal(h.calls.length, 1);
+});
+
+test('a compose that answers json is asked once and only once', async () => {
+  const h = harness(NDJSON);
+  await h.composeState(['docker', 'compose'], '/repo');
+  assert.equal(h.calls.length, 1);
 });
 
 test('a program name that cannot be spawned at all is caught', async () => {

@@ -25,11 +25,14 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [], probeReply = () => ({ running: new Set(['web']) }) } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', probeReply = () => ({ running: new Set(['web']) }) } = {}) {
   const probes = [];
   const launched = [];
   const terminals = [];
   const vscode = {
+    // The workbench's own answer for "what shell does a new terminal open in",
+    // which is what decides how a typed command line is quoted.
+    env: { shell: shellPath },
     window: {
       // Enough of a terminal to answer the two questions Add to Terminal asks of
       // one: where it opened, and what was typed into it without being run.
@@ -140,8 +143,10 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], probe
                 emptyManifests: () => [],
                 scriptKey: (manifest, task) => `${manifest}::${task}`,
                 commandFor: (entry) => (entry.argv ?? [entry.name]).join(' '),
-                launchArgv: (entry) => [entry.name],
-                plainArgument: () => true,
+                launchArgv: (entry) => entry.argv ?? [entry.name],
+                // The real test, verbatim: a stub that called everything plain
+                // would leave the quoting below untested.
+                plainArgument: (value) => /^[\w.:@/=+-]+$/.test(value),
               }
             : {},
   });
@@ -153,7 +158,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], probe
     keyForTask = () => undefined;
     repaint = () => {};
     confirmScript = async () => true;
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, SCAN_SETTINGS };
   `,
     Object.assign(context, { memento }),
   );
@@ -404,6 +409,60 @@ test('Add to Terminal types the command line without running it', async () => {
   assert.equal(terminal.shown, 1);
   // Typed, not run: the whole point is the arguments the user adds next.
   assert.deepEqual(terminal.sent, [{ text: 'bash ./scripts/deploy.sh', execute: false }]);
+});
+
+test('Add to Terminal hands the shell a literal path, never a substitution', async () => {
+  // A script checked out under a hostile name used to be typed in double quotes,
+  // which every shell that matters substitutes inside: pressing Enter ran the
+  // substitution and then a path that was not the row that was clicked.
+  const hostile = {
+    ...shell('/repo/scripts', '$(printf injected).sh'),
+    argv: ['bash', './scripts/$(printf injected).sh'],
+  };
+
+  const posix = harness({});
+  await posix.addToTerminal({ kind: 'script', script: hostile });
+  assert.deepEqual(posix.terminals[0].sent, [
+    { text: "bash './scripts/$(printf injected).sh'", execute: false },
+  ]);
+
+  // PowerShell substitutes inside double quotes too, and writes an inner quote
+  // by doubling it.
+  const pwsh = harness({ shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' });
+  await pwsh.addToTerminal({
+    kind: 'script',
+    script: { ...hostile, argv: ['bash', "./scripts/it's $(id).sh"] },
+  });
+  assert.deepEqual(pwsh.terminals[0].sent, [
+    { text: "bash './scripts/it''s $(id).sh'", execute: false },
+  ]);
+
+  // Git Bash on Windows is a POSIX shell on a machine whose default is not, and
+  // the name is what says so.
+  const gitBash = harness({ shell: 'C:\\Program Files\\Git\\bin\\bash.exe' });
+  await gitBash.addToTerminal({
+    kind: 'script',
+    script: { ...hostile, argv: ['bash', "./scripts/it's $(id).sh"] },
+  });
+  assert.deepEqual(gitBash.terminals[0].sent, [
+    { text: "bash './scripts/it'\\''s $(id).sh'", execute: false },
+  ]);
+
+  // And an ordinary line is left bare: this one is written to be edited by hand.
+  const plain = harness({});
+  await plain.addToTerminal({
+    kind: 'script',
+    script: { ...shell('/repo/scripts', 'deploy.sh'), argv: ['bash', './scripts/deploy.sh'] },
+  });
+  assert.deepEqual(plain.terminals[0].sent, [{ text: 'bash ./scripts/deploy.sh', execute: false }]);
+});
+
+test('both shell runner settings throw the scan away', () => {
+  // `collectShellScripts` bakes the words in front of the path into `argv`, so a
+  // runner changed while the cache stands would keep launching the old command.
+  const { SCAN_SETTINGS } = harness({});
+  assert.ok([...SCAN_SETTINGS].includes('shellRunner'));
+  assert.ok([...SCAN_SETTINGS].includes('shellRunners'));
 });
 
 test('Add to Terminal has nothing to open for a row that is not a script', async () => {
@@ -770,6 +829,30 @@ test('the bullet carries the folder a heading lives in, never its file name agai
 });
 
 // --- the two rows a stack is read by -------------------------------------------
+
+test('two manifests in one folder stay tellable apart when they share a name', () => {
+  // napi-rs, neon, wasm-pack and maturin all put a Cargo.toml beside a
+  // package.json in one folder, and both declare the same name. The heading
+  // leads with that name, so the half after the bullet has to be the one thing
+  // that differs — the manifest path — or the tree draws the same row twice.
+  const h = harness({ settings: { groupIcons: 'uniform' } });
+  const rust = { ...script('/repo/crates/mylib/Cargo.toml', 'build', 'cargo'), packageName: 'mylib' };
+  const node = { ...script('/repo/crates/mylib/package.json', 'dev', 'npm'), packageName: 'mylib' };
+  const headings = [...h.buildTreeRoots([rust, node])].map((group) => h.treeItemFor(group).label);
+  assert.deepEqual(headings, [
+    'mylib • repo/crates/mylib/Cargo.toml',
+    'mylib • repo/crates/mylib/package.json',
+  ]);
+
+  // A heading that leads with its own file name still says the folder after the
+  // bullet: `compose.yaml • compose.yaml` said nothing twice.
+  const first = { ...script('/repo/svc/docker-compose.yml', 'up', 'docker-compose'), packageName: 'acme' };
+  const second = { ...script('/repo/svc/docker-compose.dev.yml', 'up', 'docker-compose'), packageName: 'acme' };
+  assert.deepEqual(
+    [...h.buildTreeRoots([first, second])].map((group) => h.treeItemFor(group).label),
+    ['docker-compose.yml • repo/svc', 'docker-compose.dev.yml • repo/svc'],
+  );
+});
 
 test('up is filled and green, down is hollow and red', () => {
   const h = harness({});

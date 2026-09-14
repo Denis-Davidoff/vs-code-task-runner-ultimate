@@ -267,12 +267,57 @@ test('manifestKind recognises the profile-named compose files and only those', (
   for (const name of ['docker-compose.yml', 'compose.yaml', 'docker-compose.dev.yml', 'compose.prod.yaml']) {
     assert.equal(kind(name), 'docker-compose', name);
   }
-  // An override is read as part of the file beside it, never as a group.
+  // An override is read as part of the file beside it, never as a group —
+  // wherever in the name the token sits, and however many segments follow it.
+  // Spelling out the tail instead let `compose.dev.override.local.ci.yml`
+  // through, and a fragment with no image became a heading offering to run it.
   assert.equal(kind('docker-compose.override.yml'), undefined);
   assert.equal(kind('compose.override.yaml'), undefined);
+  assert.equal(kind('compose.dev.override.yml'), undefined);
+  assert.equal(kind('compose.override.local.yml'), undefined);
+  assert.equal(kind('compose.dev.override.local.ci.yml'), undefined);
+  assert.equal(kind('docker-compose.a.override.b.c.yaml'), undefined);
   // `compose` has to be followed by a dot, so this is not one.
   assert.equal(kind('composer.yml'), undefined);
   assert.equal(kind('deploy.staging.yml'), undefined);
+});
+
+// --- the three lists that have to agree ---------------------------------------
+
+test('the scan, the manifest and the activation globs name the same extensions', () => {
+  // These three live in three files and cannot import each other: the generator
+  // runs before anything is compiled, and package.json is data. They have gone
+  // out of step once already — the scan grew from `.sh` to seven extensions and
+  // `activationEvents` did not, so a repository whose tasks were all `.ps1`
+  // woke the extension only when somebody opened the view by hand.
+  const read = (at) => fs.readFileSync(path.join(__dirname, at), 'utf8');
+  const extensions = read('../src/sources.ts')
+    .match(/export const SHELL_EXTENSIONS: ReadonlyArray<string> = \[([^\]]*)\]/)[1]
+    .match(/'([a-z0-9]+)'/g)
+    .map((quoted) => quoted.slice(1, -1));
+  assert.ok(extensions.length > 1, 'the extension list must be readable');
+
+  const braced = `*.{${extensions.join(',')}}`;
+  // The generator's activation globs.
+  assert.ok(
+    read('../tools/generate-contributions.js').includes(`const SHELL_FILES = '${braced}';`),
+    'tools/generate-contributions.js must name the same extensions as the scan',
+  );
+  // The manifest's own default for the setting, which is what the scan falls
+  // back to (`DEFAULT_SHELL_SCRIPTS`).
+  const manifest = JSON.parse(read('../package.json'));
+  assert.deepEqual(manifest.contributes.configuration.properties['taskRunnerUltimate.shellScripts'].default, [
+    `**/scripts/**/${braced}`,
+    `**/bin/**/${braced}`,
+    braced,
+  ]);
+  // And every activation glob the manifest ships for those folders.
+  const activation = manifest.activationEvents.filter((event) => event.includes('{'));
+  assert.deepEqual(activation, [
+    `workspaceContains:**/scripts/**/${braced}`,
+    `workspaceContains:**/bin/**/${braced}`,
+    `workspaceContains:${braced}`,
+  ]);
 });
 
 // --- the shell scan ----------------------------------------------------------
@@ -390,6 +435,18 @@ test('a pattern of your own may carry a brace group too', async () => {
   const rows = plain(await h.collectShellScripts('**/none'));
   assert.deepEqual(rows.map((row) => row.name).sort(), ['lint.sh', 'watch.sh']);
   assert.equal(h.calls[0].include, '{tools/ci/*.sh,tools/dev/*.sh}');
+});
+
+test('a pattern with more groups than the budget is handed over as written', async () => {
+  // Groups multiply: `{a,b}` twenty-five times over is thirty-three million
+  // patterns, and `shellScripts` is a setting a cloned repository can carry.
+  const greedy = '{a,b}'.repeat(25) + '*.sh';
+  const h = harness({ root: '/repo', settings: { shellScripts: [greedy] }, found: {} });
+  const started = Date.now();
+  await h.collectShellScripts('**/none');
+  assert.ok(Date.now() - started < 1000, 'the expansion must not be exponential');
+  // Unexpanded, which is what the search read before any expansion existed.
+  assert.equal(h.calls[0].include, greedy);
 });
 
 test('each extension is run through the words that can start it', async () => {

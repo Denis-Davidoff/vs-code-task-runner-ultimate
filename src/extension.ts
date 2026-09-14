@@ -25,6 +25,14 @@ const TASK_TYPE = 'taskRunnerUltimate';
 const TASK_SOURCE = 'scripts';
 const CONTEXT_PICKER_OPEN = 'taskRunnerUltimate.pickerOpen';
 const CONTEXT_RUNNING_COUNT = 'taskRunnerUltimate.runningCount';
+/**
+ * Which way the tree is grouped, for the header button that switches it.
+ *
+ * A `when` clause cannot read a setting, only a context key, and the button has
+ * to show the mode it would put you in rather than the one you are already in —
+ * so the setting is mirrored here every time it changes.
+ */
+const CONTEXT_HIERARCHICAL = 'taskRunnerUltimate.hierarchical';
 
 interface CategoryRule {
   /** Tokens the script name (or, as a last resort, its command) is matched against. */
@@ -144,7 +152,12 @@ const SCAN_SETTINGS = [
   'dockerCompose',
   'dockerComposeCommands',
   'shellScripts',
+  // Both runner settings, for the same reason: `collectShellScripts` puts the
+  // words in front of the path into `argv` at scan time, so a row launched after
+  // one of them changed would otherwise keep running the previous command until
+  // something else happened to invalidate the scan.
   'shellRunner',
+  'shellRunners',
 ];
 /** Settings that only change how the list is drawn — no rescan, just a repaint. */
 const DISPLAY_SETTINGS = [
@@ -328,6 +341,12 @@ export function activate(context: vscode.ExtensionContext): void {
     // of thirty, which is a quick pick's size and three columns past a submenu's.
     vscode.commands.registerCommand('taskRunnerUltimate.pickIcon', (node?: TreeNode) => pickIcon(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.checkContainers', () => checkContainers(true)),
+    // Two commands for one button: each names the mode it puts the tree in, and
+    // the `when` clauses show whichever of them is the one you do not have. A
+    // single toggle would have to be titled after the state it is leaving, which
+    // is the one thing a button in a header cannot show.
+    vscode.commands.registerCommand('taskRunnerUltimate.groupByEcosystem', () => setGrouping('ecosystem')),
+    vscode.commands.registerCommand('taskRunnerUltimate.groupFlat', () => setGrouping('flat')),
     vscode.commands.registerCommand('taskRunnerUltimate.menu', showMenu),
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
@@ -409,6 +428,9 @@ export function activate(context: vscode.ExtensionContext): void {
       } else if (DISPLAY_SETTINGS.some((key) => event.affectsConfiguration(`taskRunnerUltimate.${key}`))) {
         repaint();
       }
+      if (event.affectsConfiguration('taskRunnerUltimate.grouping')) {
+        syncGrouping();
+      }
       if (event.affectsConfiguration('taskRunnerUltimate.showInStatusBar')) {
         syncStatusBar(context);
       }
@@ -420,6 +442,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   clearStaleBadges();
   syncStatusBar(context);
+  // Before the first draw: a header with no button on it until something changes
+  // reads as a header whose button is missing.
+  syncGrouping();
   onStateChanged();
 }
 
@@ -1911,17 +1936,35 @@ function openSettings(): void {
 }
 
 /**
- * Flips `grouping` between its two modes.
+ * Puts `grouping` into one of its two modes.
  *
  * Written globally rather than to the workspace: a click in a menu should not
  * put a `.vscode/settings.json` into the user's `git status`. No repaint
  * follows, because `update` resolves after the configuration event has fired and
- * `grouping` is on `DISPLAY_SETTINGS` — the redraw is already on its way.
+ * `grouping` is on `DISPLAY_SETTINGS` — the redraw is already on its way, and
+ * `syncGrouping` rides on the same event so the header button turns over with
+ * the tree rather than after it.
  */
-async function toggleGrouping(): Promise<void> {
+async function setGrouping(mode: 'flat' | 'ecosystem'): Promise<void> {
   await vscode.workspace
     .getConfiguration('taskRunnerUltimate')
-    .update('grouping', hierarchical() ? 'flat' : 'ecosystem', vscode.ConfigurationTarget.Global);
+    .update('grouping', mode, vscode.ConfigurationTarget.Global);
+}
+
+/** The ☰ menu's half of the same switch, which names one thing and toggles it. */
+async function toggleGrouping(): Promise<void> {
+  await setGrouping(hierarchical() ? 'flat' : 'ecosystem');
+}
+
+/**
+ * Mirrors `grouping` into the context key the header button is drawn from.
+ *
+ * Called once on the way in and again on every configuration change, which
+ * covers the button being pressed, the setting being edited by hand, and a
+ * workspace being opened with a different mode saved in it.
+ */
+function syncGrouping(): void {
+  void vscode.commands.executeCommand('setContext', CONTEXT_HIERARCHICAL, hierarchical());
 }
 
 /**
@@ -3021,6 +3064,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const groups: Array<TreeNode & { kind: 'group' }> = [];
   const byManifest = new Map<string, (typeof groups)[number]>();
   const crowded = crowdedFolders(scripts);
+  const colliding = collidingHeadings(scripts, crowded);
 
   for (const script of scripts) {
     const key = script.manifest.toString();
@@ -3039,12 +3083,25 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
         id: `group:${key}`,
         label: manifestTitle(script),
         detail: packagePath(script),
-        // The directory and never the file, whichever half leads: once the
-        // heading leads with a file name, repeating it after the bullet said
-        // nothing twice — `compose.yaml • compose.yaml`. What the eye wants
-        // there is where the file lives. The full path keeps its place in the
-        // tooltip, which is what `detail` above is for.
-        folder: packageFolder(script),
+        // The directory, and never the file — with one exception, which is the
+        // one thing the bullet is there for.
+        //
+        // Once the heading leads with a file name, repeating it after the bullet
+        // said nothing twice — `compose.yaml • compose.yaml`. What the eye wants
+        // there is where the file lives, and the full path keeps its place in
+        // the tooltip, which is what `detail` above is for.
+        //
+        // The exception is two headings in one folder that lead with the *same*
+        // text, which is what a napi-rs, neon, wasm-pack or maturin package is:
+        // a Cargo.toml beside a package.json, both declaring the same name.
+        // Neither row says anything the other does not, and the manifest path is
+        // the only thing left that differs — `mylib • crates/mylib/Cargo.toml`
+        // beside `mylib • crates/mylib/package.json`. A heading that already
+        // differs is left alone: `engine • svc` beside `Makefile • svc` is two
+        // rows nobody can confuse, and a path on both would be noise.
+        folder: colliding.has(headingKey(script, shared))
+          ? packagePath(script)
+          : packageFolder(script),
         place: packageHeading(script, shared),
         icon: GROUP_ICON,
         scope: groupRef(script),
@@ -3963,6 +4020,45 @@ function crowdedFolders(scripts: ScriptEntry[]): Set<string> {
 }
 
 /**
+ * What a heading leads with, and where it lives, as one key — the two halves a
+ * second heading has to match for the rows to be indistinguishable.
+ */
+function headingKey(script: ScriptEntry, shared: boolean): string {
+  return `${manifestFolder(script)}::${packageHeading(script, shared)}`;
+}
+
+/**
+ * The headings that another manifest in the same folder would draw identically.
+ *
+ * Two manifests in one folder are ordinary — a Cargo.toml beside a Makefile —
+ * and they usually say different things: one leads with a package name, the
+ * other with a file name. What is not ordinary, and is exactly what the bundler
+ * toolchains produce, is both leading with the *same* name. Only those rows pay
+ * the longer bullet; see `buildTreeRoots`.
+ */
+function collidingHeadings(scripts: ScriptEntry[], crowded: ReadonlySet<string>): Set<string> {
+  const seen = new Map<string, Set<string>>();
+  for (const script of scripts) {
+    // A compose file and a script folder are left out for the same reason
+    // `crowdedFolders` leaves them out: neither is competing with a manifest
+    // over what to call the folder. A compose heading is its own file name, and
+    // no folder holds that name twice; a script folder is drawn as `shell`
+    // whatever its own path says. Counted here, a `scripts/` in a project root
+    // would collide with the unnamed package.json above it and put a path on a
+    // heading nothing else is competing with.
+    if (attachable(script.kind)) {
+      continue;
+    }
+    const shared = crowded.has(manifestFolder(script));
+    const key = headingKey(script, shared);
+    const manifests = seen.get(key) ?? new Set<string>();
+    manifests.add(script.manifest.toString());
+    seen.set(key, manifests);
+  }
+  return new Set([...seen].filter(([, manifests]) => manifests.size > 1).map(([key]) => key));
+}
+
+/**
  * Absolute path of the folder a row's file sits in.
  *
  * For a shell row that is the group's own directory rather than the one above
@@ -4414,10 +4510,76 @@ async function addToTerminal(node: TreeNode | undefined): Promise<void> {
     cwd: node.script.cwd,
   });
   terminal.show();
-  // The same line the tooltip and the picker show, quoted for the eye — see
-  // `commandFor`. What a shell is handed here is what the user presses Enter on,
-  // so it is theirs to correct in the two cases the quoting reads oddly.
-  terminal.sendText(commandFor(node.script), false);
+  terminal.sendText(terminalLine(node.script), false);
+}
+
+/**
+ * The row's command line as a *shell* should receive it, every argument literal.
+ *
+ * Deliberately not `commandFor`, which is the line the tooltip and the picker
+ * show and is quoted for the eye alone: it wraps anything unusual in double
+ * quotes, and a double-quoted string is where every shell that matters still
+ * performs substitution. A script checked out as `$(id).sh` would then be typed
+ * as `bash "./scripts/$(id).sh"`, and the Enter the user presses would run `id`
+ * and then a path that is not the row they clicked. Nothing here is executed for
+ * them, which is the point of the feature — and it is exactly why the line has
+ * to be one they can press Enter on safely.
+ *
+ * Plain arguments — word characters and the punctuation paths and task names are
+ * built from — are left bare, which is nearly every line this ever produces:
+ * `bash ./scripts/deploy.sh` reads as itself, and quoting it would only be noise
+ * in a line written to be edited by hand.
+ */
+function terminalLine(script: ScriptEntry): string {
+  const quoting = terminalQuoting();
+  return launchArgv(script)
+    .map((value) => (plainArgument(value) ? value : quoteFor(quoting, value)))
+    .join(' ');
+}
+
+/**
+ * Which family of shell the new terminal opens in, as far as the workbench will
+ * say: `env.shell` is the path of the profile it starts, and its file name is
+ * the only thing in it that names a shell.
+ *
+ * Git Bash on Windows is why the name is read before the platform: it is a POSIX
+ * shell on a machine whose default is not, and quoting it as PowerShell would
+ * leave `$(…)` live. When there is no name to read, the platform decides, which
+ * is the workbench's own default either way.
+ */
+function terminalQuoting(): 'posix' | 'powershell' | 'cmd' {
+  const name = (vscode.env.shell ?? '')
+    .toLowerCase()
+    .split(/[\\/]/)
+    .pop();
+  if (name) {
+    if (name.startsWith('pwsh') || name.startsWith('powershell')) {
+      return 'powershell';
+    }
+    return name.startsWith('cmd') ? 'cmd' : 'posix';
+  }
+  return process.platform === 'win32' ? 'powershell' : 'posix';
+}
+
+/**
+ * One argument, quoted so the shell reads it as text and nothing else.
+ *
+ * Single quotes in both shells that substitute: they are the only quoting in
+ * `sh` and in PowerShell that leaves `$`, backticks and `$(…)` inert, and each
+ * has its own way of writing a quote inside one — `'\''` for the first, doubled
+ * for the second.
+ *
+ * `cmd.exe` has no substitution to protect against, so double quotes are enough
+ * there. `%VAR%` still expands inside them and cannot be escaped in a line typed
+ * at a prompt, which is a name that reads oddly rather than a name that runs:
+ * cmd expands it to a value, never to a command.
+ */
+function quoteFor(quoting: 'posix' | 'powershell' | 'cmd', value: string): string {
+  if (quoting === 'cmd') {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  const escaped = quoting === 'powershell' ? value.replace(/'/g, "''") : value.replace(/'/g, "'\\''");
+  return `'${escaped}'`;
 }
 
 /**

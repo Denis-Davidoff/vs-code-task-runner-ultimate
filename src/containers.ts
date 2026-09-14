@@ -49,22 +49,65 @@ export async function composeState(argv: string[], cwd: string): Promise<Compose
     return undefined;
   }
 
-  const output = await run(program, [...rest, 'ps', '--format', 'json'], cwd);
-  if (output === undefined) {
+  const json = await run(program, [...rest, ...V2_PROBE], cwd);
+  if (json.output !== undefined) {
+    const running = new Set<string>();
+    for (const entry of parseRows(json.output)) {
+      // `ps` without `--all` already lists only what is up, but the field is
+      // there and honest, so a row that says otherwise is believed over the
+      // omission.
+      const state = typeof entry.State === 'string' ? entry.State.toLowerCase() : 'running';
+      const service = typeof entry.Service === 'string' ? entry.Service : undefined;
+      if (service && (state === 'running' || state === 'restarting')) {
+        running.add(service);
+      }
+    }
+    return { running };
+  }
+  // A timeout is the daemon, not the flags, and asking the same question twice
+  // of something that is not answering only doubles the wait.
+  if (json.timedOut) {
     return undefined;
   }
 
-  const running = new Set<string>();
-  for (const entry of parseRows(output)) {
-    // `ps` without `--all` already lists only what is up, but the field is there
-    // and honest, so a row that says otherwise is believed over the omission.
-    const state = typeof entry.State === 'string' ? entry.State.toLowerCase() : 'running';
-    const service = typeof entry.Service === 'string' ? entry.Service : undefined;
-    if (service && (state === 'running' || state === 'restarting')) {
-      running.add(service);
-    }
+  const plain = await run(program, [...rest, ...V1_PROBE], cwd);
+  if (plain.output === undefined) {
+    return undefined;
   }
-  return { running };
+  return { running: new Set(serviceNames(plain.output)) };
+}
+
+/**
+ * The question, in the two spellings compose has had.
+ *
+ * `--format json` is a v2 flag. The standalone v1 binary — which
+ * `taskRunnerUltimate.dockerCompose` still offers, and which is still what
+ * `docker-compose` is on plenty of machines — rejects it outright, and every
+ * probe then failed the way a stopped daemon does: silently, with the rows never
+ * marked up and the ■ that stops somebody else's stack never appearing. So the
+ * v1 form is asked next, and it is the *filtered* one: `--services` alone lists
+ * every service the file declares, running or not, which would claim a stopped
+ * stack is up.
+ *
+ * The retry costs a second process for a file that could not be answered for at
+ * all — a daemon that is down now fails twice instead of once. That is paid in
+ * the path that was already the slow one, and only outside the timeout above.
+ */
+const V2_PROBE = ['ps', '--format', 'json'];
+const V1_PROBE = ['ps', '--services', '--filter', 'status=running'];
+
+/**
+ * The service names in a v1 answer: one per line, and nothing else is one.
+ *
+ * Compose writes its warnings to stderr, so a line here is a name — but the
+ * shape is checked all the same, since what this decides is whether a row claims
+ * to be up, and an unexpected sentence must not become a service.
+ */
+function serviceNames(output: string): string[] {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(line));
 }
 
 /**
@@ -109,20 +152,32 @@ function isRow(value: unknown): value is Record<string, unknown> {
  * finish. No argument is ever interpolated into a command line — `execFile`
  * hands the vector to the OS, so a path or a service name carrying a space or a
  * `$` is an argument and not code.
+ *
+ * Whether the answer ran out of time is reported beside it: a flag the program
+ * does not know is worth asking again in another spelling, and a daemon that
+ * never answers is not.
  */
-function run(program: string, args: string[], cwd: string): Promise<string | undefined> {
+function run(program: string, args: string[], cwd: string): Promise<{ output?: string; timedOut: boolean }> {
   return new Promise((resolve) => {
     try {
       execFile(
         program,
         args,
         { cwd, timeout: PROBE_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES, windowsHide: true },
-        (error, stdout) => resolve(error ? undefined : stdout),
+        (error, stdout) =>
+          resolve(
+            error
+              ? // `killed` is how `execFile` reports the timeout it enforces
+                // itself; a program that exited on its own carries an exit code.
+                { timedOut: (error as { killed?: boolean }).killed === true }
+              : { output: stdout, timedOut: false },
+          ),
       );
     } catch {
       // `execFile` throws rather than calling back when the program name itself
-      // is unusable, which a `dockerCompose` setting can make it.
-      resolve(undefined);
+      // is unusable, which a `dockerCompose` setting can make it. Nothing was
+      // started, so there is nothing a second spelling would reach either.
+      resolve({ timedOut: true });
     }
   });
 }

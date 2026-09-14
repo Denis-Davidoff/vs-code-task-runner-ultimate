@@ -179,8 +179,15 @@ const COMPOSE_NAME = /^(?:docker-)?compose(?:\.[A-Za-z0-9_-]+)*\.ya?ml$/;
  * the four it names, so only those are appended as a second `-f`; the rest are
  * simply not rows, which is what this extension's own documentation has always
  * promised about a file with `.override.` in its name.
+ *
+ * The token and nothing around it. Spelling out the tail instead — the
+ * extension, with room for one segment before it — let a name carrying two
+ * through: `compose.dev.override.local.ci.yml` matched no tail this test knew
+ * and became a heading, which is the one thing the promise above rules out. What
+ * it is tested against is a file name (see `manifestKind`), already known to
+ * look like compose, so there is nothing else in it for `.override.` to be.
  */
-const COMPOSE_OVERRIDE_NAME = /\.override\.[A-Za-z0-9_-]*\.?ya?ml$/;
+const COMPOSE_OVERRIDE_NAME = /\.override\./;
 
 /**
  * The globs that find the profile-named files above. The four default names are
@@ -1651,6 +1658,36 @@ const DEFAULT_SHELL_SCRIPTS: ReadonlyArray<string> = [
  * a braced pattern of their own in the setting.
  */
 function expandBraces(pattern: string): string[] {
+  let expanded = [pattern];
+  // One group per pass, across every pattern the last pass produced, so the work
+  // stops at the budget rather than at the end of an expansion nobody asked for:
+  // groups multiply, and `{a,b}` twenty-five times over is thirty-three million
+  // patterns and a frozen window. A pattern that wants more than the budget is
+  // handed over as it was written — the search then reads whatever its own glob
+  // parser makes of the braces, which is what happened before any of this, and
+  // never a hang. Twenty-one is what the defaults expand to.
+  for (let pass = 0; pass < MAX_GLOB_GROUPS; pass += 1) {
+    const next: string[] = [];
+    for (const one of expanded) {
+      next.push(...splitGroup(one));
+      if (next.length > MAX_GLOB_ALTERNATIVES) {
+        return [pattern];
+      }
+    }
+    if (next.length === expanded.length && next.every((value, at) => value === expanded[at])) {
+      return next;
+    }
+    expanded = next;
+  }
+  return [pattern];
+}
+
+/** How far `expandBraces` will go before handing the pattern back as written. */
+const MAX_GLOB_ALTERNATIVES = 256;
+const MAX_GLOB_GROUPS = 12;
+
+/** One pattern with its first `{a,b}` group opened, or the pattern as it was. */
+function splitGroup(pattern: string): string[] {
   const open = pattern.indexOf('{');
   if (open === -1) {
     return [pattern];
@@ -1681,7 +1718,7 @@ function expandBraces(pattern: string): string[] {
   }
   const head = pattern.slice(0, open);
   const tail = pattern.slice(close + 1);
-  return choices.flatMap((choice) => expandBraces(`${head}${choice}${tail}`));
+  return choices.map((choice) => `${head}${choice}${tail}`);
 }
 
 /**
