@@ -32,8 +32,20 @@ restart without ever going looking for a terminal tab.**
   come first.
 - 🧩 **[Eleven ecosystems, one list](#what-gets-scanned)** — `package.json`, `deno.json`, `Cargo.toml`,
   `Makefile.toml`, `pyproject.toml`, `Pipfile`, `tox.ini`, `noxfile.py`, `Makefile`, `justfile`,
-  `Taskfile.yml`, `go.mod`, `composer.json`, `mise.toml`, `docker-compose.yml` and the `scripts/*.sh`
+  `Taskfile.yml`, `go.mod`, `composer.json`, `mise.toml`, `docker-compose.yml` and the shell scripts
   every repository accumulates, so a mixed monorepo is still one list.
+- 🐳 **[Docker Compose, as rows](#docker-compose)** — every compose file in the workspace, including
+  the profile-named ones, with `up` fanned out per service and `down`, `build`, `logs` and `ps`
+  beside it. **▶ and ■ live on the file's own heading**, so a stack goes up and comes down without
+  opening it, and the heading spins while any part of it runs. **Check Containers** asks Docker what
+  is really up — including stacks you started from a terminal or with `up -d` — and ■ then stops
+  them.
+- 💻 **[Shell scripts, as tasks](#shell-scripts)** — `.sh`, `.bash`, `.zsh` and `.ksh`, and on Windows
+  `.ps1`, `.bat` and `.cmd`, picked up from `scripts/`, `bin/` and the workspace root at any depth.
+  Each project's scripts gather under one `shell` folder with a terminal icon, every row wears the
+  shell it is read by, the dimmed text is the script's own first comment, and each extension is
+  started by the runner that can start it. **Add to Terminal** puts the command line in a fresh
+  terminal unrun, for when a script takes arguments.
 - 🧠 **[Knows how to run things](#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
   package from `packageManager`, `engines` and the lock files; everything else named by the table it
   is declared in.
@@ -44,7 +56,9 @@ restart without ever going looking for a terminal tab.**
 
 Tasks scatter. A monorepo buries them across a dozen `package.json` files, the Rust service next to
 them keeps its own in a `Makefile.toml`, the Python one in `pyproject.toml`, and there is a
-`justfile` at the root that half the team forgets exists. The dev server you started an hour ago is
+`justfile` at the root that half the team forgets exists. The stack everything talks to is a
+`docker-compose.yml` two folders away, and the half-dozen `scripts/*.sh` nobody has opened since they
+were written are how the release actually goes out. The dev server you started an hour ago is
 alive in a tab you can no longer find, and running anything by hand means getting the directory
 *and* the tool right first. Task & Script Explorer collapses all of that into one list, and gives you
 three ways to reach it.
@@ -108,6 +122,10 @@ monorepo.
   stop it. Nothing running is ever a single click away from being killed.
 - **Show Terminal** — click a running row, or right-click it, to go to its output without stopping
   or restarting anything.
+- **A compose file runs from its own heading** — ▶ brings the stack up and ■ takes it down, without
+  opening the file to find the `up` row.
+- **Add to Terminal** — right-click a shell row and a new terminal opens with its command line
+  *typed but not run*, so a script can be given the arguments the tree has no way to ask for.
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
   at the line the task is on, wherever a task has one to point at; on a heading, **Open Manifest
   File** opens the file itself, and on a shell row it opens the script.
@@ -147,7 +165,7 @@ monorepo.
 | **PHP** | `composer.json` | `scripts` | `composer run-script <name>` |
 | **mise** | `mise.toml`, `.mise.toml` | `[tasks.*]` | `mise run <name>` |
 | **Docker** | `compose.yml`, `docker-compose.yml`, their `.yaml` spellings, and profile names like `docker-compose.dev.yml` | `services:` — see [below](#docker-compose) | `docker compose -f <file> up <service>`, … |
-| **Shell** | `**/scripts/**/*.sh`, `**/bin/**/*.sh`, `*.sh` | the files themselves — see [below](#shell-scripts) | `bash ./scripts/deploy.sh` |
+| **Shell** | `**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}`, the same under `**/bin/**/`, and `*.{sh,…}` in the root | the files themselves — see [below](#shell-scripts) | `bash ./scripts/deploy.sh`, `powershell -NoProfile -File ./bin/setup.ps1` |
 
 Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's files are never
 opened at all, which is also the fastest way to quieten a repository carrying a `Makefile` nobody
@@ -218,6 +236,25 @@ docker-compose.yml • services/stack
   📦 build          docker compose -f docker-compose.yml build
 ```
 
+The **heading itself carries ▶ and ■**, so a stack goes up and comes down without the file being
+opened at all:
+
+```
+▸ 🖥 docker-compose.yml • services/stack        ▶
+```
+
+▶ runs that file's bare `up` — the whole stack, the same row and the same confirmation as pressing ▶
+inside. ■ appears once the containers are known to be up: while a run of *this* window is behind them
+it stops that run, and otherwise it runs `docker compose stop` for the file, exactly as the ■ on the
+`up` row does. The two are never on the row at once, and a file whose commands were narrowed to a
+list without `up` gets neither — there is then no such thing as bringing it up.
+
+The heading also **spins while any part of the file is running** — one `up: web` out of six services
+counts — so a compose file, which starts folded, still says it is busy without being opened. It is
+the one heading that does: every other one is a file or a folder that *holds* tasks rather than being
+one, and a spinner on all of them would be a column of spinners in a monorepo with a single `dev`
+running.
+
 Two details are deliberate. **Nothing is ever run detached**: a `-d` row exits the moment it starts,
 which would leave the row idle with the containers still up and the ■ button with nothing to stop.
 And `logs` is always followed (`logs -f`) for the same reason. If you want a detached `up`, that is
@@ -269,8 +306,8 @@ When Docker cannot answer — not installed, daemon down, the call times out aft
 rows keep whatever they last said rather than claiming everything stopped. "I could not ask" is not
 "your stack is down".
 
-■ on a row marked this way runs `docker compose stop` for that file or service, as an ordinary task
-with its own terminal. The task belongs to the row you pressed, so that row spins while its own stop
+■ on a row marked this way — and on the file's heading, which stands for the whole file — runs
+`docker compose stop` for that file or service, as an ordinary task with its own terminal. The task belongs to the row you pressed, so that row spins while its own stop
 runs and settles when the re-check comes back. `stop` and not `down`, because the square promises a
 stop: `down` would also delete the containers and their networks, and the `down` row is there for
 that.
@@ -281,16 +318,23 @@ the code for this lives in a file of its own, `src/containers.ts`, so the bounda
 
 ### Shell scripts
 
-Every `.sh` under a `scripts/` or `bin/` folder — at any depth, so a package of a monorepo gets its
-own — or in the root of a workspace folder becomes a row, grouped under **the directory it lives in**:
-twelve scripts across two folders are two headings, not twelve one-row headings.
-`taskRunnerUltimate.shellScripts` is the list of globs, matched against each file's path relative to
-its workspace folder. The first two carry a leading `**/` for exactly that reason; the third does not,
-so loose `*.sh` files are listed where a project root is rather than in every directory. Each heading
-is then drawn [inside the nearest project above it](#what-a-project-takes-in-with-it).
+Every script under a `scripts/` or `bin/` folder — at any depth, so a package of a monorepo gets its
+own — or in the root of a workspace folder becomes a row, and in `flat` grouping the scripts of one
+project are drawn together under a single **`shell`** heading with a terminal on it, however many
+folders they came from. `taskRunnerUltimate.shellScripts` is the list of globs, matched against each
+file's path relative to its workspace folder. The first two carry a leading `**/` for exactly that
+reason; the third does not, so loose scripts are listed where a project root is rather than in every
+directory. The heading is then drawn [inside the nearest project above
+it](#what-a-project-takes-in-with-it).
+
+Seven extensions are read: the Bourne family — `.sh`, `.bash`, `.zsh`, `.ksh` — and the three Windows
+writes its scripts in, `.ps1`, `.bat` and `.cmd`. Which one a file carries decides two things and
+nothing else: the words it is run through, and the terminal its row wears — bash, PowerShell or the
+command prompt, so a column of scripts says what each one is before you read its name.
 
 The dimmed text is the first comment line in the file written for a person — the shebang, and the
-`# shellcheck`, `# vim:` and `# -*-` pragmas under it, are skipped:
+`# shellcheck`, `# vim:` and `# -*-` pragmas under it, are skipped. A batch file's `REM` and `::`
+count as comment openers too:
 
 ```bash
 #!/usr/bin/env bash
@@ -299,14 +343,36 @@ The dimmed text is the first comment line in the file written for a person — t
 set -euo pipefail
 ```
 
-A row runs as `bash ./scripts/deploy.sh` **from the workspace folder root**, which is where a
-`scripts/*.sh` is nearly always written to be run from. `taskRunnerUltimate.shellRunner` changes the
-`bash`; empty runs the path on its own, which then needs both the executable bit and a shebang. On
-Windows this wants Git Bash or WSL on the `PATH`.
+A row runs **from the workspace folder root**, which is where a `scripts/*.sh` is nearly always
+written to be run from. What goes in front of the path is decided by the extension:
+
+| Extension | Runs as | Setting |
+| --- | --- | --- |
+| `.sh`, `.bash`, `.zsh`, `.ksh` | `bash ./scripts/deploy.sh` | `taskRunnerUltimate.shellRunner` |
+| `.ps1` | `powershell -NoProfile -File ./bin/setup.ps1` | `taskRunnerUltimate.shellRunners` |
+| `.bat`, `.cmd` | `./bin/run.bat` — a program to Windows already | `taskRunnerUltimate.shellRunners` |
+
+`shellRunner` empty runs a Bourne-family path on its own, which then needs both the executable bit
+and a shebang; on Windows it wants Git Bash or WSL on the `PATH`. `shellRunners` is the same thing per
+extension, and an extension it does not name falls back to `shellRunner`. `powershell` and not `pwsh`
+because Windows PowerShell 5.1 ships with the OS — on PowerShell 7, set `pwsh -NoProfile -File`, and
+where an execution policy blocks the script, `powershell -NoProfile -ExecutionPolicy Bypass -File`.
+Stepping over the machine's policy is deliberately not the default.
+
+A script that takes arguments has nowhere to say them — the tree runs what the file is and nothing
+more — so right-click → **Add to Terminal** opens a new terminal at the same working directory with
+the same command line *typed into the prompt and not run*:
+
+```
+$ bash ./scripts/deploy.sh ▏          ← the cursor is here; type the rest and press Enter
+```
+
+Nothing is remembered and nothing is prompted for: it is a terminal, with a line in it to finish,
+edit or throw away.
 
 The executable bit is deliberately not consulted. It is invisible through VS Code's own file API —
 `FilePermission` carries only `Readonly` — so reading it would mean importing `node:fs`, and that is
-what would break Remote SSH and Dev Containers. The convention is the signal instead: a `.sh` in
+what would break Remote SSH and Dev Containers. The convention is the signal instead: a script in
 `scripts/`, `bin/` or the root.
 
 At most 200 scripts are read per scan, budgeted apart from the manifests so a repository full of
@@ -360,9 +426,14 @@ and hovering one reveals inline ☆ / ▶ / ⟳ / ■ buttons. The count of runn
 badge.
 
 Each heading wears **its own file's icon**, taken from whichever file icon theme you run — the real
-npm, Rust and Docker marks, which no icon font carries. A folder of shell scripts gets the theme's
-folder icon. `taskRunnerUltimate.groupIcons: "uniform"` puts a single stack glyph back on all of
-them, for when the headings should stay out of the way of the rows under them.
+npm, Rust and Docker marks, which no icon font carries. A folder of shell scripts is the one heading
+with no file behind it, and a theme can only match on a file name, so it wears a terminal instead.
+`taskRunnerUltimate.groupIcons: "uniform"` puts a single stack glyph back on all of them, for when the
+headings should stay out of the way of the rows under them.
+
+A task row wears its [category's glyph](#categories-and-colours), and a shell row that no category
+claimed wears the terminal its file is read by — bash for a `.sh`, PowerShell for a `.ps1`, the
+command prompt for a `.bat` — where every unclaimed row used to show the same `play` triangle.
 
 The colour is a separate thing from the icon, and stays yours: a heading is tinted when **you**
 [paint it](#painting-a-row), the tint lands on the text and leaves the icon its own colours, and an
@@ -386,9 +457,9 @@ acme
   🖥 docker-compose.yml
      ▶ up
      ▶ up: web
-  💻 scripts
-     ▶ deploy.sh
-  💻 shell
+  💻 shell (3)
+     ▶ deploy.sh     scripts
+     ▶ lint.sh       tools/ci
      ▶ release.sh
 ```
 
@@ -401,8 +472,19 @@ that the folder *is* a project, so a folder holding only one of those hosts noth
 file keeps a heading of its own — as it does anywhere with no project above it at all.
 
 A compose file is named by its file, since a folder can hold `docker-compose.yml` and
-`docker-compose.dev.yml` at once. A script folder is named by where it sits relative to the project —
-`scripts`, `bin`, `tools/ci` — and `shell` is what is left when that is the project's own folder.
+`docker-compose.dev.yml` at once. Script folders are not named at all: `scripts/`, `bin/` and
+`tools/ci` under one project are a single **`shell`** row, since three headings would each say only
+that there are scripts here. Where more than one folder is in the row, each script says which it came
+from in the dimmed column, and a script in the project's own folder has no path to name.
+
+The count in the brackets is how many scripts are under the fold, the way an ecosystem row carries
+its own — this is the one heading named after what it holds rather than after a file or a package,
+and the number is the rest of that sentence. A rename replaces the whole heading, count and all.
+
+A `shell` row that stands for **one** folder *is* that folder: it can be renamed, put away, painted
+and opened exactly as it always could. One standing for several names nothing on disk, so — like an
+ecosystem row — it folds, takes a colour and an icon and stops everything under it, and offers no
+rename or hide.
 
 Whatever a heading leads with, the half after the bullet is the **folder** it lives in and never the
 file name again: `docker-compose.yml • apps/web`, not `docker-compose.yml • apps/web/docker-compose.yml`.
@@ -791,8 +873,8 @@ they are Unicode 15, and an older emoji font would draw three empty boxes instea
 
 **Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Enable Confirmation**,
 **Disable Confirmation**, **Go to Script Definition**, **Open Manifest File**, **Show Terminal**,
-**Rename…** and **Colour** all act on the row they were invoked from, so they live where there is
-a row to invoke them on:
+**Add to Terminal**, **Rename…** and **Colour** all act on the row they were invoked from, so they
+live where there is a row to invoke them on:
 
 | Command | Where |
 | --- | --- |
@@ -805,6 +887,9 @@ a row to invoke them on:
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
 | Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; OTHER TASKS names no file and does not offer it |
 | Show Terminal | a click on a running row, and right-click — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
+| Compose Up | ▶ inline on hover and right-click, on a [compose heading](#docker-compose) only — the file's own bare `up`. A heading of a manifest has no single row that stands for the file; a compose file has exactly one |
+| Stop Containers | ■ inline on hover and right-click, on a compose heading whose containers Docker [reported up](#knowing-what-is-actually-up) with no run of ours behind them. While one of ours is running, the ■ in that slot is Stop All in Package instead |
+| Add to Terminal | right-click only, on a [shell row](#shell-scripts) — a new terminal with the command line typed into it and not run, which is where a script takes arguments nobody wrote down. A manifest task says its own arguments in the manifest, so the entry is not offered there |
 | Rename… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
 
@@ -961,8 +1046,9 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `pythonRunner` | `auto` | How `[project.scripts]` entry points are entered — see [Python](#python). `none` hides them. |
 | `dockerCompose` | `docker compose` | The compose command — the v2 plugin, or the standalone `docker-compose`. See [Docker Compose](#docker-compose). |
 | `dockerComposeCommands` | `up`, `down`, `build`, `logs`, `ps` | The compose subcommands every compose file gets. `up` also fans out over the services. |
-| `shellScripts` | `**/scripts/**/*.sh`, `**/bin/**/*.sh`, `*.sh` | Where [shell scripts](#shell-scripts) are looked for, as globs matched against each file's path relative to its workspace folder. |
-| `shellRunner` | `bash` | What a shell row is run through. Empty runs the path on its own. |
+| `shellScripts` | `**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}`, the same under `**/bin/**/`, and the bare `*.{sh,…}` | Where [shell scripts](#shell-scripts) are looked for, as globs matched against each file's path relative to its workspace folder. |
+| `shellRunner` | `bash` | What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through. Empty runs the path on its own. |
+| `shellRunners` | `powershell -NoProfile -File` for `.ps1`, nothing for `.bat` and `.cmd` | What each extension is run through, keyed by extension. One that is not named here falls back to `shellRunner`. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `showInEditorTitle` | `true` | The ▶ icon in the editor title bar. |
 | `showInStatusBar` | `true` | The `Tasks` entry (and its Restart all / Stop all buttons) in the status bar. |

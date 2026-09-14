@@ -201,6 +201,18 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "taskRunnerUltimate.runGroup",
+        "title": "Compose Up",
+        "category": "Task & Script Explorer",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskRunnerUltimate.stopStack",
+        "title": "Stop Containers",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "taskRunnerUltimate.restartGroup",
         "title": "Restart All in Package",
         "category": "Task & Script Explorer",
@@ -235,6 +247,12 @@
         "title": "Open Terminal in Editor Area",
         "category": "Task & Script Explorer",
         "icon": "$(open-preview)"
+      },
+      {
+        "command": "taskRunnerUltimate.addToTerminal",
+        "title": "Add to Terminal",
+        "category": "Task & Script Explorer",
+        "icon": "$(terminal)"
       },
       {
         "command": "taskRunnerUltimate.setColor.red",
@@ -398,12 +416,22 @@
         {
           "command": "taskRunnerUltimate.restartGroup",
           "group": "inline@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:hidden)?|eco):running$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:(up|down))?(:hidden)?|eco):running$/"
         },
         {
           "command": "taskRunnerUltimate.stopGroup",
           "group": "inline@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:hidden)?|eco):running$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:(up|down))?(:hidden)?|eco):running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.runGroup",
+          "group": "inline@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:(up|down)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopStack",
+          "group": "inline@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:up$/"
         },
         {
           "command": "taskRunnerUltimate.runItemMenu",
@@ -416,6 +444,16 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
         },
         {
+          "command": "taskRunnerUltimate.runGroup",
+          "group": "0_actions@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:(up|down)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopStack",
+          "group": "0_actions@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:up$/"
+        },
+        {
           "command": "taskRunnerUltimate.openScript",
           "group": "0_open@1",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:/"
@@ -423,7 +461,7 @@
         {
           "command": "taskRunnerUltimate.openManifest",
           "group": "0_open@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:hidden)?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
@@ -434,6 +472,11 @@
           "command": "taskRunnerUltimate.openTerminalEditor",
           "group": "0_open@3",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+        },
+        {
+          "command": "taskRunnerUltimate.addToTerminal",
+          "group": "0_open@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:shell:/"
         },
         {
           "command": "taskRunnerUltimate.addFavorite",
@@ -463,7 +506,7 @@
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:hidden)?(:running)?$/"
         },
         {
           "submenu": "taskRunnerUltimate.color",
@@ -478,17 +521,17 @@
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?:hidden(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.hideGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?:hidden(:running)?$/"
         }
       ],
       "taskRunnerUltimate.color": [
@@ -603,6 +646,14 @@
           "when": "false"
         },
         {
+          "command": "taskRunnerUltimate.runGroup",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.stopStack",
+          "when": "false"
+        },
+        {
           "command": "taskRunnerUltimate.openScript",
           "when": "false"
         },
@@ -616,6 +667,10 @@
         },
         {
           "command": "taskRunnerUltimate.openTerminalEditor",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.addToTerminal",
           "when": "false"
         },
         {
@@ -869,20 +924,32 @@
         "taskRunnerUltimate.shellScripts": {
           "type": "array",
           "default": [
-            "**/scripts/**/*.sh",
-            "**/bin/**/*.sh",
-            "*.sh"
+            "**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
+            "**/bin/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
+            "*.{sh,bash,zsh,ksh,ps1,bat,cmd}"
           ],
           "uniqueItems": true,
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Where shell scripts are looked for, as globs matched against each file’s path **relative to its workspace folder**. Every script found becomes a row, grouped under the directory it sits in.\n\nThe leading `**/` is what carries the first two past the root: without it a `scripts` folder would have to sit at the very top, and `apps/web/scripts/deploy.sh` would never be found. The third pattern keeps no prefix on purpose, so loose scripts are listed where a project root is rather than in every directory.\n\nThe executable bit is deliberately not consulted: it is invisible to VS Code’s own file API, and reading it would mean giving up Remote SSH and Dev Containers. The convention — a `.sh` under `scripts`, under `bin`, or in the root — is the signal instead.\n\nAt most 200 scripts are read, budgeted apart from the manifests. Narrow these patterns if a repository has more."
+          "markdownDescription": "Where shell scripts are looked for, as globs matched against each file’s path **relative to its workspace folder**. Every script found becomes a row, and in `flat` grouping the ones a project holds are drawn together under a single `shell` heading.\n\nThe leading `**/` is what carries the first two past the root: without it a `scripts` folder would have to sit at the very top, and `apps/web/scripts/deploy.sh` would never be found. The third pattern keeps no prefix on purpose, so loose scripts are listed where a project root is rather than in every directory.\n\nSeven extensions: the Bourne family (`.sh`, `.bash`, `.zsh`, `.ksh`) and the three Windows writes its scripts in (`.ps1`, `.bat`, `.cmd`). Which one a file carries decides the words it is run through — see `#taskRunnerUltimate.shellRunners#` — and the terminal glyph its row wears. A `{a,b}` group works in a pattern of your own too.\n\nThe executable bit is deliberately not consulted: it is invisible to VS Code’s own file API, and reading it would mean giving up Remote SSH and Dev Containers. The convention — a script under `scripts`, under `bin`, or in the root — is the signal instead.\n\nAt most 200 scripts are read, budgeted apart from the manifests. Narrow these patterns if a repository has more."
         },
         "taskRunnerUltimate.shellRunner": {
           "type": "string",
           "default": "bash",
-          "markdownDescription": "What a shell row is run through, from the workspace folder root: `bash ./scripts/deploy.sh`. Leave empty to run the path on its own, which then needs both the executable bit and a shebang.\n\nOn Windows this wants Git Bash or WSL on the `PATH`."
+          "markdownDescription": "What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through, from the workspace folder root: `bash ./scripts/deploy.sh`. Leave empty to run the path on its own, which then needs both the executable bit and a shebang.\n\nOn Windows this wants Git Bash or WSL on the `PATH`. The Windows extensions are started by `#taskRunnerUltimate.shellRunners#` instead."
+        },
+        "taskRunnerUltimate.shellRunners": {
+          "type": "object",
+          "default": {
+            "ps1": "powershell -NoProfile -File",
+            "bat": "",
+            "cmd": ""
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "What each extension is run through, keyed by extension — the map that covers what `#taskRunnerUltimate.shellRunner#` does not. An extension that appears here is started with these words in front of the path; one that does not falls back to `shellRunner`.\n\n`powershell` and not `pwsh`: Windows PowerShell 5.1 ships with the OS, where PowerShell 7 is an install away. On 7, set `pwsh -NoProfile -File`. If an execution policy blocks the script, `powershell -NoProfile -ExecutionPolicy Bypass -File` is the usual answer — deliberately not the default.\n\n`.bat` and `.cmd` are run as themselves, with no runner at all: they are programs to Windows already, and the PowerShell a task starts in takes the `./path/to/x.bat` this builds. With `cmd.exe` as the terminal profile, set `cmd /c` for both."
         },
         "taskRunnerUltimate.colorIcons": {
           "type": "boolean",

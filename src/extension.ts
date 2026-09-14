@@ -282,6 +282,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.openScript', (node?: TreeNode) => openManifest(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.openManifest', (node?: TreeNode) => openManifest(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.showTerminal', (node?: TreeNode) => showTerminal(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.addToTerminal', (node?: TreeNode) =>
+      addToTerminal(node),
+    ),
     vscode.commands.registerCommand('taskRunnerUltimate.openTerminalEditor', (node?: TreeNode) =>
       openTerminalEditor(node),
     ),
@@ -307,6 +310,8 @@ export function activate(context: vscode.ExtensionContext): void {
     // runs. They act on the group's running rows and nothing else — an idle
     // script is not started by restarting its neighbours.
     vscode.commands.registerCommand('taskRunnerUltimate.stopGroup', (node?: TreeNode) => stopGroup(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.runGroup', (node?: TreeNode) => runGroup(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.stopStack', (node?: TreeNode) => stopStack(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
     // One command per colour: a submenu entry is a command, and there is no way
     // to hand it an argument from contributes.menus. The list is the palette's,
@@ -1215,6 +1220,8 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
       { id: 'gear', name: 'Gear' },
       { id: 'terminal', name: 'Terminal' },
       { id: 'terminal-bash', name: 'Terminal Bash' },
+      { id: 'terminal-powershell', name: 'Terminal PowerShell' },
+      { id: 'terminal-cmd', name: 'Terminal Command Prompt' },
       { id: 'code', name: 'Code' },
       { id: 'debug', name: 'Debug' },
       { id: 'extensions', name: 'Extensions' },
@@ -2182,7 +2189,17 @@ type TreeNode =
       hidden?: boolean;
       children: TreeNode[];
     }
-  | { kind: 'script'; script: ScriptEntry; inFavorites?: boolean }
+  | {
+      kind: 'script';
+      script: ScriptEntry;
+      inFavorites?: boolean;
+      /**
+       * The folder a row came from, for the rows a `shell` heading has gathered
+       * out of several — see `attachToHosts`. One heading over `scripts/` and
+       * `bin/` would otherwise draw two `build.sh` rows that read identically.
+       */
+      origin?: string;
+    }
   | { kind: 'foreign'; execution: vscode.TaskExecution };
 
 const treeChanged = new vscode.EventEmitter<void>();
@@ -2238,6 +2255,40 @@ const ECOSYSTEMS: Record<Ecosystem, { label: string; icon: string }> = {
   docker: { label: 'Docker', icon: 'archive' },
   shell: { label: 'Shell', icon: 'terminal-bash' },
 };
+
+/**
+ * The glyph a shell row wears when no category has claimed it: the terminal its
+ * file is actually read by.
+ *
+ * A `play` triangle on `entrypoint.sh` said only "this is a task", which every
+ * row in the tree already is. The extension is the one thing a script file says
+ * about itself for certain, and the codicon font carries the three shells that
+ * matter — so a `.sh` reads as bash, a `.ps1` as PowerShell and a `.bat` as the
+ * command prompt, at a glance and down a column.
+ *
+ * `.zsh` and `.ksh` take the plain terminal: the font has no glyph of their own,
+ * and wearing bash's would name the wrong shell.
+ */
+const SHELL_ICONS: Readonly<Record<string, string>> = {
+  sh: 'terminal-bash',
+  bash: 'terminal-bash',
+  zsh: 'terminal',
+  ksh: 'terminal',
+  ps1: 'terminal-powershell',
+  bat: 'terminal-cmd',
+  cmd: 'terminal-cmd',
+};
+
+/** The terminal a shell row is read by, for the rows that are shell scripts. */
+function shellIcon(script: ScriptEntry): string | undefined {
+  if (script.kind !== 'shell') {
+    return undefined;
+  }
+  const name = path.posix.basename((script.file ?? script.manifest).path).toLowerCase();
+  const dot = name.lastIndexOf('.');
+  // An extension nobody has a glyph for is still a script run in a terminal.
+  return (dot > 0 ? SHELL_ICONS[name.slice(dot + 1)] : undefined) ?? 'terminal';
+}
 
 /**
  * The manifests that make a folder a project, and so can take the compose files
@@ -3033,8 +3084,14 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   //
   // A single manifest gets no parent, mirroring the rule `buildItems` follows
   // for package separators: one heading over one heading says nothing.
-  const roots: TreeNode[] =
-    hierarchical() && shown.length > 1 ? parentRows(shown) : attachToHosts(shown);
+  const roots: TreeNode[] = hierarchical()
+    ? // A single manifest under a parent row of its own says nothing, so the one
+      // group stands at the root by itself. `attachToHosts` is the other mode's
+      // second level and has nothing to do here either way.
+      shown.length > 1
+      ? parentRows(shown)
+      : [...shown]
+    : attachToHosts(shown);
 
   // Tasks that are not backed by a manifest have no group of their own.
   const foreign = foreignExecutions();
@@ -3114,20 +3171,106 @@ function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] 
       hosts.set(group.at, group);
     }
   }
-  if (hosts.size === 0) {
-    return [...groups];
-  }
 
   const roots: TreeNode[] = [];
+  // The script folders of one project, gathered by the project they landed in —
+  // the ones with no project above them share the bucket keyed by nothing. The
+  // row goes in where the first of them would have gone, and is filled below
+  // once it is known how many folders it stands for.
+  type Group = TreeNode & { kind: 'group' };
+  const folders = new Map<string, { row: Group; host?: Group; members: Group[] }>();
+
   for (const group of groups) {
     const host = attachable(group.source) ? hostOf(group.at, hosts) : undefined;
+    if (group.source === 'shell') {
+      const key = host?.id ?? '';
+      let folder = folders.get(key);
+      if (!folder) {
+        folder = { row: shellFolder(key), host, members: [] };
+        folders.set(key, folder);
+        (host ? host.children : roots).push(folder.row);
+      }
+      folder.members.push(group);
+      continue;
+    }
     if (!host) {
       roots.push(group);
       continue;
     }
     host.children.push(insideHost(group, host));
   }
+
+  for (const { row, host, members } of folders.values()) {
+    const [only] = members;
+    if (members.length === 1 && only) {
+      // One folder on disk behind the row, so the row is that folder: it keeps
+      // the ref, the path and the drag scope it had, and everything those carry
+      // — rename, hide, Open Folder, a colour, an icon, a saved fold. `shell` is
+      // only what it is called.
+      Object.assign(row, {
+        label: only.label,
+        detail: only.detail,
+        ref: only.ref,
+        scope: only.scope,
+        manifest: only.manifest,
+        directory: only.directory,
+        at: only.at,
+      });
+      row.children.push(...only.children);
+    } else {
+      // Several folders in one row, so each row says which it came from — `bin`
+      // and `scripts` both hold a `build.sh` often enough. A script in the
+      // project's own folder has no path to name and says nothing.
+      for (const member of members) {
+        const origin = host ? insideOf(member, host) : member.place;
+        row.children.push(
+          ...member.children.map((child) =>
+            child.kind === 'script' && origin ? { ...child, origin } : child,
+          ),
+        );
+      }
+    }
+    // How many scripts are behind the fold, as the ecosystem rows say it: in the
+    // label, since the decoration that tints a row tints a description with it.
+    // Every other heading is named by a file or a package and counts nothing;
+    // this one is named after what it holds, and how much of it is the rest of
+    // that sentence. The name it restores to on a rename is untouched — that is
+    // `label`, and this is the half of the heading the row shows.
+    row.place = `shell (${row.children.length})`;
+  }
   return roots;
+}
+
+/**
+ * The `shell` heading a project's script folders are drawn as, in `flat` mode.
+ *
+ * One row and not one per folder: `scripts/`, `bin/` and `tools/ci` under one
+ * project are three headings to fold, paint and scroll past, all of them saying
+ * the same thing — that there are shell scripts here. What is worth telling
+ * apart is a script from a task, and that is the row, not the heading.
+ *
+ * It is built the way an ecosystem parent row is — no `ref`, no `scope`, no
+ * `manifest` — so rename and hide stay off a row that names nothing on disk,
+ * while fold, colour, icon and stop-all follow from `node.id` exactly as they do
+ * there. A bucket holding a single folder is that folder again by the time it is
+ * drawn: see `attachToHosts`.
+ *
+ * `ecosystem` mode files the same folders under **Shell** instead, which is the
+ * same idea one level up, so this does not run there.
+ */
+function shellFolder(key: string): TreeNode & { kind: 'group' } {
+  return {
+    kind: 'group',
+    id: `group:shell:${key}`,
+    label: 'shell',
+    place: 'shell',
+    // The stack every heading falls back to under `groupIcons: 'uniform'`; the
+    // terminal it wears otherwise is `ECOSYSTEMS.shell` — see `treeItemFor`.
+    icon: GROUP_ICON,
+    ecosystem: 'shell',
+    source: 'shell',
+    children: [],
+  };
 }
 
 /** The nearest project at or above a folder, walking up as far as the paths go. */
@@ -3150,19 +3293,27 @@ function hostOf<T>(at: string | undefined, hosts: ReadonlyMap<string, T>): T | u
  *
  * The path shrinks to where it sits relative to that project — the heading above
  * has already named everything the two have in common, and repeating it is the
- * noise the tree avoids by not printing the workspace name on every row. A
- * script folder is named by that relative path outright, since the folder is all
- * the row is; `shell` is what is left when the folder is the project's own.
+ * noise the tree avoids by not printing the workspace name on every row.
+ *
+ * The compose files are what reaches this: a project's script folders are one
+ * `shell` row by the time they are drawn, and that row is named rather than
+ * pathed. `insideOf` is the half of this they do use.
  */
 function insideHost(
   group: TreeNode & { kind: 'group' },
   host: TreeNode & { kind: 'group' },
 ): TreeNode & { kind: 'group' } {
-  const inside =
-    group.at && host.at && group.at.startsWith(`${host.at}/`) ? group.at.slice(host.at.length + 1) : '';
-  return group.source === 'shell'
-    ? { ...group, place: inside || 'shell', folder: undefined }
-    : { ...group, folder: inside || undefined };
+  const inside = insideOf(group, host);
+  return { ...group, folder: inside || undefined };
+}
+
+/**
+ * Where a heading sits relative to the project it is drawn inside — empty when
+ * that is the project's own folder, which is a path with nothing left to say
+ * rather than a missing one.
+ */
+function insideOf(group: TreeNode & { kind: 'group' }, host: TreeNode & { kind: 'group' }): string {
+  return group.at && host.at && group.at.startsWith(`${host.at}/`) ? group.at.slice(host.at.length + 1) : '';
 }
 
 /**
@@ -3316,11 +3467,35 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // An icon picked by hand still stands in for it, and `groupIcons: 'uniform'`
     // still puts the one stack glyph on every heading.
     const picked = storedIcon(node.ref ?? node.id);
-    if (!picked && node.ref !== undefined && typeIcons()) {
-      // A shell group is a folder rather than a file, and themes draw folders.
-      item.iconPath = node.directory ? vscode.ThemeIcon.Folder : vscode.ThemeIcon.File;
+    // Whether anything under this heading is running, which the icon and the
+    // buttons both read. One walk for the two of them.
+    const alive = runningScriptsOf(node).length > 0;
+    // A folder of shell scripts is the one heading with no file behind it, and a
+    // theme can only match on a file name — it used to borrow the theme's folder
+    // icon, which said "folder" where the rows inside it say bash, PowerShell and
+    // cmd. So it wears the terminal the Shell ecosystem row wears, and follows
+    // `groupIcons` like every other heading: `uniform` puts the stack back on it.
+    const stock = node.source === 'shell' && typeIcons() ? ECOSYSTEMS.shell.icon : node.icon;
+    if (alive && node.source === 'docker-compose') {
+      // A compose file is the one heading that *is* the thing being run — the
+      // stack, which is why ▶ and ■ sit on the row — so it spins while any part
+      // of it runs, the way a task row does. Any part: one `up: web` of six
+      // services is the stack being up as far as this row is concerned, and the
+      // row is folded shut most of the time, which is exactly when a heading
+      // that cannot say it is busy is a heading you have to open to find out.
+      //
+      // Only compose. Every other heading is a file or a folder that *holds*
+      // tasks rather than being one, and a spinner on all of them would be a
+      // column of them in a monorepo where one `dev` is running.
+      //
+      // The spinner wins over an icon picked by hand for the same reason it does
+      // on a row: "this one is busy" is the answer to a different question, and
+      // it is the answer for as long as it is the one worth finding.
+      item.iconPath = runningIcon();
+    } else if (!picked && node.ref !== undefined && node.source !== 'shell' && typeIcons()) {
+      item.iconPath = vscode.ThemeIcon.File;
     } else {
-      const glyph = picked ?? type?.icon ?? node.icon;
+      const glyph = picked ?? type?.icon ?? stock;
       if (glyph) {
         item.iconPath = new vscode.ThemeIcon(glyph, new vscode.ThemeColor(tint));
       }
@@ -3336,12 +3511,19 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // An ecosystem parent is the third shape: it has no ref, so it is neither
     // renameable nor hideable, but it does hold running rows and so keeps the
     // stop-all and restart-all buttons.
-    const alive = runningScriptsOf(node).length > 0;
     if (node.ecosystem && !node.ref) {
       item.contextValue = alive ? 'group:eco:running' : 'group:eco';
       return item;
     }
-    const state = node.hidden ? 'group:package:hidden' : 'group:package';
+    // A compose heading says whether its stack is up, which is what puts ▶ and ■
+    // on the heading itself: the file *is* the stack, and bringing it up or
+    // taking it down is the one thing anybody asks of a compose file. `up` is
+    // what Docker last answered — see `containers` — and `down` is everything
+    // else, "nobody has asked" included. A heading with no `up` row to press
+    // carries neither, and reads exactly as it did before.
+    const stack = composeUpNode(node);
+    const stacked = stack ? (containersUp(stack.script) ? ':up' : ':down') : '';
+    const state = node.hidden ? `group:package${stacked}:hidden` : `group:package${stacked}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
@@ -3365,9 +3547,13 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   // the selection would jump between them. Built from the absolute `key` rather than
   // the storage ref, which trades uniqueness for portability.
   item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
-  item.description = up
-    ? `up · ${scriptDescription(node.script, node.inFavorites)}`
-    : scriptDescription(node.script, node.inFavorites);
+  item.description = [
+    up ? 'up' : undefined,
+    node.origin,
+    scriptDescription(node.script, node.inFavorites),
+  ]
+    .filter(Boolean)
+    .join(' · ');
   // The confirmation has nothing on the row itself — a badge for a state you set
   // once and then want to forget about would cost a column of every row to say
   // nothing about most of them — so the tooltip is where it is readable without
@@ -3388,18 +3574,24 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (tint) {
     item.resourceUri = decorationUri(tint, scriptRef(node.script));
   }
-  // Four independent axes in one value, matched a piece at a time by the
+  // Five independent axes in one value, matched a piece at a time by the
   // `when` clauses in contributes.menus. Each pair is spelled so that neither
   // half is a substring of the other at a `:` boundary — `:fav:` cannot be found
-  // inside `:nofav:` — which is what lets one axis be matched without the three
+  // inside `:nofav:` — which is what lets one axis be matched without the four
   // around it having to be written out.
-  // `up` rides on the first axis rather than adding a fifth: the last one is
-  // matched with a `$` anchor, and a segment appended after it would stop every
-  // one of those clauses matching at all.
+  // `up` rides on the first axis rather than taking one of its own: the last
+  // axis is matched with a `$` anchor, and a segment appended after it would
+  // stop every one of those clauses matching at all. An axis added later goes in
+  // front of that last one instead, where the `.+` of `/^script:.+:confirm$/`
+  // swallows it — which is where `shell` went.
   item.contextValue = [
     'script',
     isRunning ? 'running' : up ? 'up' : 'idle',
     isFavorite(node.script) ? 'fav' : 'nofav',
+    // What kind of file the row runs, which is what puts Add to Terminal on the
+    // shell rows and nowhere else. It goes here rather than after `confirm`
+    // because that one is matched with a `$` anchor — see below.
+    node.script.kind === 'shell' ? 'shell' : 'task',
     needsConfirmation(node.script) ? 'confirm' : 'noconfirm',
   ].join(':');
   item.command = {
@@ -3705,21 +3897,25 @@ function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string, up = fa
     return runningIcon();
   }
   const category = categoryFor(script);
+  // An icon the user picked wins over the category's for the same reason the
+  // colour does: the category guessed, this one was asked for by name. The
+  // spinner still wins over both — a running row is answering a different
+  // question.
+  //
+  // The shell glyph sits under the category rather than over it: `deploy.sh` is
+  // a deployment before it is a shell script, and the rules that read the name
+  // say the more useful of the two things. What it replaces is the `play`
+  // triangle every unmatched row used to wear — see `SHELL_ICONS`.
+  const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? shellIcon(script) ?? 'play';
   // Containers of this row's are up, but nothing of ours is running: the row
   // keeps its own glyph and takes the running colour, which says "this is alive"
   // without the spinner claiming a process of ours to stop. A colour the user
   // painted still wins, as it does over a category.
   if (up && !tint) {
-    const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? 'play';
     return new vscode.ThemeIcon(glyph, new vscode.ThemeColor(RUNNING_COLOR));
   }
   const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   const color = tint ?? (category && colored ? category.color : undefined);
-  // An icon the user picked wins over the category's for the same reason the
-  // colour does: the category guessed, this one was asked for by name. The
-  // spinner still wins over both — a running row is answering a different
-  // question.
-  const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? 'play';
   return new vscode.ThemeIcon(glyph, color ? new vscode.ThemeColor(color) : undefined);
 }
 
@@ -4010,6 +4206,49 @@ function runningScriptsOf(node: TreeNode | undefined): ScriptEntry[] {
   });
 }
 
+/**
+ * The bare `up` row of a compose heading — the whole file, no service named.
+ *
+ * It is what the ▶ and ■ on the heading act on, and the row Docker's answer is
+ * read off. Nothing else is: a heading of a manifest has no single row that
+ * stands for the file, and a compose file has exactly one — which is why these
+ * two buttons are on the compose headings and nowhere else.
+ *
+ * Absent when `composeCommands` has been narrowed to a list without `up`. The
+ * buttons go with it: there is then no such thing as bringing this file up.
+ */
+function composeUpNode(node: TreeNode | undefined): (TreeNode & { kind: 'script' }) | undefined {
+  if (node?.kind !== 'group' || node.source !== 'docker-compose') {
+    return undefined;
+  }
+  return node.children.find(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name === 'up',
+  );
+}
+
+/**
+ * ▶ on a compose heading: the file's own `up`, exactly as pressing ▶ on the row
+ * inside it would — the confirmation included.
+ */
+async function runGroup(node: TreeNode | undefined): Promise<void> {
+  await runNode(composeUpNode(node), false);
+}
+
+/**
+ * ■ on a compose heading whose containers Docker reported up while nothing of
+ * ours is running them — somebody brought the stack up outside this window, or
+ * in a session before this one. The square means stop either way, so it runs the
+ * compose command that stops it; when a task of ours *is* running, the square on
+ * the row is `stopGroup` instead and this one is not drawn.
+ */
+async function stopStack(node: TreeNode | undefined): Promise<void> {
+  const up = composeUpNode(node);
+  if (up) {
+    await stopContainers(up.script);
+  }
+}
+
 /** Stops everything running in one package group; the rest of the tree keeps going. */
 async function stopGroup(node: TreeNode | undefined): Promise<void> {
   await Promise.all(
@@ -4139,6 +4378,41 @@ function taskOf(node: TreeNode | undefined): vscode.Task | undefined {
  */
 async function showTerminal(node: TreeNode | undefined): Promise<void> {
   terminalOf(node)?.show();
+}
+
+/**
+ * A new terminal with the row's command line typed into it and *not* run.
+ *
+ * The one thing ▶ cannot do: a script that takes arguments — a `deploy.sh` that
+ * wants an environment, a `setup.ps1` that wants a flag — has nowhere to say
+ * them, since the tree runs what the file is and nothing more. Rather than
+ * invent a prompt for arguments and a place to remember them, this hands over
+ * the same command the row would have run, in a real terminal, with the cursor
+ * sitting at the end of it: type the rest and press Enter, or edit the line, or
+ * throw it away.
+ *
+ * `sendText(…, false)` is what leaves it unrun — the text goes to the terminal's
+ * input as if it had been typed. The terminal is a new one every time, and not
+ * one being reused: the line is going to be edited, and a terminal already
+ * running something has no free prompt to edit it at.
+ *
+ * The cwd is the task's own, so the relative path in the line is the path the
+ * shell resolves — the workspace folder root for a shell row, which is where
+ * `./scripts/deploy.sh` means what it says.
+ */
+async function addToTerminal(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'script') {
+    return;
+  }
+  const terminal = vscode.window.createTerminal({
+    name: displayName(node.script),
+    cwd: node.script.cwd,
+  });
+  terminal.show();
+  // The same line the tooltip and the picker show, quoted for the eye — see
+  // `commandFor`. What a shell is handed here is what the user presses Enter on,
+  // so it is theirs to correct in the two cases the quoting reads oddly.
+  terminal.sendText(commandFor(node.script), false);
 }
 
 /**

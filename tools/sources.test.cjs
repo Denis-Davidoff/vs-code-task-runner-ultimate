@@ -143,6 +143,14 @@ test('shellDescription reaches a comment that sits below the preamble', () => {
   assert.equal(shellDescription(text), 'Build everything');
 });
 
+test('shellDescription reads the two openers a batch file has', () => {
+  const { shellDescription } = harness();
+  assert.equal(shellDescription('@echo off\nREM Ship the API.\n'), 'Ship the API.');
+  assert.equal(shellDescription('@echo off\n:: Ship the API.\n'), 'Ship the API.');
+  // `remove-old-logs` opens with the same three letters and is not a comment.
+  assert.equal(shellDescription('remove-old-logs.exe\n:: Ship it.\n'), 'Ship it.');
+});
+
 test('shellDescription has nothing to say about a file with no comments', () => {
   const { shellDescription } = harness();
   assert.equal(shellDescription('#!/bin/sh\nmake all\n'), undefined);
@@ -361,7 +369,71 @@ test('the default patterns reach a package of a monorepo, and the root', async (
   assert.deepEqual(rows.map((row) => row.name).sort(), ['build.sh', 'deploy.sh', 'release.sh']);
   // A loose `.sh` below the root is not one of them: the third pattern carries
   // no prefix on purpose.
-  assert.equal(h.calls[0].include, '{**/scripts/**/*.sh,**/bin/**/*.sh,*.sh}');
+  //
+  // Every pattern reaches `findFiles` with its `{sh,bash,…}` group already
+  // expanded: VS Code's glob parser closes a group at the first `}` it meets, so
+  // a braced pattern joined into the braced list would match nothing at all.
+  const where = ['**/scripts/**/', '**/bin/**/', ''];
+  const what = ['sh', 'bash', 'zsh', 'ksh', 'ps1', 'bat', 'cmd'];
+  assert.equal(
+    h.calls[0].include,
+    `{${where.flatMap((at) => what.map((extension) => `${at}*.${extension}`)).join(',')}}`,
+  );
+});
+
+test('a pattern of your own may carry a brace group too', async () => {
+  const h = harness({
+    root: '/repo',
+    settings: { shellScripts: ['tools/{ci,dev}/*.sh'] },
+    found: { '/repo/tools/ci/lint.sh': '', '/repo/tools/dev/watch.sh': '', '/repo/tools/x/other.sh': '' },
+  });
+  const rows = plain(await h.collectShellScripts('**/none'));
+  assert.deepEqual(rows.map((row) => row.name).sort(), ['lint.sh', 'watch.sh']);
+  assert.equal(h.calls[0].include, '{tools/ci/*.sh,tools/dev/*.sh}');
+});
+
+test('each extension is run through the words that can start it', async () => {
+  const h = harness({
+    root: '/repo',
+    found: {
+      '/repo/bin/deploy.sh': '',
+      '/repo/bin/build.zsh': '',
+      '/repo/bin/setup.ps1': '',
+      '/repo/bin/run.bat': '',
+    },
+  });
+  const rows = plain(await h.collectShellScripts('**/none'));
+  assert.deepEqual(
+    Object.fromEntries(rows.map((row) => [row.name, row.argv])),
+    {
+      // The Bourne family, `shellRunner` and all.
+      'deploy.sh': ['bash', './bin/deploy.sh'],
+      'build.zsh': ['bash', './bin/build.zsh'],
+      // Windows PowerShell, which is the one a stock Windows has.
+      'setup.ps1': ['powershell', '-NoProfile', '-File', './bin/setup.ps1'],
+      // A batch file is a program to Windows already.
+      'run.bat': ['./bin/run.bat'],
+    },
+  );
+});
+
+test('a runner of your own stands in for the built-in one, by extension', async () => {
+  const h = harness({
+    root: '/repo',
+    // Spelled with the dot anyone would write, and in the case they wrote it.
+    settings: { shellRunners: { '.PS1': 'pwsh -NoProfile -File', bat: 'cmd /c' } },
+    found: { '/repo/bin/setup.ps1': '', '/repo/bin/run.bat': '', '/repo/bin/deploy.sh': '' },
+  });
+  const rows = plain(await h.collectShellScripts('**/none'));
+  assert.deepEqual(
+    Object.fromEntries(rows.map((row) => [row.name, row.argv])),
+    {
+      'setup.ps1': ['pwsh', '-NoProfile', '-File', './bin/setup.ps1'],
+      'run.bat': ['cmd', '/c', './bin/run.bat'],
+      // Untouched by the map, so still `shellRunner`'s business.
+      'deploy.sh': ['bash', './bin/deploy.sh'],
+    },
+  );
 });
 
 test('the shell scan reads nothing at all when the pattern list is emptied', async () => {

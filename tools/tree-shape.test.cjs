@@ -28,7 +28,20 @@ function uri(at) {
 function harness({ settings = {}, stored = {}, executions = [], scan = [], probeReply = () => ({ running: new Set(['web']) }) } = {}) {
   const probes = [];
   const launched = [];
+  const terminals = [];
   const vscode = {
+    window: {
+      // Enough of a terminal to answer the two questions Add to Terminal asks of
+      // one: where it opened, and what was typed into it without being run.
+      createTerminal: (options) => {
+        const terminal = { ...options, shown: 0, sent: [] };
+        terminals.push(terminal);
+        return {
+          show: () => (terminal.shown += 1),
+          sendText: (text, execute) => terminal.sent.push({ text, execute }),
+        };
+      },
+    },
     workspace: {
       getConfiguration: () => ({
         get: (key, fallback) => (key in settings ? settings[key] : fallback),
@@ -43,9 +56,24 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], probe
       taskExecutions: executions,
       executeTask: async (task) => (launched.push(task), { task, terminate() {} }),
     },
-    Task: class { constructor(definition) { this.definition = definition; } },
+    // Enough of a task to read back what was launched: the definition a row is
+    // filed under, the name its terminal takes, and the words that actually run.
+    Task: class {
+      constructor(definition, scope, name, source, execution) {
+        Object.assign(this, { definition, scope, name, source, execution });
+      }
+    },
     TaskScope: { Workspace: 1 },
-    ShellExecution: class {}, ProcessExecution: class {},
+    ShellExecution: class {
+      constructor(command, args, options) {
+        Object.assign(this, { command, args, options });
+      }
+    },
+    ProcessExecution: class {
+      constructor(program, args, options) {
+        Object.assign(this, { program, args, options });
+      }
+    },
     TaskRevealKind: { Always: 1, Never: 2 }, TaskPanelKind: { Dedicated: 1 },
     EventEmitter: class {
       constructor() {
@@ -111,7 +139,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], probe
                 collectScripts: async () => scan,
                 emptyManifests: () => [],
                 scriptKey: (manifest, task) => `${manifest}::${task}`,
-                commandFor: (entry) => entry.name,
+                commandFor: (entry) => (entry.argv ?? [entry.name]).join(' '),
                 launchArgv: (entry) => [entry.name],
                 plainArgument: () => true,
               }
@@ -125,11 +153,11 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], probe
     keyForTask = () => undefined;
     repaint = () => {};
     confirmScript = async () => true;
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers };
   `,
     Object.assign(context, { memento }),
   );
-  return { ...context.exports.tree, memento, settings, probes, launched };
+  return { ...context.exports.tree, memento, settings, probes, launched, terminals };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -322,11 +350,67 @@ test('a manifest heading takes its own file\'s icon, and the uniform one when to
   assert.equal(uniformRow.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
 });
 
-test('a script folder asks the theme for a folder, not a file', () => {
+test('a folder of scripts wears a terminal, not the theme\'s folder', () => {
+  // It is the one heading with no file behind it, and a theme can only match on
+  // a file name — so where every other heading asks the theme, this one says
+  // what its rows are: scripts read by a shell.
   const h = harness({});
   const scripts = shell('/repo/scripts', 'deploy.sh');
   const row = h.treeItemFor(h.buildTreeRoots([scripts])[0]);
-  assert.deepEqual({ ...row.iconPath }, { themeFolder: true });
+  assert.equal(row.iconPath.id, 'terminal-bash');
+  assert.equal(row.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
+
+  // And it follows `groupIcons` like every other heading.
+  const uniform = harness({ settings: { groupIcons: 'uniform' } });
+  assert.equal(uniform.treeItemFor(uniform.buildTreeRoots([scripts])[0]).iconPath.id, 'layers');
+});
+
+test('a shell row wears the terminal its file is read by', () => {
+  const h = harness({});
+  const glyph = (name) => h.iconFor(shell('/repo/bin', name), false).id;
+  assert.equal(glyph('entrypoint.sh'), 'terminal-bash');
+  assert.equal(glyph('helpers.zsh'), 'terminal');
+  assert.equal(glyph('profile.ps1'), 'terminal-powershell');
+  assert.equal(glyph('envsetup.bat'), 'terminal-cmd');
+  // A category still reads the name first: `deploy.sh` is a deployment before it
+  // is a shell script, and `play` is what the terminal replaced.
+  assert.equal(glyph('deploy.sh'), 'rocket');
+  // And a manifest task is untouched by any of it.
+  assert.equal(h.iconFor(script('/repo/package.json', 'serve', 'npm'), false).id, 'play');
+});
+
+test('Add to Terminal is offered on the shell rows and nowhere else', () => {
+  const h = harness({});
+  const axes = (script) => h.treeItemFor({ kind: 'script', script }).contextValue;
+  // The fourth axis, in front of the one the `when` clauses anchor with `$`.
+  assert.equal(axes(shell('/repo/scripts', 'deploy.sh')), 'script:idle:nofav:shell:noconfirm');
+  assert.equal(axes(script('/repo/package.json', 'dev', 'npm')), 'script:idle:nofav:task:noconfirm');
+  // The clauses that were there before still read the axes they always did.
+  assert.match(axes(shell('/repo/scripts', 'deploy.sh')), /^script:.+:noconfirm$/);
+  assert.match(axes(shell('/repo/scripts', 'deploy.sh')), /^script:.+:nofav:/);
+  assert.match(axes(shell('/repo/scripts', 'deploy.sh')), /^script:(idle|up):/);
+});
+
+test('Add to Terminal types the command line without running it', async () => {
+  const h = harness({});
+  const script = { ...shell('/repo/scripts', 'deploy.sh'), argv: ['bash', './scripts/deploy.sh'] };
+  await h.addToTerminal({ kind: 'script', script });
+  assert.equal(h.terminals.length, 1);
+  const terminal = h.terminals[0];
+  // Named after the row, and opened where the task itself would have run — the
+  // workspace folder root, which is what the relative path in the line means.
+  assert.equal(terminal.name, 'deploy.sh');
+  assert.equal(terminal.cwd.path, '/repo');
+  assert.equal(terminal.shown, 1);
+  // Typed, not run: the whole point is the arguments the user adds next.
+  assert.deepEqual(terminal.sent, [{ text: 'bash ./scripts/deploy.sh', execute: false }]);
+});
+
+test('Add to Terminal has nothing to open for a row that is not a script', async () => {
+  const h = harness({});
+  await h.addToTerminal(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
+  await h.addToTerminal(undefined);
+  assert.deepEqual(h.terminals, []);
 });
 
 test('a painted heading keeps both its colour and its file icon', () => {
@@ -362,24 +446,65 @@ const SCRIPTS = shell('/repo/scripts', 'deploy.sh');
 const LOOSE = shell('/repo', 'release.sh');
 
 test('flat mode draws compose and script folders inside the project they serve', () => {
-  const { buildTreeRoots } = harness({ settings: { grouping: 'flat' } });
+  const { buildTreeRoots, treeItemFor } = harness({ settings: { grouping: 'flat' } });
   const roots = buildTreeRoots([ROOT, COMPOSE, SCRIPTS, LOOSE]);
   assert.deepEqual(ids(roots), ['group:file:///repo/package.json']);
 
   const inside = roots[0].children;
-  // The project's own tasks first, then what sits around it.
+  // The project's own tasks first, then what sits around it: the compose file,
+  // and one `shell` row for every script folder the project holds.
   assert.deepEqual(
     [...inside].map((node) => (node.kind === 'group' ? node.id : `script:${node.script.name}`)),
-    ['script:dev', 'group:file:///repo/docker-compose.yml', 'group:file:///repo/scripts', 'group:file:///repo'],
+    [
+      'script:dev',
+      'group:file:///repo/docker-compose.yml',
+      'group:shell:group:file:///repo/package.json',
+    ],
   );
   // A compose file is named by its file, and drops the path the heading above
   // has already said.
   assert.equal(inside[1].place, 'docker-compose.yml');
   assert.equal(inside[1].folder, undefined);
-  // A script folder is named by where it sits relative to the project, and
-  // `shell` is what is left when that is the project's own folder.
-  assert.equal(inside[2].place, 'scripts');
-  assert.equal(inside[3].place, 'shell');
+
+  // Both folders are in the one row, each script saying which it came from —
+  // and a script in the project's own folder has no path to name.
+  const folder = inside[2];
+  // Named after what it holds, and how much of it — the way an ecosystem row is.
+  assert.equal(folder.place, 'shell (2)');
+  assert.deepEqual([...folder.children].map((node) => node.script.name), ['deploy.sh', 'release.sh']);
+  assert.deepEqual([...folder.children].map((node) => node.origin), ['scripts', undefined]);
+  assert.ok(treeItemFor(folder.children[0]).description.startsWith('scripts · '));
+  // Two folders and no file: the row names nothing on disk, so it is the shape
+  // an ecosystem row is — no rename, no hide, and stop-all all the same.
+  assert.equal(folder.ref, undefined);
+  assert.equal(treeItemFor(folder).contextValue, 'group:eco');
+  assert.equal(treeItemFor(folder).iconPath.id, 'terminal-bash');
+});
+
+test('one folder behind the row leaves the row that folder', () => {
+  // Renaming, hiding, painting and Open Folder all hang off the ref, and the
+  // common case — a project with a single `scripts/` — must keep every one.
+  const { buildTreeRoots, treeItemFor } = harness({ settings: { grouping: 'flat' } });
+  const folder = buildTreeRoots([ROOT, SCRIPTS])[0].children[1];
+  assert.equal(folder.ref, 'file:///repo/scripts');
+  assert.equal(folder.scope, 'file:///repo/scripts');
+  assert.equal(folder.manifest.path, '/repo/scripts');
+  assert.equal(treeItemFor(folder).contextValue, 'group:package');
+  // Still called `shell`, and still the folder it is on disk underneath: the
+  // name a rename restores to is `label`, which the count never reaches.
+  assert.equal(folder.place, 'shell (1)');
+  assert.equal(folder.label, 'scripts');
+  // One folder, so nothing to tell the rows apart by.
+  assert.deepEqual([...folder.children].map((node) => node.origin), [undefined]);
+});
+
+test('script folders with no project above them share one shell row', () => {
+  const { buildTreeRoots } = harness({ settings: { grouping: 'flat' } });
+  const other = shell('/repo/bin', 'build.sh');
+  const roots = buildTreeRoots([TOOLS, SCRIPTS, other]);
+  // A Makefile hosts nothing, so the folders are at the root — in one row.
+  assert.deepEqual(ids(roots), ['group:file:///repo/Makefile', 'group:shell:']);
+  assert.deepEqual([...roots[1].children].map((node) => node.origin), ['scripts', 'bin']);
 });
 
 test('what a project takes in does not make its folder look crowded', () => {
@@ -414,9 +539,13 @@ test('a project takes in what sits in the folders below it, not beside it', () =
     'group:file:///repo/package.json',
     'group:file:///repo/apps/web/package.json',
   ]);
-  // Each script folder went to the nearest project above it, not to the root.
-  assert.deepEqual(ids(roots[0].children.slice(1)), ['group:file:///repo/scripts']);
-  assert.deepEqual(ids(roots[1].children.slice(1)), ['group:file:///repo/apps/web/scripts']);
+  // Each script folder went to the nearest project above it, not to the root —
+  // as the one `shell` row of that project.
+  assert.deepEqual(ids(roots[0].children.slice(1)), ['group:shell:group:file:///repo/package.json']);
+  assert.deepEqual(ids(roots[1].children.slice(1)), [
+    'group:shell:group:file:///repo/apps/web/package.json',
+  ]);
+  assert.equal(roots[1].children[1].ref, 'file:///repo/apps/web/scripts');
 });
 
 test('ecosystem mode files compose and shell by what they are, not by whom they serve', () => {
@@ -544,7 +673,7 @@ test('the dropdown lists the blocks in the order the tree nests them', async () 
   ]);
   assert.deepEqual(ids(roots[0].children.slice(1)), [
     'group:file:///repo/docker-compose.yml',
-    'group:file:///repo/scripts',
+    'group:shell:group:file:///repo/package.json',
   ]);
 
   // The same blocks, in the same order, flattened.
@@ -710,6 +839,111 @@ test('a run of ours outranks what Docker last said', () => {
   assert.equal(item.contextValue.startsWith('script:running:'), true);
   assert.equal(item.iconPath.id, 'loading~spin');
   assert.equal(item.description.startsWith('up · '), false);
+});
+
+// --- the two buttons a compose heading carries ---------------------------------
+
+/** A compose file as the tree sees one: the bare `up`, a service row, and `down`. */
+function composeFile(manifest = '/repo/docker-compose.yml') {
+  const file = manifest.replace(/^.*\//, '');
+  return ['up', 'up: web', 'down'].map((name) => ({
+    ...script(manifest, name, 'docker-compose'),
+    command: `docker compose -f ${file} ${name}`,
+    argv: ['docker', 'compose', '-f', file, ...name.split(': ')],
+  }));
+}
+
+test('a compose heading says whether its stack is up, and no other heading does', () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = composeFile();
+  const heading = () => h.treeItemFor(h.buildTreeRoots(rows)[0]).contextValue;
+
+  // Nobody has asked Docker yet, which is not "the stack is down" — but it is
+  // not "up" either, and ▶ is what a heading in that state offers.
+  assert.equal(heading(), 'group:package:down');
+  h.containers.set('file:///repo/docker-compose.yml', new Set(['web']));
+  assert.equal(heading(), 'group:package:up');
+
+  // A run of ours outranks it, the way it does on the row: ⟳ and ■ take the slot.
+  h.running.set(rows[0].key, { task: { name: 'up' } });
+  assert.equal(heading(), 'group:package:up:running');
+  h.running.clear();
+
+  // Every clause that matched a package row before still matches one, compose or
+  // not — the state rides in front of the anchored tail.
+  assert.match(heading(), /^group:package(:(up|down))?(:hidden)?(:running)?$/);
+  const npm = h.treeItemFor(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
+  assert.equal(npm.contextValue, 'group:package');
+});
+
+test('▶ on a compose heading runs the file\'s own up, and ■ stops its containers', async () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = composeFile();
+  const heading = h.buildTreeRoots(rows)[0];
+
+  await h.runGroup(heading);
+  // The bare `up`, not `up: web`: the heading stands for the whole file.
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up']);
+  assert.match(h.launched[0].name, /^up\b/);
+
+  await h.stopStack(heading);
+  // Filed under the same row — the square belongs to the row it was pressed on —
+  // with only the terminal's title saying what is being run.
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up', 'up']);
+  // `stop` and not `down` — the words themselves are `stopContainers`', which the
+  // square on the row inside already hands to Docker.
+  assert.match(h.launched[1].name, /^stop\b/);
+});
+
+test('a compose heading spins while any part of its stack runs', () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = composeFile();
+  const heading = () => h.treeItemFor(h.buildTreeRoots(rows)[0]);
+
+  // Idle, it is the file's own icon out of the theme, as every heading is.
+  assert.deepEqual({ ...heading().iconPath }, { themeFile: true });
+
+  // One service of six is the stack being up as far as this row is concerned —
+  // and the row is folded shut most of the time, which is when a heading that
+  // cannot say it is busy is one you have to open to find out.
+  h.running.set(rows[1].key, { task: { name: 'up: web' } });
+  assert.equal(heading().iconPath.id, 'loading~spin');
+  assert.equal(heading().iconPath.color.id, 'taskRunnerUltimate.runningForeground');
+  // It follows `colorIcons`, as the spinner on a row does.
+  const plainIcons = harness({ settings: { grouping: 'flat', colorIcons: false } });
+  plainIcons.running.set(rows[1].key, { task: { name: 'up: web' } });
+  assert.equal(plainIcons.treeItemFor(plainIcons.buildTreeRoots(rows)[0]).iconPath.color, undefined);
+
+  // Over an icon picked by hand too: "this one is busy" answers a different
+  // question, and only while it is busy.
+  const painted = harness({
+    settings: { grouping: 'flat' },
+    stored: { icons: { 'file:///repo/docker-compose.yml': 'rocket' } },
+  });
+  assert.equal(painted.treeItemFor(painted.buildTreeRoots(rows)[0]).iconPath.id, 'rocket');
+  painted.running.set(rows[0].key, { task: { name: 'up' } });
+  assert.equal(painted.treeItemFor(painted.buildTreeRoots(rows)[0]).iconPath.id, 'loading~spin');
+
+  // And no other heading spins: a package holds tasks rather than being one, so
+  // a monorepo with one `dev` running keeps a calm column of headings.
+  const npm = harness({ settings: { grouping: 'flat' } });
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  npm.running.set(dev.key, { task: { name: 'dev' } });
+  assert.deepEqual({ ...npm.treeItemFor(npm.buildTreeRoots([dev])[0]).iconPath }, { themeFile: true });
+});
+
+test('the heading buttons have nothing to act on without an up row', async () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  // `composeCommands` narrowed to a list without `up`: there is no such thing as
+  // bringing this file up, so the heading carries neither button.
+  const rows = composeFile().filter((row) => row.name === 'down');
+  const heading = h.buildTreeRoots(rows)[0];
+  assert.equal(h.treeItemFor(heading).contextValue, 'group:package');
+  await h.runGroup(heading);
+  await h.stopStack(heading);
+  // A package heading is not a stack either.
+  await h.runGroup(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
+  assert.deepEqual(h.launched, []);
 });
 
 // --- what a heading looks like the first time it is seen ------------------------

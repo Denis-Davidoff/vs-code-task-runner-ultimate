@@ -336,16 +336,38 @@ export const SOURCE_GLOB =
   '**/{src/main.rs,src/bin/*,src/bin/*/main.rs,examples/*,examples/*/main.rs,main.go}';
 
 /**
- * What the shell watcher listens to. Every `.sh` in the workspace, and not the
- * `shellScripts` patterns the scan actually uses: the watchers are built once in
- * `activate` and never rebuilt, so a glob compiled from a setting would go stale
- * the moment that setting changed. Over-hearing costs a debounced rescan that
- * finds nothing; under-hearing costs a row that never appears.
+ * The extensions a shell row can be written with: the Bourne family, and the
+ * three Windows writes its scripts in.
+ *
+ * Which of them a file carries decides two things — the words it is run through
+ * (`shellRunners`) and the glyph its row wears — and nothing else: a `.ps1` is a
+ * row exactly as a `.sh` is.
+ *
+ * `.psm1` is not here and is not an oversight: a PowerShell *module* is a library
+ * to import, not a script to run, and a row that starts one would do nothing at
+ * all.
+ */
+export const SHELL_EXTENSIONS: ReadonlyArray<string> = [
+  'sh',
+  'bash',
+  'zsh',
+  'ksh',
+  'ps1',
+  'bat',
+  'cmd',
+];
+
+/**
+ * What the shell watcher listens to. Every shell script in the workspace, and not
+ * the `shellScripts` patterns the scan actually uses: the watchers are built once
+ * in `activate` and never rebuilt, so a glob compiled from a setting would go
+ * stale the moment that setting changed. Over-hearing costs a debounced rescan
+ * that finds nothing; under-hearing costs a row that never appears.
  *
  * Creation and deletion only, as `SOURCE_GLOB` is. The file being there is the
  * row; the comment line inside it is dimmed text a Refresh picks up.
  */
-export const SHELL_GLOB = '**/*.sh';
+export const SHELL_GLOB = `**/*.{${SHELL_EXTENSIONS.join(',')}}`;
 
 export interface ScriptEntry {
   /** Stable identity of a task: its manifest plus the task name. */
@@ -1608,15 +1630,67 @@ async function composeOverride(cwd: vscode.Uri): Promise<string | undefined> {
  * loose scripts are worth listing where a project root is, not in every
  * directory of the repository.
  */
-const DEFAULT_SHELL_SCRIPTS: ReadonlyArray<string> = ['**/scripts/**/*.sh', '**/bin/**/*.sh', '*.sh'];
+/** Every shell extension as one glob tail: `*.{sh,bash,zsh,ksh}`. */
+const SHELL_FILES = `*.{${SHELL_EXTENSIONS.join(',')}}`;
+
+const DEFAULT_SHELL_SCRIPTS: ReadonlyArray<string> = [
+  `**/scripts/**/${SHELL_FILES}`,
+  `**/bin/**/${SHELL_FILES}`,
+  SHELL_FILES,
+];
 
 /**
- * The words a script is run through. `bash` rather than the file itself, because
- * running `./deploy.sh` needs both the executable bit and a shebang — and the
- * bit is invisible to `vscode.workspace.fs` (`FilePermission` carries only
- * `Readonly`), so checking it would mean importing `node:fs` and giving up
- * Remote SSH and Dev Containers, which is the whole reason this file imports
- * nothing but `path` and `vscode`.
+ * One glob per alternative a `{a,b}` group holds: `bin/*.{sh,bash}` becomes
+ * `bin/*.sh` and `bin/*.bash`.
+ *
+ * The patterns are handed to `findFiles` as a single `{...}` group, and VS Code's
+ * own glob parser reads a group with a flat scan — the first `}` closes it,
+ * whatever sits nested inside. A braced pattern joined into that group would
+ * therefore match nothing at all, and silently. Expanding first is what lets the
+ * defaults above name four extensions on one readable line, and lets anyone write
+ * a braced pattern of their own in the setting.
+ */
+function expandBraces(pattern: string): string[] {
+  const open = pattern.indexOf('{');
+  if (open === -1) {
+    return [pattern];
+  }
+  const choices: string[] = [];
+  let depth = 0;
+  let start = open + 1;
+  let close = -1;
+  for (let at = open; at < pattern.length; at += 1) {
+    const char = pattern[at];
+    if (char === '{') {
+      depth += 1;
+    } else if (char === ',' && depth === 1) {
+      choices.push(pattern.slice(start, at));
+      start = at + 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        choices.push(pattern.slice(start, at));
+        close = at;
+        break;
+      }
+    }
+  }
+  // An unclosed brace is not a group, and is left exactly as it was written.
+  if (close === -1) {
+    return [pattern];
+  }
+  const head = pattern.slice(0, open);
+  const tail = pattern.slice(close + 1);
+  return choices.flatMap((choice) => expandBraces(`${head}${choice}${tail}`));
+}
+
+/**
+ * The words a Bourne-family script is run through. `bash` rather than the file
+ * itself, because running `./deploy.sh` needs both the executable bit and a
+ * shebang — and the bit is invisible to `vscode.workspace.fs` (`FilePermission`
+ * carries only `Readonly`), so checking it would mean importing `node:fs` and
+ * giving up Remote SSH and Dev Containers, which is the whole reason this file
+ * imports nothing but `path` and `vscode`.
  *
  * Empty runs the path on its own, for anyone who wants exactly that.
  */
@@ -1626,8 +1700,69 @@ function shellRunner(): string[] {
   return value ? value.split(/\s+/) : [];
 }
 
+/**
+ * What the extensions `shellRunner` does not speak for are run through.
+ *
+ * A `.ps1` handed to `bash` is an error message rather than a task, so each of
+ * the three Windows extensions says how it is started:
+ *
+ * - `powershell` and not `pwsh`: Windows PowerShell 5.1 ships with the OS and is
+ *   still what a stock Windows has, where PowerShell 7 is an install away.
+ *   `-File` is what makes the argument a script rather than a command to parse,
+ *   and `-NoProfile` keeps a user's profile out of a task's output. Someone on 7
+ *   sets `pwsh -NoProfile -File` here and nothing else changes. So does anyone
+ *   whose execution policy needs an `-ExecutionPolicy Bypass` in front of the
+ *   file — deliberately not the default: running a script is the user's call to
+ *   make, and quietly stepping over the machine's policy to do it is not ours.
+ * - `.bat` and `.cmd` are run as themselves, with no runner at all: they are
+ *   already programs to Windows, and the shell a task starts in there —
+ *   PowerShell, in a stock VS Code — takes the `./path/to/x.bat` this builds.
+ *   `cmd.exe` as the terminal profile is the exception, and wants `cmd /c` here.
+ */
+const DEFAULT_SHELL_RUNNERS: Readonly<Record<string, string>> = {
+  ps1: 'powershell -NoProfile -File',
+  bat: '',
+  cmd: '',
+};
+
+/**
+ * The runner each extension is started with, the user's map over the built-in
+ * one. An extension nobody has spoken for falls back to `shellRunner`, which is
+ * what every Bourne-family script uses and what an unknown extension is most
+ * likely to want.
+ */
+function shellRunners(): Record<string, string> {
+  const configured = setting<unknown>('shellRunners');
+  const overrides =
+    configured && typeof configured === 'object' && !Array.isArray(configured)
+      ? (configured as Record<string, unknown>)
+      : {};
+  const runners: Record<string, string> = { ...DEFAULT_SHELL_RUNNERS };
+  for (const [extension, value] of Object.entries(overrides)) {
+    if (typeof value === 'string') {
+      // Spelled as the file is — `.PS1` and `ps1` are one extension — and a
+      // leading dot is dropped, since that is how anyone would write one.
+      runners[extension.toLowerCase().replace(/^\./, '')] = value;
+    }
+  }
+  return runners;
+}
+
+/** The lower-case extension of a file, without its dot. */
+function extensionOf(file: vscode.Uri): string {
+  return path.posix.extname(file.path).slice(1).toLowerCase();
+}
+
 /** Comment lines that are addressed to a tool rather than to a reader. */
 const SHELL_PRAGMA = /^(shellcheck\b|vim:|emacs:|-\*-|!)/;
+
+/**
+ * How a comment opens, in the shells this scan reads. `#` is every Bourne shell
+ * and PowerShell; `REM` and `::` are the two a batch file has, and `::` is a
+ * label the parser skips rather than a comment keyword — which is exactly why
+ * everybody writes comments with it.
+ */
+const SHELL_COMMENT = /^(#+|::+|rem\b)\s*/i;
 
 /**
  * The dimmed text a shell row gets: the first comment line in the file that was
@@ -1642,10 +1777,11 @@ const SHELL_PRAGMA = /^(shellcheck\b|vim:|emacs:|-\*-|!)/;
 export function shellDescription(text: string): string | undefined {
   for (const line of text.split(/\r?\n/).slice(0, 40)) {
     const trimmed = line.trim();
-    if (!trimmed.startsWith('#')) {
+    const opener = SHELL_COMMENT.exec(trimmed);
+    if (!opener) {
       continue;
     }
-    const body = trimmed.replace(/^#+\s*/, '').trim();
+    const body = trimmed.slice(opener[0].length).trim();
     if (body && !SHELL_PRAGMA.test(body)) {
       return body;
     }
@@ -1672,7 +1808,8 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
   if (patterns.length === 0) {
     return [];
   }
-  const glob = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
+  const alternatives = patterns.flatMap(expandBraces);
+  const glob = alternatives.length === 1 ? alternatives[0] : `{${alternatives.join(',')}}`;
   const files = await vscode.workspace.findFiles(glob, exclude, MAX_SHELL_SCRIPTS);
   // By directory first, so a group's scripts are one run and the shallower
   // folders come first — the same shape the manifest sort above produces — and
@@ -1684,6 +1821,7 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
   });
 
   const runner = shellRunner();
+  const runners = shellRunners();
   const entries: ScriptEntry[] = [];
 
   for (const file of files) {
@@ -1700,7 +1838,12 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
     // falls back to the folder's name — the same fallback a manifest's location
     // takes when it sits at the root.
     const location = relative(cwd, directory) || path.posix.basename(directory.path);
-    const argv = [...runner, `./${inside}`];
+    // The extension decides the words in front of the path: `bash` for the
+    // Bourne family, PowerShell for a `.ps1`, and nothing at all for a `.bat`,
+    // which is a program to Windows already. See `DEFAULT_SHELL_RUNNERS`.
+    const extension = extensionOf(file);
+    const words = extension in runners ? runners[extension].trim().split(/\s+/).filter(Boolean) : runner;
+    const argv = [...words, `./${inside}`];
     const text = await readText(file);
 
     entries.push({
