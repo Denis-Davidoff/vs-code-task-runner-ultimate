@@ -996,7 +996,7 @@
             "One row per manifest, with compose files and script folders inside the project they serve.",
             "One row per ecosystem, with that ecosystem’s manifests inside it."
           ],
-          "markdownDescription": "How the package headings are arranged, in the tree and in the dropdown alike.\n\n`flat` keeps one row per manifest and folds each compose file and script folder in under the nearest project above it, so the infrastructure of a package sits inside that package.\n\n`ecosystem` gathers the manifests of each language or runner under a row of their own — there a compose file is filed under Docker rather than under the package it serves, because that is the question that mode answers.\n\nAlso on the ☰ menu, as **Group by ecosystem**."
+          "markdownDescription": "How the package headings are arranged, in the tree and in the dropdown alike.\n\n`flat` keeps one row per manifest and folds each compose file and script folder in under the nearest project above it, so the infrastructure of a package sits inside that package.\n\n`ecosystem` gathers the manifests of each language or runner under a row of their own — there a compose file is filed under Docker rather than under the package it serves, because that is the question that mode answers.\n\nAlso in the view's header, as a button that names the mode it puts you in, and on the ☰ menu as **Group by ecosystem**."
         },
         "taskRunnerUltimate.groupIcons": {
           "type": "string",
@@ -1014,7 +1014,7 @@
         "taskRunnerUltimate.categories": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `taskRunnerUltimate.category.*` or any built-in such as `charts.green`.",
+          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, stop, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `taskRunnerUltimate.category.*` or any built-in such as `charts.green`.",
           "items": {
             "type": "object",
             "required": [

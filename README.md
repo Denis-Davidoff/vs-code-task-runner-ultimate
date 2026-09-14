@@ -500,6 +500,13 @@ file name again: `docker-compose.yml • apps/web`, not `docker-compose.yml • 
 Where that folder would only repeat the name, or where there is no path left to show, the bullet goes
 too — a lone `compose.yaml` in the root is just `compose.yaml`. The full path stays in the tooltip.
 
+The one exception is two headings in the same folder that lead with the **same** text, which is what a
+napi-rs, neon, wasm-pack or maturin package is: a `Cargo.toml` beside a `package.json`, both declaring
+the same name. Neither row says anything the other does not, so there — and only there — the bullet
+carries the manifest path instead: `mylib • crates/mylib/Cargo.toml` beside
+`mylib • crates/mylib/package.json`. Two headings that already differ are left alone; `engine • svc`
+beside `Makefile • svc` needs nothing more.
+
 Nothing about this is stored: the relationship is the paths, worked out on every repaint. That is
 also why a drag cannot move one of these rows out of its project — the order would be rewritten and
 the next repaint would put the row straight back, so the drop is refused with a note in the status
@@ -508,8 +515,9 @@ bar instead.
 #### Grouping by ecosystem
 
 By default every manifest heading sits at the top level, which in a polyglot repository is one long
-column. Set `taskRunnerUltimate.grouping` to `"ecosystem"` — or pick **Group by ecosystem** from
-[the ☰ menu](#the-menu) — and they gather one level down, under a row per language or runner:
+column. Press the **grouping switch** in [the view header](#the-task--script-explorer-view) — or pick
+**Group by ecosystem** from [the ☰ menu](#the-menu), or set `taskRunnerUltimate.grouping` to
+`"ecosystem"` — and they gather one level down, under a row per language or runner:
 
 ```
 Node (2)
@@ -625,9 +633,12 @@ on all of them unless you [paint one](#painting-a-row), which is what keeps the 
 with the rows under it. `taskRunnerUltimate.groupIcons: "uniform"` puts a single stack (≣) back on
 every heading.
 
-The view header holds four actions. **Restart all** (⟳) and **stop all** (◼) appear only while
-something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
-the **menu** (☰) are always there. Stop-all and restart-all reach every running task, including ones
+The view header holds five actions. **Restart all** (⟳) and **stop all** (◼) appear only while
+something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶), the
+**grouping switch** and the **menu** (☰) are always there. The switch is one button drawn as whichever
+mode it would put you in — a tree (⊞) while the list is flat, a flat list while it is
+[grouped by ecosystem](#grouping-by-ecosystem) — so the header never shows you the mode you are
+already in. Stop-all and restart-all reach every running task, including ones
 this extension did not start.
 
 A restart waits for the stop to actually happen before it starts anything back up, and if a task will
@@ -662,7 +673,7 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
 | **Check containers** | Asks Docker which compose services are actually running and marks those rows — see [Knowing what is actually up](#knowing-what-is-actually-up). Nothing happens in the background; this is the question. |
-| **Group by ecosystem** | Toggles [the hierarchical layout](#grouping-by-ecosystem), saying `on` or `off` as it stands now. Written to your user settings, so a click here never adds `.vscode/settings.json` to the project's `git status`. |
+| **Group by ecosystem** | Toggles [the hierarchical layout](#grouping-by-ecosystem), saying `on` or `off` as it stands now — the same switch the view header carries as a button. Written to your user settings, so a click here never adds `.vscode/settings.json` to the project's `git status` — unless the setting is already pinned in the workspace, where the write goes instead, since a global one would be shadowed by it. Where something with the last word still holds the value — a folder setting, a policy — the click says so rather than doing nothing. |
 | **Reset all applied styles** | Restores every custom title, colour and icon while leaving favorites, visibility, ordering and folded groups untouched. |
 | **Reset all titles** | Every [renamed](#renaming-a-row) row and group heading goes back to the name its manifest gives it. |
 | **Reset sort order** | Every list goes back to the order its manifest declares, undoing [the drags](#reordering-rows). |
@@ -903,8 +914,10 @@ live where there is a row to invoke them on:
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
 
 All of them are deliberately hidden from the command palette, which has no row to hand them. The
-palette keeps the six that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
-**Check Containers**, **Stop All Running Tasks** and **Restart All Running Tasks**.
+palette keeps the eight that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
+**Check Containers**, **Stop All Running Tasks**, **Restart All Running Tasks**, and the two halves of
+the grouping switch — **Group by Ecosystem** and **Show as a Flat List**, each of which sets a mode
+rather than toggling one, so invoking the one you are already in changes nothing.
 
 ### Where list customizations are stored
 

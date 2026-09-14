@@ -1662,24 +1662,34 @@ function expandBraces(pattern: string): string[] {
   // One group per pass, across every pattern the last pass produced, so the work
   // stops at the budget rather than at the end of an expansion nobody asked for:
   // groups multiply, and `{a,b}` twenty-five times over is thirty-three million
-  // patterns and a frozen window. A pattern that wants more than the budget is
-  // handed over as it was written — the search then reads whatever its own glob
-  // parser makes of the braces, which is what happened before any of this, and
-  // never a hang. Twenty-one is what the defaults expand to.
-  for (let pass = 0; pass < MAX_GLOB_GROUPS; pass += 1) {
+  // patterns and a frozen window. Twenty-one is what the defaults expand to.
+  //
+  // A pattern that wants more than the budget contributes nothing at all, and
+  // that is the careful half. Handing it back with its braces intact was the
+  // first answer, and it was worse than dropping it: the caller joins every
+  // alternative into one `{…}` group, so a member that still carries braces
+  // nests one group inside another — which, by the same flat-scan rule this
+  // function exists for, is a glob that matches nothing. One unreasonable
+  // pattern would have silently taken `scripts/` and `bin/` down with it.
+  for (let pass = 0; pass <= MAX_GLOB_GROUPS; pass += 1) {
     const next: string[] = [];
+    let opened = false;
     for (const one of expanded) {
-      next.push(...splitGroup(one));
+      const parts = splitGroup(one);
+      opened = opened || parts.length > 1 || parts[0] !== one;
+      next.push(...parts);
       if (next.length > MAX_GLOB_ALTERNATIVES) {
-        return [pattern];
+        return [];
       }
     }
-    if (next.length === expanded.length && next.every((value, at) => value === expanded[at])) {
+    // Nothing left to open — which is also how a pattern with an unbalanced
+    // brace leaves, as itself, exactly as it was written.
+    if (!opened) {
       return next;
     }
     expanded = next;
   }
-  return [pattern];
+  return [];
 }
 
 /** How far `expandBraces` will go before handing the pattern back as written. */
@@ -1846,6 +1856,11 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
     return [];
   }
   const alternatives = patterns.flatMap(expandBraces);
+  // Every pattern was dropped as unreasonable, and a glob of nothing would be a
+  // glob that matches everything in some readings. There is nothing to look for.
+  if (alternatives.length === 0) {
+    return [];
+  }
   const glob = alternatives.length === 1 ? alternatives[0] : `{${alternatives.join(',')}}`;
   const files = await vscode.workspace.findFiles(glob, exclude, MAX_SHELL_SCRIPTS);
   // By directory first, so a group's scripts are one run and the shallower

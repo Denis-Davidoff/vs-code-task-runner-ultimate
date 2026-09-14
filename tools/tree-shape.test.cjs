@@ -25,10 +25,13 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', probeReply = () => ({ running: new Set(['web']) }) } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, probeReply = () => ({ running: new Set(['web']) }) } = {}) {
   const probes = [];
   const launched = [];
   const terminals = [];
+  const writes = [];
+  const warnings = [];
+  const hints = [];
   const vscode = {
     // The workbench's own answer for "what shell does a new terminal open in",
     // which is what decides how a typed command line is quoted.
@@ -36,6 +39,9 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     window: {
       // Enough of a terminal to answer the two questions Add to Terminal asks of
       // one: where it opened, and what was typed into it without being run.
+      showWarningMessage: (message) => (warnings.push(message), Promise.resolve(undefined)),
+      // What a refused drop says, and the only place it says it.
+      setStatusBarMessage: (message) => (hints.push(message), { dispose() {} }),
       createTerminal: (options) => {
         const terminal = { ...options, shown: 0, sent: [] };
         terminals.push(terminal);
@@ -48,6 +54,16 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     workspace: {
       getConfiguration: () => ({
         get: (key, fallback) => (key in settings ? settings[key] : fallback),
+        // `pinned` stands for the values a repository or a folder holds: what
+        // `inspect` reports, and what a write cannot overrule.
+        inspect: (key) => ({ globalValue: settings[key], workspaceValue: pinned[key] }),
+        update: (key, value, target) => {
+          writes.push({ key, value, target });
+          if (!(key in pinned)) {
+            settings[key] = value;
+          }
+          return Promise.resolve();
+        },
       }),
       // No folder for anything, which conveniently makes every storage ref the
       // plain URI string and keeps the expectations below readable.
@@ -67,6 +83,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
       }
     },
     TaskScope: { Workspace: 1 },
+    ConfigurationTarget: { Global: 'global', Workspace: 'workspace', WorkspaceFolder: 'folder' },
     ShellExecution: class {
       constructor(command, args, options) {
         Object.assign(this, { command, args, options });
@@ -158,11 +175,11 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     keyForTask = () => undefined;
     repaint = () => {};
     confirmScript = async () => true;
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, SCAN_SETTINGS };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, SCAN_SETTINGS };
   `,
     Object.assign(context, { memento }),
   );
-  return { ...context.exports.tree, memento, settings, probes, launched, terminals };
+  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -463,6 +480,89 @@ test('both shell runner settings throw the scan away', () => {
   const { SCAN_SETTINGS } = harness({});
   assert.ok([...SCAN_SETTINGS].includes('shellRunner'));
   assert.ok([...SCAN_SETTINGS].includes('shellRunners'));
+});
+
+test('the grouping switch writes where the value that wins already lives', async () => {
+  // A repository may pin `grouping` in its own settings, and a global write is
+  // then shadowed by it — the button switched nothing and said nothing.
+  const plain = harness({});
+  await plain.setGrouping('ecosystem');
+  assert.deepEqual(plain.writes, [{ key: 'grouping', value: 'ecosystem', target: 'global' }]);
+  assert.deepEqual(plain.warnings, []);
+  assert.equal(plain.settings.grouping, 'ecosystem');
+
+  const repo = harness({ pinned: { grouping: 'flat' } });
+  await repo.setGrouping('ecosystem');
+  assert.deepEqual(repo.writes, [{ key: 'grouping', value: 'ecosystem', target: 'workspace' }]);
+
+  // And when even that is not the value with the last word — a folder setting,
+  // which needs a resource this view does not have — the row says so instead of
+  // looking broken.
+  assert.equal(repo.warnings.length, 1);
+  assert.match(repo.warnings[0], /taskRunnerUltimate\.grouping/);
+});
+
+test('Add to Terminal calls a quoted command word in PowerShell', async () => {
+  // `.bat` and `.cmd` have no runner by design, so the path *is* the command
+  // word — and a quoted string at the start of a PowerShell line is a value it
+  // prints, not a program it runs.
+  const pwsh = harness({ shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' });
+  const bat = { ...shell('/repo/scripts', 'build all.bat'), argv: ['./scripts/build all.bat'] };
+  await pwsh.addToTerminal({ kind: 'script', script: bat });
+  assert.deepEqual(pwsh.terminals[0].sent, [{ text: "& './scripts/build all.bat'", execute: false }]);
+
+  // A word that needed no quoting is already a command, and takes no operator.
+  const ok = harness({ shell: 'pwsh.exe' });
+  await ok.addToTerminal({
+    kind: 'script',
+    script: { ...shell('/repo/scripts', 'setup.ps1'), argv: ['powershell', '-NoProfile', '-File', './scripts/setup.ps1'] },
+  });
+  assert.deepEqual(ok.terminals[0].sent, [
+    { text: 'powershell -NoProfile -File ./scripts/setup.ps1', execute: false },
+  ]);
+
+  // POSIX runs a quoted command word as it is, so nothing is added there.
+  const posix = harness({});
+  await posix.addToTerminal({ kind: 'script', script: bat });
+  assert.deepEqual(posix.terminals[0].sent, [{ text: "'./scripts/build all.bat'", execute: false }]);
+});
+
+test('a row whose containers are up follows colorIcons like every other icon', () => {
+  const up = {
+    ...script('/repo/docker-compose.yml', 'up', 'docker-compose'),
+    command: 'docker compose -f docker-compose.yml up',
+  };
+  const on = harness({});
+  on.containers.set('file:///repo/docker-compose.yml', new Set(['web']));
+  assert.equal(on.treeItemFor({ kind: 'script', script: up }).iconPath.color.id, 'taskRunnerUltimate.runningForeground');
+
+  // The setting promises every icon in the default foreground, and a row that
+  // opted out of colour did not opt out of it only while idle.
+  const off = harness({ settings: { colorIcons: false } });
+  off.containers.set('file:///repo/docker-compose.yml', new Set(['web']));
+  const icon = off.treeItemFor({ kind: 'script', script: up }).iconPath;
+  assert.equal(icon.id, 'debug-start');
+  assert.equal(icon.color, undefined);
+});
+
+test('one heading leaving the pile does not lift the rule off the rest', async () => {
+  // The bring-back exemption used to be read per gesture: a multi-select holding
+  // one hidden heading let every other heading in it leave its project, and the
+  // next repaint put them straight back — the "nothing happened" the refusal is
+  // there to avoid.
+  const PKG = script('/repo/package.json', 'build', 'npm');
+  const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
+  const API = script('/repo/api/package.json', 'dev', 'npm');
+  const OTHER = script('/repo/api/docker-compose.yml', 'up', 'docker-compose');
+  const scan = [PKG, COMPOSE, API, OTHER];
+  const h = harness({ scan, stored: { hidden: ['file:///repo/api/docker-compose.yml'] } });
+
+  const roots = h.buildTreeRoots(scan);
+  const api = roots.find((node) => node.id === 'group:file:///repo/api/package.json');
+  // The hidden one travels with a compose file that belongs to the root project.
+  await h.dropGroups(['file:///repo/api/docker-compose.yml', 'file:///repo/docker-compose.yml'], api, undefined);
+  assert.equal(h.memento.data.groupOrder, undefined, 'the drop must be refused, not written');
+  assert.match(h.hints.at(-1), /Not a drop target/);
 });
 
 test('Add to Terminal has nothing to open for a row that is not a script', async () => {

@@ -437,16 +437,41 @@ test('a pattern of your own may carry a brace group too', async () => {
   assert.equal(h.calls[0].include, '{tools/ci/*.sh,tools/dev/*.sh}');
 });
 
-test('a pattern with more groups than the budget is handed over as written', async () => {
+test('an unreasonable pattern is dropped, and takes no other pattern with it', async () => {
   // Groups multiply: `{a,b}` twenty-five times over is thirty-three million
   // patterns, and `shellScripts` is a setting a cloned repository can carry.
   const greedy = '{a,b}'.repeat(25) + '*.sh';
-  const h = harness({ root: '/repo', settings: { shellScripts: [greedy] }, found: {} });
+  const h = harness({
+    root: '/repo',
+    settings: { shellScripts: ['bin/*.sh', greedy] },
+    found: { '/repo/bin/build.sh': '' },
+  });
   const started = Date.now();
-  await h.collectShellScripts('**/none');
+  const rows = plain(await h.collectShellScripts('**/none'));
   assert.ok(Date.now() - started < 1000, 'the expansion must not be exponential');
-  // Unexpanded, which is what the search read before any expansion existed.
-  assert.equal(h.calls[0].include, greedy);
+  // The sane pattern is untouched. Handing the greedy one back with its braces
+  // intact would have nested one `{…}` group inside the joined one, and a nested
+  // group is a glob that matches nothing — one bad pattern would have taken
+  // `bin/` down with it.
+  assert.deepEqual(rows.map((row) => row.name), ['build.sh']);
+  assert.equal(h.calls[0].include, 'bin/*.sh');
+
+  // On its own it leaves nothing to look for, and nothing is asked of the search.
+  const alone = harness({ root: '/repo', settings: { shellScripts: [greedy] }, found: { '/repo/bin/build.sh': '' } });
+  assert.deepEqual(plain(await alone.collectShellScripts('**/none')), []);
+  assert.equal(alone.calls.length, 0);
+});
+
+test('a pattern that fits the budget is expanded however many groups it has', async () => {
+  // Twelve groups, one choice each: it fits, so it expands — the pass that
+  // confirms a finished expansion must not be the pass that gives up on it.
+  const h = harness({
+    root: '/repo',
+    settings: { shellScripts: ['{b}{i}{n}/*.sh'] },
+    found: { '/repo/bin/build.sh': '' },
+  });
+  assert.deepEqual(plain(await h.collectShellScripts('**/none')).map((row) => row.name), ['build.sh']);
+  assert.equal(h.calls[0].include, 'bin/*.sh');
 });
 
 test('each extension is run through the words that can start it', async () => {

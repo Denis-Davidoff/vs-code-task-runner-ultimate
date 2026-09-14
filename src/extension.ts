@@ -1938,17 +1938,40 @@ function openSettings(): void {
 /**
  * Puts `grouping` into one of its two modes.
  *
- * Written globally rather than to the workspace: a click in a menu should not
- * put a `.vscode/settings.json` into the user's `git status`. No repaint
- * follows, because `update` resolves after the configuration event has fired and
- * `grouping` is on `DISPLAY_SETTINGS` — the redraw is already on its way, and
- * `syncGrouping` rides on the same event so the header button turns over with
- * the tree rather than after it.
+ * Written globally by default: a click in a menu should not put a
+ * `.vscode/settings.json` into the user's `git status`. But `grouping` is an
+ * ordinary window-scoped setting, so a repository may already pin it — and a
+ * global write is then shadowed by that value, which left the button switching
+ * nothing, saying nothing, every time, forever. So the write goes where the
+ * value that wins already lives, and only falls back to the global one when
+ * nothing else holds it.
+ *
+ * A folder-scoped value is the case this cannot aim at: targeting one needs a
+ * resource, and this setting is about the view rather than about any one folder.
+ * That is what the check afterwards is for — it costs one read and turns the
+ * silent version of this failure into a sentence naming the setting.
+ *
+ * No repaint follows the write, because `update` resolves after the
+ * configuration event has fired and `grouping` is on `DISPLAY_SETTINGS` — the
+ * redraw is already on its way, and `syncGrouping` rides on the same event so
+ * the header button turns over with the tree rather than after it.
  */
 async function setGrouping(mode: 'flat' | 'ecosystem'): Promise<void> {
-  await vscode.workspace
-    .getConfiguration('taskRunnerUltimate')
-    .update('grouping', mode, vscode.ConfigurationTarget.Global);
+  const settings = vscode.workspace.getConfiguration('taskRunnerUltimate');
+  const held = settings.inspect<string>('grouping');
+  const target =
+    held?.workspaceValue !== undefined
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+  await settings.update('grouping', mode, target);
+  if (hierarchical() === (mode === 'ecosystem')) {
+    return;
+  }
+  // Something with the last word is still holding the old value — a folder
+  // setting, or a policy. Saying so beats a button that looks broken.
+  void vscode.window.showWarningMessage(
+    `Grouping is pinned to "${hierarchical() ? 'ecosystem' : 'flat'}" by a setting this view cannot write. Change taskRunnerUltimate.grouping where it is set.`,
+  );
 }
 
 /** The ☰ menu's half of the same switch, which names one thing and toggles it. */
@@ -2685,11 +2708,16 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
   // A heading on its way out of the pile is not drawn inside anything yet, so
   // the rule about staying inside a project has nothing to say about it — and
   // saying it anyway refused the one gesture that brings such a heading back.
-  const returning = moved.some((ref) => buried.has(ref));
-  if (!nested && anchor && !returning) {
+  // Per row and not per gesture: one heading on its way out of the pile used to
+  // lift the rule off every other heading travelling with it, and a multi-select
+  // spanning the pile and the list could then splice a compose file out of its
+  // project — an order the next repaint undoes, which is the "nothing happened"
+  // this refusal exists to avoid.
+  const settling = moved.filter((ref) => !buried.has(ref));
+  if (!nested && anchor && settling.length > 0) {
     const hosts = await groupHosts();
     const inside = (ref: string) => hosts.get(ref) ?? '';
-    const from = new Set(moved.map(inside));
+    const from = new Set(settling.map(inside));
     if (from.size > 1 || !from.has(inside(anchor))) {
       hint(
         '$(circle-slash) Not a drop target — this row is drawn inside its project, and moves among the rows there',
@@ -3969,14 +3997,19 @@ function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string, up = fa
   // say the more useful of the two things. What it replaces is the `play`
   // triangle every unmatched row used to wear — see `SHELL_ICONS`.
   const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? shellIcon(script) ?? 'play';
+  const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   // Containers of this row's are up, but nothing of ours is running: the row
   // keeps its own glyph and takes the running colour, which says "this is alive"
   // without the spinner claiming a process of ours to stop. A colour the user
   // painted still wins, as it does over a category.
+  //
+  // And `colorIcons` still has the last word, for the reason `runningIcon` gives
+  // for the spinner it stands in for: the setting promises every icon in the
+  // default foreground, and a row that opted out of colour did not opt out of it
+  // only while idle.
   if (up && !tint) {
-    return new vscode.ThemeIcon(glyph, new vscode.ThemeColor(RUNNING_COLOR));
+    return new vscode.ThemeIcon(glyph, colored ? new vscode.ThemeColor(RUNNING_COLOR) : undefined);
   }
-  const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   const color = tint ?? (category && colored ? category.color : undefined);
   return new vscode.ThemeIcon(glyph, color ? new vscode.ThemeColor(color) : undefined);
 }
@@ -4532,9 +4565,16 @@ async function addToTerminal(node: TreeNode | undefined): Promise<void> {
  */
 function terminalLine(script: ScriptEntry): string {
   const quoting = terminalQuoting();
-  return launchArgv(script)
-    .map((value) => (plainArgument(value) ? value : quoteFor(quoting, value)))
-    .join(' ');
+  const argv = launchArgv(script);
+  const line = argv.map((value) => (plainArgument(value) ? value : quoteFor(quoting, value))).join(' ');
+  // PowerShell reads a quoted string at the start of a line as a value, not as
+  // something to run: `'./scripts/build all.bat'` prints the path and stops. The
+  // call operator is what turns it back into a command, and it is needed exactly
+  // when the first word had to be quoted — a `.bat` or `.cmd` row, whose runner
+  // is empty by design, is the path itself and so the word in question.
+  return quoting === 'powershell' && argv[0] !== undefined && !plainArgument(argv[0])
+    ? `& ${line}`
+    : line;
 }
 
 /**
