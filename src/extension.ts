@@ -2830,10 +2830,13 @@ function packageLabel(script: ScriptEntry): string {
 // --- actions shared by the tree and the picker -------------------------------
 
 function executionOf(node: TreeNode | undefined): vscode.TaskExecution | undefined {
+  pruneRunning();
   if (node?.kind === 'script') {
     return running.get(node.script.key);
   }
-  return node?.kind === 'foreign' ? node.execution : undefined;
+  return node?.kind === 'foreign'
+    ? liveExecutions().find((execution) => sameExecution(execution, node.execution))
+    : undefined;
 }
 
 async function runNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
@@ -3226,7 +3229,7 @@ async function showScriptPicker(): Promise<void> {
     if (!item) {
       return;
     }
-    if (item.script && !running.has(item.script.key)) {
+    if (item.script && !executionOf(nodeOf(item))) {
       // Starting: hide so the task terminal is not covered by the picker.
       // Through `runNode` rather than `startScript`, so a task that asks before
       // it starts asks here too — a modal would dismiss the picker anyway, which
@@ -3433,6 +3436,16 @@ function forgetExecution(execution: vscode.TaskExecution): void {
  * there to prevent in the first place.
  */
 async function stopExecution(execution: vscode.TaskExecution): Promise<boolean> {
+  // A row or confirmation dialog can outlive its execution, especially after
+  // reloading the extension host. Terminating that stale handle can open VS
+  // Code's task picker. Use the current handle, or treat an absent run as stopped.
+  const live = liveExecutions().find((item) => sameExecution(item, execution));
+  if (!live) {
+    forgetExecution(execution);
+    onStateChanged();
+    return true;
+  }
+  execution = live;
   const ended = waitForEnd(execution);
   execution.terminate();
   const stopped = await ended;
