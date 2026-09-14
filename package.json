@@ -915,10 +915,10 @@
           ],
           "default": "type",
           "enumDescriptions": [
-            "Each heading wears its ecosystem’s glyph.",
+            "Each heading wears the icon its own file has in your file icon theme.",
             "Every heading wears the same stack glyph."
           ],
-          "markdownDescription": "What a package heading is drawn with. `type` is what tells a Node heading from a Rust one at a glance; `uniform` is the quieter column the tree used to have, for when the headings should stay out of the way of the rows under them.\n\nThe glyph only — a heading is coloured when you paint it, and otherwise wears the same colour as every other heading. An icon picked by hand on a row wins over both."
+          "markdownDescription": "What a package heading is drawn with. `type` asks your **file icon theme** for the icon that manifest has in the Explorer — the real npm, Rust and Docker marks, which no icon font carries; a folder of shell scripts gets the theme’s folder icon. `uniform` is the quieter column the tree used to have, for when the headings should stay out of the way of the rows under them.\n\nThe colour is separate either way: a heading is tinted when you paint it, and the tint lands on the text and leaves the icon its own colours. An icon picked by hand on a row wins over both.\n\nEcosystem rows are not covered — they name no file, so they keep their own glyph in both modes."
         },
         "taskRunnerUltimate.categories": {
           "type": "array",

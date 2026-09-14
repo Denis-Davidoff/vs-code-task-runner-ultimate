@@ -359,15 +359,19 @@ a row runs it, clicking a running one goes to its terminal, and a double click s
 and hovering one reveals inline ☆ / ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as a real VS Code
 badge.
 
-Each heading wears its ecosystem's own glyph — a package for Node, a gear for Rust, `terminal-bash`
-for shell — so a polyglot repository says which row is which without being read.
-`taskRunnerUltimate.groupIcons: "uniform"` puts the single stack glyph back on all of them, for when
-the headings should stay out of the way of the rows under them.
+Each heading wears **its own file's icon**, taken from whichever file icon theme you run — the real
+npm, Rust and Docker marks, which no icon font carries. A folder of shell scripts gets the theme's
+folder icon. `taskRunnerUltimate.groupIcons: "uniform"` puts a single stack glyph back on all of
+them, for when the headings should stay out of the way of the rows under them.
 
-The glyph and nothing else: a heading is coloured when **you** [paint it](#painting-a-row), and
-otherwise wears the same colour as every other heading. A colour per ecosystem was tried and taken
+The colour is a separate thing from the icon, and stays yours: a heading is tinted when **you**
+[paint it](#painting-a-row), the tint lands on the text and leaves the icon its own colours, and an
+unpainted heading reads in the same colour as every other. A colour per ecosystem was tried and taken
 out — a colour nobody chose on every row is the one job the paint is for, and eleven tints down one
 column made the headings the loudest thing on screen.
+
+Ecosystem rows are the exception, since they name no file: those keep a glyph of their own in both
+modes — a box for Node, a gear for Rust, a crate for Docker, a terminal for shell.
 
 #### What a project takes in with it
 
@@ -524,11 +528,11 @@ Any heading can be [renamed](#renaming-a-group-heading) when what it says is lon
 has room for.
 
 Every group heading carries an icon for what it is: ∿ for the tasks this extension did not start,
-and its ecosystem's own glyph for a package — a box for Node, a gear for Rust, a crate for Docker,
-a terminal for shell.
-Only the glyph varies; the colour of a heading is the same on all of them unless you
-[paint one](#painting-a-row), which is what keeps the column from competing with the rows under it.
-`taskRunnerUltimate.groupIcons: "uniform"` puts a single stack (≣) back on every heading.
+and, for a package, the icon its own manifest has in your file icon theme — so `package.json` wears
+npm's mark and `Cargo.toml` wears Rust's. Only the icon varies; the colour of a heading is the same
+on all of them unless you [paint one](#painting-a-row), which is what keeps the column from competing
+with the rows under it. `taskRunnerUltimate.groupIcons: "uniform"` puts a single stack (≣) back on
+every heading.
 
 The view header holds four actions. **Restart all** (⟳) and **stop all** (◼) appear only while
 something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
@@ -967,7 +971,7 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `colorIcons` | `true` | Tints task icons by category. Turn off for plain foreground-coloured icons. |
 | `pinRunningTasks` | `false` | Lifts running tasks to the top of their own group, in the tree and the dropdown. Off because a row that stays put is a row you stop where you started it. |
 | `grouping` | `flat` | `flat` keeps one row per manifest and folds compose files and script folders [inside the project they serve](#what-a-project-takes-in-with-it); `ecosystem` gathers the headings under [a row per ecosystem](#grouping-by-ecosystem) instead. |
-| `groupIcons` | `type` | `type` gives each heading its ecosystem's glyph; `uniform` gives every heading the same stack glyph. Neither colours anything. |
+| `groupIcons` | `type` | `type` gives each heading the icon its own file has in your file icon theme; `uniform` gives every heading the same stack glyph. Neither colours anything — painting a heading is [yours to do](#painting-a-row). |
 | `categories` | `[]` | Extra category rules, checked *before* the built-in ones. |
 
 The ones worth knowing about in a real project are `sources`, `exclude` and `packageManager`. A

@@ -53,12 +53,16 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], probe
       }
       fire() {}
     },
-    ThemeIcon: class {
-      constructor(id, color) {
-        this.id = id;
-        this.color = color;
-      }
-    },
+    ThemeIcon: Object.assign(
+      class {
+        constructor(id, color) {
+          this.id = id;
+          this.color = color;
+        }
+      },
+      // The two VS Code resolves through the file icon theme, using resourceUri.
+      { File: { themeFile: true }, Folder: { themeFolder: true } },
+    ),
     ThemeColor: class {
       constructor(id) {
         this.id = id;
@@ -300,11 +304,17 @@ test('an ecosystem row is its own kind of row, idle and running', () => {
   assert.equal(h.treeItemFor(roots[1]).contextValue, 'group:eco');
 });
 
-test('a manifest heading wears its type icon, and the uniform one when told to', () => {
+test('a manifest heading takes its own file\'s icon, and the uniform one when told to', () => {
+  // No codicon font carries the npm, Rust or Docker marks, so the heading asks
+  // the user's file icon theme for the icon its manifest has in the Explorer.
   const typed = harness({ settings: { groupIcons: 'type' } });
   const typedRow = typed.treeItemFor(typed.buildTreeRoots([ENGINE])[0]);
-  assert.equal(typedRow.iconPath.id, 'gear');
-  assert.equal(typedRow.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
+  assert.deepEqual({ ...typedRow.iconPath }, { themeFile: true });
+  // A theme can only match on a file name, and the scheme has to stay ours so
+  // the colour below never reaches the real file in the Explorer — so the
+  // decoration uri carries both.
+  assert.equal(typedRow.resourceUri.scheme, 'taskrunnerultimate');
+  assert.equal(path.posix.basename(typedRow.resourceUri.path), 'Cargo.toml');
 
   const uniform = harness({ settings: { groupIcons: 'uniform' } });
   const uniformRow = uniform.treeItemFor(uniform.buildTreeRoots([ENGINE])[0]);
@@ -312,20 +322,36 @@ test('a manifest heading wears its type icon, and the uniform one when told to',
   assert.equal(uniformRow.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
 });
 
-test('a colour picked by hand outranks the ecosystem colour', () => {
+test('a script folder asks the theme for a folder, not a file', () => {
+  const h = harness({});
+  const scripts = shell('/repo/scripts', 'deploy.sh');
+  const row = h.treeItemFor(h.buildTreeRoots([scripts])[0]);
+  assert.deepEqual({ ...row.iconPath }, { themeFolder: true });
+});
+
+test('a painted heading keeps both its colour and its file icon', () => {
+  // The decoration colours the label and leaves the icon alone, which is what
+  // lets a heading carry a paint of yours and its own logo at once.
   const h = harness({ stored: { colors: { 'file:///repo/engine/Cargo.toml': 'teal' } } });
   const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
-  assert.equal(row.iconPath.color.id, 'taskRunnerUltimate.palette.teal');
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
+  assert.equal(row.resourceUri.path.split('/')[1], 'taskRunnerUltimate.palette.teal');
+});
+
+test('an icon picked by hand stands in for the theme\'s', () => {
+  const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'rocket' } } });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.equal(row.iconPath.id, 'rocket');
 });
 
 test('no heading is tinted by what kind of thing it is', () => {
   // A colour nobody chose on every heading is the one job the paint is for, so
-  // the ecosystem decides the glyph and never the colour.
+  // an ecosystem row's glyph never carries one either.
   const h = harness({ settings: { grouping: 'ecosystem' } });
   const roots = h.buildTreeRoots([WEB, API, ENGINE]);
-  for (const row of [h.treeItemFor(roots[0]), h.treeItemFor(roots[0].children[0])]) {
-    assert.equal(row.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
-  }
+  assert.equal(h.treeItemFor(roots[0]).iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
+  // And the manifest rows under it answer to the file icon theme instead.
+  assert.deepEqual({ ...h.treeItemFor(roots[0].children[0]).iconPath }, { themeFile: true });
 });
 
 // --- what a project takes in with it -----------------------------------------

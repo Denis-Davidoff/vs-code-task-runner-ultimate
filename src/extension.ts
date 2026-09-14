@@ -2275,9 +2275,11 @@ function ecosystemId(ecosystem: Ecosystem): string {
 }
 
 /**
- * Whether a manifest heading wears its ecosystem's glyph, or the one stack icon
- * every heading used to wear. Parent rows always wear the type icon: a row that
- * *is* the ecosystem has nothing else to say.
+ * Whether a manifest heading wears the icon its own file has in the user's file
+ * icon theme, or the one stack glyph every heading used to wear.
+ *
+ * Parent rows are not covered either way: an ecosystem row names no file, so it
+ * keeps the codicon `ECOSYSTEMS` gives it in both modes.
  */
 function typeIcons(): boolean {
   return (
@@ -3290,23 +3292,38 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // in a column of headings that otherwise all look the same. OTHER TASKS takes
     // one too — it is a row on the same list, whatever it cannot be renamed to.
     //
-    // The glyph the row's ecosystem wants, when it is a row that wears one: a
-    // parent row always does — it *is* the ecosystem — and a manifest row does
-    // while `groupIcons` says `type`. OTHER TASKS and the hidden pile carry no
-    // ecosystem and are left exactly as they were.
+    // The ecosystem's own glyph belongs to the parent rows, which stand for an
+    // ecosystem and have no file of their own to show. OTHER TASKS and the
+    // hidden pile carry no ecosystem and are left exactly as they were.
     //
     // The glyph only. The colour of a heading is either one somebody painted or
     // the one every heading shares; see `ECOSYSTEMS` for why there is no third.
-    const type =
-      node.ecosystem && (node.ref === undefined || typeIcons()) ? ECOSYSTEMS[node.ecosystem] : undefined;
+    const type = node.ecosystem && node.ref === undefined ? ECOSYSTEMS[node.ecosystem] : undefined;
     const tint = nodeColor(node) ?? (node.id === HIDDEN_GROUP_ID ? HIDDEN_COLOR : TITLE_COLOR);
+    // The path this points at ends in the manifest's own file name — `detail` is
+    // the manifest path — which is what lets the file icon theme below find an
+    // icon for it while the scheme stays ours. Both halves matter: the scheme
+    // keeps our colour off the real file in the Explorer, and the file name is
+    // the only thing an icon theme matches on.
     item.resourceUri = decorationUri(tint, node.detail ?? node.label);
-    // An icon the user picked stands in for the stock one, in the tint the row
-    // already wears — the icon says which row this is, the colour keeps saying
-    // what it says on every heading.
-    const glyph = storedIcon(node.ref ?? node.id) ?? type?.icon ?? node.icon;
-    if (glyph) {
-      item.iconPath = new vscode.ThemeIcon(glyph, new vscode.ThemeColor(tint));
+
+    // A heading that names something on disk wears that thing's own icon, taken
+    // from whichever file icon theme the user runs — the real npm, Rust and
+    // Docker marks, which no codicon font carries. The decoration above colours
+    // the label and leaves the icon alone, so a painted heading keeps both: its
+    // colour on the text and its logo beside it.
+    //
+    // An icon picked by hand still stands in for it, and `groupIcons: 'uniform'`
+    // still puts the one stack glyph on every heading.
+    const picked = storedIcon(node.ref ?? node.id);
+    if (!picked && node.ref !== undefined && typeIcons()) {
+      // A shell group is a folder rather than a file, and themes draw folders.
+      item.iconPath = node.directory ? vscode.ThemeIcon.Folder : vscode.ThemeIcon.File;
+    } else {
+      const glyph = picked ?? type?.icon ?? node.icon;
+      if (glyph) {
+        item.iconPath = new vscode.ThemeIcon(glyph, new vscode.ThemeColor(tint));
+      }
     }
     item.id = node.id;
     // Only a heading that names something on disk can be renamed back to it, so
