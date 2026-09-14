@@ -171,6 +171,18 @@ const COMPOSE_OVERRIDE_FILES: ReadonlyArray<string> = [
 const COMPOSE_NAME = /^(?:docker-)?compose(?:\.[A-Za-z0-9_-]+)*\.ya?ml$/;
 
 /**
+ * Any name with `.override.` in it, and not only compose's own four.
+ *
+ * `compose.dev.override.yml` is an override by every convention there is, and
+ * running one on its own — which is what a heading of its own would offer — asks
+ * compose to bring up a fragment with no image and no build. Compose merges only
+ * the four it names, so only those are appended as a second `-f`; the rest are
+ * simply not rows, which is what this extension's own documentation has always
+ * promised about a file with `.override.` in its name.
+ */
+const COMPOSE_OVERRIDE_NAME = /\.override\.[A-Za-z0-9_-]*\.?ya?ml$/;
+
+/**
  * The globs that find the profile-named files above. The four default names are
  * already in `MANIFEST_KINDS`, so these only have to cover the ones carrying a
  * middle segment — which is what keeps `composer.yml` out of the scan entirely
@@ -192,10 +204,7 @@ function manifestKind(uri: vscode.Uri): SourceKind | undefined {
   if (Object.prototype.hasOwnProperty.call(MANIFEST_KINDS, name)) {
     return MANIFEST_KINDS[name];
   }
-  // The four real override names, and only those: `docker-compose.prod.override.yml`
-  // is not one of them — compose never merges it on its own — so it is a
-  // standalone file and gets a heading like any other profile-named one.
-  if (COMPOSE_NAME.test(name) && !COMPOSE_OVERRIDE_FILES.includes(name)) {
+  if (COMPOSE_NAME.test(name) && !COMPOSE_OVERRIDE_NAME.test(name)) {
     return 'docker-compose';
   }
   return undefined;

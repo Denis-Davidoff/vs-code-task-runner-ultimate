@@ -386,7 +386,11 @@ manifest.contributes.menus = {
   'view/item/context': [
     { command: 'taskRunnerUltimate.addFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:nofav:/` },
     { command: 'taskRunnerUltimate.removeFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },
-    { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^script:idle:/` },
+    // `script:up:` is a compose row whose containers are up without a run of
+    // ours behind them. Clicking it runs `up` — compose re-attaches, or starts
+    // the services that are missing — so it keeps ▶ and the menu entry that
+    // names that click.
+    { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^script:(idle|up):/` },
     { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     // `script:up:` is a compose row whose containers are up without anything of
     // ours running them — see `treeItemFor`. It gets a stop and nothing else:
@@ -400,8 +404,8 @@ manifest.contributes.menus = {
     // discoverable without being tried: a click runs an idle row, a double click
     // stops a running one. `0_actions` sorts above `0_open`, so they head the
     // menu the way they lead the row.
-    { command: 'taskRunnerUltimate.runItemMenu', group: '0_actions@1', when: `${inTree} && viewItem =~ /^script:idle:/` },
-    { command: 'taskRunnerUltimate.stopItemMenu', group: '0_actions@2', when: `${inTree} && viewItem =~ /^(script:(running|up):|foreignTask$)/` },
+    { command: 'taskRunnerUltimate.runItemMenu', group: '0_actions@1', when: `${inTree} && viewItem =~ /^script:(idle|up):/` },
+    { command: 'taskRunnerUltimate.stopItemMenu', group: '0_actions@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     //
     // Opening the file is the one action here that is about the manifest rather
     // than the task, and it is deliberately not an inline button: a row already
@@ -589,17 +593,16 @@ const COMPOSE_GLOBS = [
 ];
 
 /*
- * Shell scripts have no file name to wake on, so the two conventional folders
- * are named instead — at any depth, to match the default `shellScripts` globs,
- * which reach a `scripts` folder inside a package of a monorepo and not only one
- * at the very top.
+ * Shell scripts have no file name to wake on, so the conventional folders are
+ * named instead. The list is the default `shellScripts` globs, exactly: an
+ * activation narrower than the scan is a workspace whose rows exist but whose
+ * status bar and badge never appear, because those are built in `activate`.
  *
- * Deliberately still not every `.sh`: that matches in very nearly every
- * repository, and an extension that wakes up everywhere is one nobody can
- * account for. A workspace whose only scripts sit loose in the root therefore
- * waits for the view to be opened, which `onView` covers.
+ * Deliberately still not every `.sh` at every depth: that matches in very nearly
+ * every repository, and an extension that wakes up everywhere is one nobody can
+ * account for. The third entry is the workspace root alone.
  */
-const SHELL_FOLDERS = ['**/scripts/*.sh', '**/bin/*.sh'];
+const SHELL_FOLDERS = ['**/scripts/**/*.sh', '**/bin/**/*.sh', '*.sh'];
 
 manifest.activationEvents = [
   ...MANIFEST_FILES.map((file) => `workspaceContains:**/${file}`),

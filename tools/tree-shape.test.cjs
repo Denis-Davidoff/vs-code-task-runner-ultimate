@@ -25,7 +25,9 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [] } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], probeReply = () => ({ running: new Set(['web']) }) } = {}) {
+  const probes = [];
+  const launched = [];
   const vscode = {
     workspace: {
       getConfiguration: () => ({
@@ -36,7 +38,15 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [] } = {}
       getWorkspaceFolder: () => undefined,
       workspaceFolders: undefined,
     },
-    tasks: { taskExecutions: executions },
+    commands: { executeCommand: async () => {} },
+    tasks: {
+      taskExecutions: executions,
+      executeTask: async (task) => (launched.push(task), { task, terminate() {} }),
+    },
+    Task: class { constructor(definition) { this.definition = definition; } },
+    TaskScope: { Workspace: 1 },
+    ShellExecution: class {}, ProcessExecution: class {},
+    TaskRevealKind: { Always: 1, Never: 2 }, TaskPanelKind: { Dedicated: 1 },
     EventEmitter: class {
       constructor() {
         this.event = () => ({ dispose() {} });
@@ -78,6 +88,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [] } = {}
 
   const context = vm.createContext({
     exports: {},
+    process,
     setTimeout,
     clearTimeout,
     require: (name) =>
@@ -85,7 +96,9 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [] } = {}
         ? vscode
         : name === 'path'
           ? path
-          : // The tree reads one thing out of the scan module, and it is the one
+          : name === './containers'
+            ? { composeState: async (prefix, cwd) => (probes.push({ prefix, cwd }), probeReply()) }
+            : // The tree reads one thing out of the scan module, and it is the one
             // that decides which parent row a heading lands under.
             name === './sources'
             ? {
@@ -107,11 +120,12 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [] } = {}
     storage = memento;
     keyForTask = () => undefined;
     repaint = () => {};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, running, containers };
+    confirmScript = async () => true;
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers };
   `,
     Object.assign(context, { memento }),
   );
-  return { ...context.exports.tree, memento, settings };
+  return { ...context.exports.tree, memento, settings, probes, launched };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -539,8 +553,10 @@ test('two compose files sharing a `name:` stay tellable apart', () => {
   const { buildTreeRoots } = harness({ scan: [PKG, C1, C2] });
   const inside = buildTreeRoots([PKG, C1, C2])[0].children.filter((n) => n.kind === 'group');
   assert.deepEqual([...inside].map((n) => n.place), ['docker-compose.yml', 'docker-compose.dev.yml']);
-  // The name it calls itself survives where there is room for it.
-  assert.deepEqual([...inside].map((n) => n.label), ['acme', 'acme']);
+  // And the file name is what it is called everywhere, not only on the row:
+  // `label` is what the dropdown's separator and the rename prompt read, and
+  // two of a project's compose files very often share one `name:`.
+  assert.deepEqual([...inside].map((n) => n.label), ['docker-compose.yml', 'docker-compose.dev.yml']);
 });
 
 // --- the half after the bullet -------------------------------------------------
@@ -696,4 +712,98 @@ test('a compose heading starts shut, and the store remembers opening it', () => 
     .buildTreeRoots(scan)[0]
     .children.filter((node) => node.kind === 'group')[0];
   assert.equal(opened.treeItemFor(composeAgain).collapsibleState, 2, 'a remembered open stays open');
+});
+
+// --- asking Docker again --------------------------------------------------------
+
+/** A compose row as `parseCompose` builds one. */
+function composeRow(manifest, name, tail) {
+  const location = path.posix.relative('/repo', manifest);
+  return {
+    key: `file://${manifest}::${name}`,
+    name,
+    command: name,
+    manifest: uri(manifest),
+    kind: 'docker-compose',
+    argv: ['docker', 'compose', '-f', path.posix.basename(manifest), ...tail],
+    cwd: uri(path.posix.dirname(manifest)),
+    location,
+    directory: location.includes('/') ? location.slice(0, location.lastIndexOf('/')) : '',
+  };
+}
+
+const C_UP = composeRow('/repo/docker-compose.yml', 'up', ['up']);
+const C_DOWN = composeRow('/repo/docker-compose.yml', 'down', ['down']);
+const MANIFEST = 'file:///repo/docker-compose.yml';
+
+test('any compose task of ours refreshes the mark, not only an `up`', async () => {
+  // `down` changes what is running as surely as `up` does, and so does the stop
+  // the ■ builds — which is not a row of the scan at all. Reading the finished
+  // row back and asking it for a probe prefix left both unrefreshed.
+  const h = harness({ scan: [C_UP, C_DOWN] });
+  await h.checkContainers(false);
+  assert.equal(h.probes.length, 1, 'the question itself probes once');
+
+  const task = (script) => ({ definition: { type: 'taskRunnerUltimate', script, manifest: MANIFEST } });
+  await h.recheckAfter(task('down'));
+  assert.equal(h.probes.length, 2, 'the `down` row re-probes');
+  await h.recheckAfter(task('up'));
+  assert.equal(h.probes.length, 3, 'and so does `up`');
+
+  // A file nobody has asked about is still left alone — this is not a poll.
+  await h.recheckAfter({ definition: { type: 'taskRunnerUltimate', script: 'up', manifest: 'file:///repo/other/compose.yml' } });
+  assert.equal(h.probes.length, 3);
+  // And neither is a task that is not ours at all.
+  await h.recheckAfter({ definition: { type: 'npm', script: 'build' } });
+  assert.equal(h.probes.length, 3);
+});
+
+test('the ■ stop belongs to the row it was pressed on', async () => {
+  // Filed under a `stop` no scan declares, the task was one the badge counted
+  // and no row showed — and `pruneRunning` dropped it again looking for the row
+  // that key named.
+  const h = harness({ scan: [C_UP, C_DOWN] });
+  await h.stopContainers(C_UP);
+
+  assert.equal(h.launched.length, 1);
+  // The definition names the row, which is what `keyForTask` reads, so the task
+  // system files this run against the row the square was on. (The harness stubs
+  // `keyForTask` itself, so the definition is what there is to assert on.)
+  assert.equal(h.launched[0].definition.script, 'up');
+  assert.equal(h.launched[0].definition.manifest, MANIFEST);
+});
+
+test('the count is of the files just asked about, not of every file ever asked', async () => {
+  const h = harness({ scan: [C_UP] });
+  h.containers.set('file:///repo/gone/docker-compose.yml', new Set(['old-a', 'old-b']));
+  await h.checkContainers(false);
+  assert.deepEqual([...h.containers.keys()], [MANIFEST], 'a file the scan no longer has is dropped');
+});
+
+test('a file Docker could not answer for keeps its last answer', async () => {
+  const h = harness({ scan: [C_UP], probeReply: () => undefined });
+  h.containers.set(MANIFEST, new Set(['web']));
+  await h.checkContainers(false);
+  // "I could not ask" is not "your stack is down".
+  assert.deepEqual([...(h.containers.get(MANIFEST) ?? [])], ['web']);
+});
+
+test('a put-away project hosts nothing, in the order as well as in the tree', async () => {
+  // `orderedByHost` counting a hidden project as a host filed the compose file
+  // behind a block the tree was not drawing, and the dropdown listed it there.
+  const ROOTPKG = script('/repo/package.json', 'build', 'npm');
+  const API = script('/repo/api/package.json', 'dev', 'npm');
+  const APIC = composeRow('/repo/api/docker-compose.yml', 'up', ['up']);
+  const scan = [ROOTPKG, API, APIC];
+  const h = harness({ scan, stored: { hidden: ['file:///repo/api/package.json'] } });
+
+  const saved = await h.savedOrder();
+  const roots = h.buildTreeRoots(saved);
+  // With its project put away, the compose file falls to the root project.
+  assert.deepEqual(ids(roots[0].children.slice(1)), ['group:file:///repo/api/docker-compose.yml']);
+  // And the dropdown lists it in the same place.
+  assert.deepEqual(
+    [...h.buildItems(saved)].filter((item) => item.kind === -1).map((item) => item.label),
+    ['repo/package.json', 'api/docker-compose.yml', 'repo/api/package.json'],
+  );
 });

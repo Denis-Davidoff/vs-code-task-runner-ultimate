@@ -1541,10 +1541,16 @@ function orderedByHost(scripts: ScriptEntry[]): ScriptEntry[] {
     script: scripts[indices[0]],
   }));
 
+  // Put-away projects host nothing, the same exclusion `attachToHosts` gets for
+  // free by being handed the visible groups and `groupHosts` makes by hand. Left
+  // in, this pass filed a compose file behind a project the tree was not drawing
+  // — and the dropdown then listed it somewhere the tree never put it, which is
+  // the one thing this pass exists to prevent.
+  const buried = new Set(hiddenRefs());
   const hosts = new Map<string, string>();
   for (const block of blocks) {
     const folder = manifestFolder(block.script);
-    if (HOST_KINDS.has(block.script.kind) && !hosts.has(folder)) {
+    if (HOST_KINDS.has(block.script.kind) && !buried.has(block.ref) && !hosts.has(folder)) {
       hosts.set(folder, block.ref);
     }
   }
@@ -3458,10 +3464,17 @@ function containersUp(script: ScriptEntry): boolean {
 }
 
 /**
- * The words in front of the subcommand on a compose row — the program, the
- * `-f`s, and nothing else. Read back off a row rather than rebuilt, so the
- * override file and the `dockerCompose` spelling the parser settled on are the
- * ones the probe uses too.
+ * The words in front of the subcommand on an `up` row — the program, the `-f`s,
+ * and nothing else. Read back off a row rather than rebuilt, so the override
+ * file and the `dockerCompose` spelling the parser settled on are the ones the
+ * probe uses too.
+ *
+ * Only an `up` row, and that is a property of the arithmetic rather than a
+ * policy: `up` is one word and `up: <service>` is two, so the prefix is a fixed
+ * distance from the end. `logs -f` is two words for one subcommand and `ps` is
+ * one, so no other row can be measured this way — which is why every caller
+ * looks up an `up` row of the file it cares about instead of using the row in
+ * front of it.
  */
 function composePrefix(script: ScriptEntry): string[] | undefined {
   const argv = script.argv;
@@ -3509,17 +3522,39 @@ async function checkContainers(announce: boolean): Promise<void> {
     return;
   }
 
+  // A question about a monorepo is still one question: the files are asked in
+  // small batches rather than all at once, so a repository of per-service
+  // compose files does not put dozens of docker CLI processes up together.
+  const BATCH = 4;
   let asked = 0;
-  await Promise.all(
-    [...files].map(async ([key, script]) => {
-      const prefix = composePrefix(script);
-      const state = prefix ? await composeState(prefix, script.cwd.fsPath) : undefined;
-      if (state) {
-        asked++;
-        containers.set(key, state.running);
-      }
-    }),
-  );
+  // Rebuilt rather than written into: an entry for a compose file the scan no
+  // longer has cannot describe anything on screen, and it was still being added
+  // to the total below — a deleted file's old services reported as up.
+  const fresh = new Map<string, Set<string>>();
+  const queue = [...files];
+  while (queue.length > 0) {
+    await Promise.all(
+      queue.splice(0, BATCH).map(async ([key, script]) => {
+        const prefix = composePrefix(script);
+        const state = prefix ? await composeState(prefix, script.cwd.fsPath) : undefined;
+        if (state) {
+          asked++;
+          fresh.set(key, state.running);
+        } else {
+          // Docker could not answer for this one, so its last answer stands —
+          // "I could not ask" is not "your stack is down".
+          const previous = containers.get(key);
+          if (previous) {
+            fresh.set(key, previous);
+          }
+        }
+      }),
+    );
+  }
+  containers.clear();
+  for (const [key, services] of fresh) {
+    containers.set(key, services);
+  }
 
   repaint();
   if (!announce) {
@@ -3544,31 +3579,44 @@ async function checkContainers(announce: boolean): Promise<void> {
 /**
  * Asks again about the compose file a finished task belongs to, if it was one.
  *
+ * Keyed on the manifest the task names rather than on the row it came from, and
+ * that is the whole point: `down` changes what is running as surely as `up`
+ * does, and so does the `stop` the ■ button builds — which is not a row of the
+ * scan at all. Reading the row back and asking it for a probe prefix left both
+ * of those unrefreshed, so the feature could not clear the mark its own button
+ * had just made wrong.
+ *
  * Deliberately not a general "something ended, re-probe everything": that would
- * turn every npm script in the workspace into a Docker call. And nothing at all
- * until somebody has asked once — an empty map means the question has not been
+ * turn every npm script in the workspace into a Docker call. And nothing for a
+ * file nobody has asked about — an absent entry means the question has not been
  * put, and answering it unprompted is the background poll this avoids.
  */
 async function recheckAfter(task: vscode.Task): Promise<void> {
-  const key = keyForTask(task);
-  if (!key || containers.size === 0) {
-    return;
-  }
-  const script = (await collectScripts()).find((entry) => entry.key === key);
-  if (script?.kind === 'docker-compose') {
-    await refreshContainers(script);
+  const definition = task.definition as { type?: string; manifest?: string };
+  const manifest = definition.type === TASK_TYPE ? definition.manifest : undefined;
+  if (manifest && containers.has(manifest)) {
+    await refreshContainers(manifest);
   }
 }
 
-/** Asks again about one compose file, after something of ours touched it. */
-async function refreshContainers(script: ScriptEntry): Promise<void> {
-  const prefix = composePrefix(script);
-  if (!prefix) {
+/**
+ * Asks again about one compose file, after something of ours touched it.
+ *
+ * The probe's words come from one of the file's own `up` rows, wherever the
+ * question came from: those are the rows whose argv ends in a subcommand of
+ * known length, so they are the only ones a prefix can be read back off.
+ */
+async function refreshContainers(manifest: string): Promise<void> {
+  const script = (await collectScripts()).find(
+    (entry) => entry.manifest.toString() === manifest && isComposeUp(entry),
+  );
+  const prefix = script ? composePrefix(script) : undefined;
+  if (!script || !prefix) {
     return;
   }
   const state = await composeState(prefix, script.cwd.fsPath);
   if (state) {
-    containers.set(script.manifest.toString(), state.running);
+    containers.set(manifest, state.running);
     repaint();
   }
 }
@@ -3752,7 +3800,12 @@ function packageHeading(script: ScriptEntry, shared: boolean): string {
  * nothing about which is which.
  */
 function manifestTitle(script: ScriptEntry): string {
-  return script.packageName ?? path.posix.basename(script.manifest.path);
+  // A compose file is its file name everywhere, not only on the tree row: this
+  // is what the dropdown's separator and the rename dialog's prompt read, and
+  // two of a project's compose files very often share one `name:`.
+  return script.kind === 'docker-compose' || !script.packageName
+    ? path.posix.basename(script.manifest.path)
+    : script.packageName;
 }
 
 /** Highlighted part of a group row: the user's title for it, else the manifest's. */
@@ -3885,14 +3938,12 @@ async function stopContainers(script: ScriptEntry): Promise<void> {
     return;
   }
   const service = composeService(script);
+  // The row keeps its own name and key, so the task system, `running` and the
+  // tree all agree this work belongs to the row the square was pressed on: it
+  // spins while its stop runs, and stops spinning when the stop ends. Only the
+  // terminal's title says what is actually being run.
   await vscode.tasks.executeTask(
-    buildTask({
-      ...script,
-      name: service ? `stop: ${service}` : 'stop',
-      key: scriptKey(script.manifest.toString(), service ? `stop: ${service}` : 'stop'),
-      command: argv.join(' '),
-      argv,
-    }),
+    buildTask({ ...script, command: argv.join(' '), argv }, true, service ? `stop: ${service}` : 'stop'),
   );
 }
 
@@ -4582,7 +4633,7 @@ function scopeKey(task: vscode.Task): string {
   return typeof task.scope === 'object' ? task.scope.uri.toString() : String(task.scope ?? '');
 }
 
-function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
+function buildTask(script: ScriptEntry, reveal = true, verb?: string): vscode.Task {
   const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
   // A directory can hold a package.json, a Makefile and a justfile, each with a
   // `test`, so what disambiguates the terminal's name is the manifest and not
@@ -4590,10 +4641,17 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
   // always package.json and would only be noise.
   const where = script.kind === 'npm' || script.kind === 'deno' ? script.directory : script.location;
   const argv = launchArgv(script);
+  // The definition names the row and the title names the work, which are the
+  // same word for every task but one: the ■ on a row whose containers somebody
+  // else brought up runs `stop` *for that row*, and filing it under a `stop`
+  // nothing declares gave the task system a key no row carried — counted on the
+  // badge, shown nowhere, and dropped again by `pruneRunning` the moment it
+  // looked for the row that key named.
+  const shown = verb ?? script.name;
   const task = new vscode.Task(
     { type: TASK_TYPE, script: script.name, manifest: script.manifest.toString() },
     folder ?? vscode.TaskScope.Workspace,
-    where ? `${script.name} (${where})` : script.name,
+    where ? `${shown} (${where})` : shown,
     TASK_SOURCE,
     executionFor(argv, script.cwd.fsPath),
   );

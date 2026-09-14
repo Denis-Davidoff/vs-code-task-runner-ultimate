@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const ts = require('typescript');
+const { minimatch } = require('minimatch');
 
 // The parsers are module-private, so the file is transpiled and run with a small
 // workspace mock that answers the two things a parse can ask the world: what the
@@ -25,12 +26,26 @@ function uri(at) {
  */
 function harness({ settings = {}, present = [], found = [], root } = {}) {
   const onDisk = new Set(present);
+  const calls = [];
   const contents = found && !Array.isArray(found) ? found : Object.fromEntries((found ?? []).map((at) => [at, '']));
   const vscode = {
     workspace: {
       getConfiguration: () => ({ get: (key) => settings[key] }),
       getWorkspaceFolder: () => (root ? { uri: uri(root) } : undefined),
-      findFiles: async () => Object.keys(contents).map(uri),
+      // The glob is honoured rather than ignored, and the call is recorded. A
+      // stub that swallowed its arguments let the pattern list, the exclude and
+      // the result cap all be dropped from `collectShellScripts` with every
+      // test still green — the setting these tests are named after was the one
+      // thing they could not see.
+      findFiles: async (include, exclude, max) => {
+        calls.push({ include, exclude, max });
+        const inside = (at) => (root ? path.posix.relative(root, at) : at);
+        return Object.keys(contents)
+          .filter((at) => minimatch(inside(at), include))
+          .filter((at) => !exclude || !minimatch(inside(at), exclude))
+          .slice(0, max ?? Infinity)
+          .map(uri);
+      },
       fs: {
         stat: async (target) => {
           if (!onDisk.has(target.path)) {
@@ -57,7 +72,7 @@ function harness({ settings = {}, present = [], found = [], root } = {}) {
   `,
     context,
   );
-  return context.exports.parsers;
+  return { ...context.exports.parsers, calls };
 }
 
 const cwd = { path: '/repo' };
@@ -301,13 +316,52 @@ test('the shell scan groups by directory and runs from the workspace root', asyn
 });
 
 test('the shell scan honours an empty runner and a narrowed pattern list', async () => {
-  const { collectShellScripts } = harness({
+  const h = harness({
     root: '/repo',
     settings: { shellRunner: '  ', shellScripts: ['bin/*.sh'] },
-    found: { '/repo/bin/build.sh': '' },
+    found: { '/repo/bin/build.sh': '', '/repo/scripts/deploy.sh': '' },
   });
-  const rows = plain(await collectShellScripts('**/none'));
-  assert.deepEqual(rows[0].argv, ['./bin/build.sh']);
+  const rows = plain(await h.collectShellScripts('**/exclude-me'));
+  // The narrowed pattern is the whole point: `scripts/deploy.sh` is on disk and
+  // must not come back.
+  assert.deepEqual(rows.map((row) => row.name), ['build.sh']);
+  assert.deepEqual(plain(rows[0].argv), ['./bin/build.sh']);
+  // A single pattern goes through as itself; the exclude and the cap reach
+  // `findFiles` rather than being dropped on the way.
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].include, 'bin/*.sh');
+  assert.equal(h.calls[0].exclude, '**/exclude-me');
+  assert.equal(h.calls[0].max, 200);
+});
+
+test('several patterns are joined into one brace glob', async () => {
+  const h = harness({
+    root: '/repo',
+    settings: { shellScripts: ['bin/*.sh', 'tools/*.sh'] },
+    found: { '/repo/bin/a.sh': '', '/repo/tools/b.sh': '', '/repo/other/c.sh': '' },
+  });
+  const rows = plain(await h.collectShellScripts('**/none'));
+  assert.equal(h.calls[0].include, '{bin/*.sh,tools/*.sh}');
+  assert.deepEqual(rows.map((row) => row.name).sort(), ['a.sh', 'b.sh']);
+});
+
+test('the default patterns reach a package of a monorepo, and the root', async () => {
+  // The leading globstar is what carries the first two past the workspace root;
+  // without it `apps/web/scripts/deploy.sh` is never found at all.
+  const h = harness({
+    root: '/repo',
+    found: {
+      '/repo/apps/web/scripts/deploy.sh': '',
+      '/repo/bin/ci/build.sh': '',
+      '/repo/release.sh': '',
+      '/repo/apps/web/loose.sh': '',
+    },
+  });
+  const rows = plain(await h.collectShellScripts('**/none'));
+  assert.deepEqual(rows.map((row) => row.name).sort(), ['build.sh', 'deploy.sh', 'release.sh']);
+  // A loose `.sh` below the root is not one of them: the third pattern carries
+  // no prefix on purpose.
+  assert.equal(h.calls[0].include, '{**/scripts/**/*.sh,**/bin/**/*.sh,*.sh}');
 });
 
 test('the shell scan reads nothing at all when the pattern list is emptied', async () => {

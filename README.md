@@ -147,7 +147,7 @@ monorepo.
 | **PHP** | `composer.json` | `scripts` | `composer run-script <name>` |
 | **mise** | `mise.toml`, `.mise.toml` | `[tasks.*]` | `mise run <name>` |
 | **Docker** | `compose.yml`, `docker-compose.yml`, their `.yaml` spellings, and profile names like `docker-compose.dev.yml` | `services:` — see [below](#docker-compose) | `docker compose -f <file> up <service>`, … |
-| **Shell** | `scripts/**/*.sh`, `bin/**/*.sh`, `*.sh` | the files themselves — see [below](#shell-scripts) | `bash ./scripts/deploy.sh` |
+| **Shell** | `**/scripts/**/*.sh`, `**/bin/**/*.sh`, `*.sh` | the files themselves — see [below](#shell-scripts) | `bash ./scripts/deploy.sh` |
 
 Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's files are never
 opened at all, which is also the fastest way to quieten a repository carrying a `Makefile` nobody
@@ -228,17 +228,19 @@ a terminal command, not a row that lies about its own state.
 profile-named ones are found too: `docker-compose.dev.yml`, `compose.prod.yaml`,
 `docker-compose.ci.yml`, each a heading of its own. Nothing inside a YAML file says "I am compose",
 so a name matched that way is only believed once the file shows a top-level `services:` or
-`include:` block — which is what keeps a `deploy.staging.yml` out, and `composer.yml` is turned away
-on the name alone. An `*.override.*` file is never a heading: it is read as part of the file beside
-it.
+`include:` block. A `deploy.staging.yml` never even gets that far, and neither does `composer.yml` —
+the name has to begin with `compose` or `docker-compose` followed by a dot. Any name with
+`.override.` in it is never a heading: `compose.dev.override.yml` is a fragment by every convention
+there is, and running one on its own would ask compose to bring up services with no image.
 
 Every row passes `-f <file>`, because what the scan saw is not what compose would pick — it has its
 own precedence across those four names. Passing `-f` turns off the automatic merge of the override
-file, though, and that file is a live development workflow, so the first `*.override.*` beside the
-manifest is appended as a second `-f`: the merge compose would have done, spelled out. Note that
-compose searches its four override spellings in its own order whatever the base file is called, so
-`compose.yaml` beside `compose.override.yml` is a pair — and that this only applies to the four
-default names. A `docker-compose.dev.yml` gets no override, because the merge is something compose
+file, though, and that file is a live development workflow, so the first of compose's **own four**
+override names beside the manifest — `compose.override.yaml`, `compose.override.yml`,
+`docker-compose.override.yaml`, `docker-compose.override.yml` — is appended as a second `-f`: the
+merge compose would have done, spelled out. Note that compose searches those four in its own order
+whatever the base file is called, so `compose.yaml` beside `compose.override.yml` is a pair — and
+that this only applies to the four default names. A `docker-compose.dev.yml` gets no override, because the merge is something compose
 does to the file it chose for itself.
 
 `taskRunnerUltimate.dockerCompose` chooses between `docker compose` (the default — the v1 binary has
@@ -257,16 +259,21 @@ takes the running colour, and reads `up ·` before its command.
 
 It is a question you ask, not a background poll: that would mean a process per compose file on a
 timer, in every workspace, for something most of them never need. The answer is refreshed on its own
-in one place only — after a compose task of *this* window ends, which is the one moment it is known
-to be stale. Everything else waits for the next time you ask.
+in one place only — when a task of *this* window that names a compose file you have already asked
+about ends, which is the one moment it is known to be stale. That covers `up`, `down` and the ■
+below alike. Everything else waits for the next time you ask, and the files are asked in small
+batches so a monorepo of per-service compose files does not put dozens of docker processes up at
+once.
 
 When Docker cannot answer — not installed, daemon down, the call times out after five seconds — the
 rows keep whatever they last said rather than claiming everything stopped. "I could not ask" is not
 "your stack is down".
 
 ■ on a row marked this way runs `docker compose stop` for that file or service, as an ordinary task
-with its own terminal. `stop` and not `down`, because the square promises a stop: `down` would also
-delete the containers and their networks, and the `down` row is there for that.
+with its own terminal. The task belongs to the row you pressed, so that row spins while its own stop
+runs and settles when the re-check comes back. `stop` and not `down`, because the square promises a
+stop: `down` would also delete the containers and their networks, and the `down` row is there for
+that.
 
 This is the one thing in the extension that starts a process. Everything else reads the workspace
 through VS Code's own file API, which is what keeps it working over Remote SSH and in Dev Containers;
