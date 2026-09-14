@@ -3230,13 +3230,18 @@ function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] 
         );
       }
     }
-    // How many scripts are behind the fold, as the ecosystem rows say it: in the
-    // label, since the decoration that tints a row tints a description with it.
-    // Every other heading is named by a file or a package and counts nothing;
-    // this one is named after what it holds, and how much of it is the rest of
-    // that sentence. The name it restores to on a rename is untouched — that is
-    // `label`, and this is the half of the heading the row shows.
-    row.place = `shell (${row.children.length})`;
+    // How many scripts are behind the fold — in the label, since the decoration
+    // that tints a row tints a description with it. Every other heading is named
+    // by a file or a package and counts nothing; this one is named after what it
+    // holds, and how much of it is the rest of that sentence. The name it
+    // restores to on a rename is untouched — that is `label`, and this is the
+    // half of the heading the row shows.
+    //
+    // Brackets rather than the parentheses an ecosystem row uses, and nothing at
+    // all for a single script: `shell [1]` is a number that can only ever be one
+    // thing, counted where there was nothing to count.
+    const held = row.children.length;
+    row.place = held > 1 ? `shell [${held}]` : 'shell';
   }
   return roots;
 }

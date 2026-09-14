@@ -457,7 +457,7 @@ acme
   🖥 docker-compose.yml
      ▶ up
      ▶ up: web
-  💻 shell (3)
+  💻 shell [3]
      ▶ deploy.sh     scripts
      ▶ lint.sh       tools/ci
      ▶ release.sh
@@ -477,9 +477,10 @@ A compose file is named by its file, since a folder can hold `docker-compose.yml
 that there are scripts here. Where more than one folder is in the row, each script says which it came
 from in the dimmed column, and a script in the project's own folder has no path to name.
 
-The count in the brackets is how many scripts are under the fold, the way an ecosystem row carries
-its own — this is the one heading named after what it holds rather than after a file or a package,
-and the number is the rest of that sentence. A rename replaces the whole heading, count and all.
+The number in brackets is how many scripts are under the fold — this is the one heading named after
+what it holds rather than after a file or a package, and the count is the rest of that sentence. A
+single script gets no number: `shell [1]` counts where there is nothing to count. A rename replaces
+the whole heading, count and all.
 
 A `shell` row that stands for **one** folder *is* that folder: it can be renamed, put away, painted
 and opened exactly as it always could. One standing for several names nothing on disk, so — like an

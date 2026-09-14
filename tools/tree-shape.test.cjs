@@ -469,8 +469,8 @@ test('flat mode draws compose and script folders inside the project they serve',
   // Both folders are in the one row, each script saying which it came from —
   // and a script in the project's own folder has no path to name.
   const folder = inside[2];
-  // Named after what it holds, and how much of it — the way an ecosystem row is.
-  assert.equal(folder.place, 'shell (2)');
+  // Named after what it holds, and how much of it.
+  assert.equal(folder.place, 'shell [2]');
   assert.deepEqual([...folder.children].map((node) => node.script.name), ['deploy.sh', 'release.sh']);
   assert.deepEqual([...folder.children].map((node) => node.origin), ['scripts', undefined]);
   assert.ok(treeItemFor(folder.children[0]).description.startsWith('scripts · '));
@@ -491,8 +491,10 @@ test('one folder behind the row leaves the row that folder', () => {
   assert.equal(folder.manifest.path, '/repo/scripts');
   assert.equal(treeItemFor(folder).contextValue, 'group:package');
   // Still called `shell`, and still the folder it is on disk underneath: the
-  // name a rename restores to is `label`, which the count never reaches.
-  assert.equal(folder.place, 'shell (1)');
+  // name a rename restores to is `label`, which the count never reaches. One
+  // script is no count at all — `shell [1]` counts where there is nothing to
+  // count.
+  assert.equal(folder.place, 'shell');
   assert.equal(folder.label, 'scripts');
   // One folder, so nothing to tell the rows apart by.
   assert.deepEqual([...folder.children].map((node) => node.origin), [undefined]);
