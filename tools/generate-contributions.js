@@ -336,7 +336,10 @@ manifest.contributes.commands = [
   // or the mode you are in, never both, and the first is the one worth a click.
   { command: 'taskRunnerUltimate.groupByEcosystem', title: 'Group by Ecosystem', category: 'Task & Script Explorer', icon: '$(list-tree)' },
   { command: 'taskRunnerUltimate.groupFlat', title: 'Show as a Flat List', category: 'Task & Script Explorer', icon: '$(list-flat)' },
-  { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task & Script Explorer', icon: '$(menu)' },
+  // The three dots every editor draws an overflow menu as, rather than the three
+  // lines of `$(menu)`: a hamburger reads as navigation — a list of places — and
+  // this one is a list of actions on the view it sits in.
+  { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task & Script Explorer', icon: '$(kebab-vertical)' },
   {
     command: 'taskRunnerUltimate.stopAll',
     title: 'Stop All Running Tasks',

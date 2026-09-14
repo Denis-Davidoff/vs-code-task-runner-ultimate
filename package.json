@@ -337,7 +337,7 @@
         "command": "taskRunnerUltimate.menu",
         "title": "Menu",
         "category": "Task & Script Explorer",
-        "icon": "$(menu)"
+        "icon": "$(kebab-vertical)"
       },
       {
         "command": "taskRunnerUltimate.stopAll",

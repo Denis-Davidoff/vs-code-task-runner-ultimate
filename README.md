@@ -291,7 +291,7 @@ tell them apart is to run `docker compose version`, and a scan never starts a pr
 A row spins while **this window** is running it, which is honest and incomplete: a stack you brought
 up from a terminal, from Docker Desktop, or with `up -d` leaves every row looking stopped.
 
-**Check containers** in [the ☰ menu](#the-menu) asks Docker. It runs `docker compose ps` once per
+**Check containers** in [the ⋮ menu](#the-menu) asks Docker. It runs `docker compose ps` once per
 compose file — `--format json`, and if the runner turns out not to have that flag (the standalone v1
 binary does not) the same question again as `ps --services --filter status=running`, which v1 does
 understand — and marks the rows whose containers are up — the `up: <service>` row for each running
@@ -516,7 +516,7 @@ bar instead.
 
 By default every manifest heading sits at the top level, which in a polyglot repository is one long
 column. Press the **grouping switch** in [the view header](#the-task--script-explorer-view) — or pick
-**Group by ecosystem** from [the ☰ menu](#the-menu), or set `taskRunnerUltimate.grouping` to
+**Group by ecosystem** from [the ⋮ menu](#the-menu), or set `taskRunnerUltimate.grouping` to
 `"ecosystem"` — and they gather one level down, under a row per language or runner:
 
 ```
@@ -635,7 +635,7 @@ every heading.
 
 The view header holds five actions. **Restart all** (⟳) and **stop all** (◼) appear only while
 something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶), the
-**grouping switch** and the **menu** (☰) are always there. The switch is one button drawn as whichever
+**grouping switch** and the **menu** (⋮) are always there. The switch is one button drawn as whichever
 mode it would put you in — a tree (⊞) while the list is flat, a flat list while it is
 [grouped by ecosystem](#grouping-by-ecosystem) — so the header never shows you the mode you are
 already in. Stop-all and restart-all reach every running task, including ones
@@ -666,7 +666,7 @@ afterwards, so the icon keeps the extension's own name.
 
 ### The menu
 
-The ☰ in the view header opens everything that is not aimed at one row:
+The ⋮ in the view header opens everything that is not aimed at one row:
 
 | Entry | What it does |
 | --- | --- |
