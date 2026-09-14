@@ -586,11 +586,16 @@ const COMPOSE_GLOBS = [
 
 /*
  * Shell scripts have no file name to wake on, so the two conventional folders
- * are named instead. Deliberately narrow, and deliberately not `**\/*.sh`: that
- * one matches in very nearly every repository, and an extension that wakes up
- * everywhere is an extension nobody can account for.
+ * are named instead — at any depth, to match the default `shellScripts` globs,
+ * which reach a `scripts` folder inside a package of a monorepo and not only one
+ * at the very top.
+ *
+ * Deliberately still not every `.sh`: that matches in very nearly every
+ * repository, and an extension that wakes up everywhere is one nobody can
+ * account for. A workspace whose only scripts sit loose in the root therefore
+ * waits for the view to be opened, which `onView` covers.
  */
-const SHELL_FOLDERS = ['scripts/*.sh', 'bin/*.sh'];
+const SHELL_FOLDERS = ['**/scripts/*.sh', '**/bin/*.sh'];
 
 manifest.activationEvents = [
   ...MANIFEST_FILES.map((file) => `workspaceContains:**/${file}`),

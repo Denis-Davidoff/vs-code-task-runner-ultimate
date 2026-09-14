@@ -30,9 +30,10 @@ restart without ever going looking for a terminal tab.**
 - 🎨 **Colour and an icon per task** — ▶ for dev servers, a beaker for tests, a rocket for releases,
   a database for migrations, decided by what the task really runs — and [your own rules](#settings)
   come first.
-- 🧩 **[Nine ecosystems, one list](#what-gets-scanned)** — `package.json`, `deno.json`, `Cargo.toml`,
+- 🧩 **[Eleven ecosystems, one list](#what-gets-scanned)** — `package.json`, `deno.json`, `Cargo.toml`,
   `Makefile.toml`, `pyproject.toml`, `Pipfile`, `tox.ini`, `noxfile.py`, `Makefile`, `justfile`,
-  `Taskfile.yml`, `go.mod`, `composer.json` and `mise.toml`, so a mixed monorepo is still one list.
+  `Taskfile.yml`, `go.mod`, `composer.json`, `mise.toml`, `docker-compose.yml` and the `scripts/*.sh`
+  every repository accumulates, so a mixed monorepo is still one list.
 - 🧠 **[Knows how to run things](#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
   package from `packageManager`, `engines` and the lock files; everything else named by the table it
   is declared in.
@@ -246,11 +247,13 @@ tell them apart is to run `docker compose version`, and a scan never starts a pr
 
 ### Shell scripts
 
-Every `.sh` under `scripts/`, under `bin/`, or in the root of a workspace folder becomes a row,
-grouped under **the directory it lives in** — twelve scripts across two folders are two headings,
-not twelve one-row headings. `taskRunnerUltimate.shellScripts` is the list of globs, relative to each
-workspace folder, so `*.sh` means the root level alone. Each of those headings is then drawn
-[inside the nearest project above it](#what-a-project-takes-in-with-it).
+Every `.sh` under a `scripts/` or `bin/` folder — at any depth, so a package of a monorepo gets its
+own — or in the root of a workspace folder becomes a row, grouped under **the directory it lives in**:
+twelve scripts across two folders are two headings, not twelve one-row headings.
+`taskRunnerUltimate.shellScripts` is the list of globs, matched against each file's path relative to
+its workspace folder. The first two carry a leading `**/` for exactly that reason; the third does not,
+so loose `*.sh` files are listed where a project root is rather than in every directory. Each heading
+is then drawn [inside the nearest project above it](#what-a-project-takes-in-with-it).
 
 The dimmed text is the first comment line in the file written for a person — the shebang, and the
 `# shellcheck`, `# vim:` and `# -*-` pragmas under it, are skipped:
@@ -471,10 +474,11 @@ is called — and the path after the bullet would stop being one you can paste i
 Any heading can be [renamed](#renaming-a-group-heading) when what it says is longer than the sidebar
 has room for.
 
-Every group heading carries an icon for what it is: ∿ for the tasks this extension
-did not start, and a stack (≣) for a package — the pile of tasks the heading opens into. The rows
-underneath are the ones that vary, each with its own colour and glyph, so the headings stay one
-quiet shape down the left edge instead of competing with them.
+Every group heading carries an icon for what it is: ∿ for the tasks this extension did not start,
+and its ecosystem's own glyph for a package — a box for Node, a gear for Rust, a terminal for shell.
+Only the glyph varies; the colour of a heading is the same on all of them unless you
+[paint one](#painting-a-row), which is what keeps the column from competing with the rows under it.
+`taskRunnerUltimate.groupIcons: "uniform"` puts a single stack (≣) back on every heading.
 
 The view header holds four actions. **Restart all** (⟳) and **stop all** (◼) appear only while
 something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶) and
@@ -902,7 +906,7 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `pythonRunner` | `auto` | How `[project.scripts]` entry points are entered — see [Python](#python). `none` hides them. |
 | `dockerCompose` | `docker compose` | The compose command — the v2 plugin, or the standalone `docker-compose`. See [Docker Compose](#docker-compose). |
 | `dockerComposeCommands` | `up`, `down`, `build`, `logs`, `ps` | The compose subcommands every compose file gets. `up` also fans out over the services. |
-| `shellScripts` | `scripts/**/*.sh`, `bin/**/*.sh`, `*.sh` | Where [shell scripts](#shell-scripts) are looked for, as globs relative to each workspace folder. |
+| `shellScripts` | `**/scripts/**/*.sh`, `**/bin/**/*.sh`, `*.sh` | Where [shell scripts](#shell-scripts) are looked for, as globs matched against each file's path relative to its workspace folder. |
 | `shellRunner` | `bash` | What a shell row is run through. Empty runs the path on its own. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `showInEditorTitle` | `true` | The ▶ icon in the editor title bar. |

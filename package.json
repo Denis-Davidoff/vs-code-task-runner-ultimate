@@ -92,8 +92,8 @@
     "workspaceContains:**/compose.*.yaml",
     "workspaceContains:**/docker-compose.*.yml",
     "workspaceContains:**/docker-compose.*.yaml",
-    "workspaceContains:scripts/*.sh",
-    "workspaceContains:bin/*.sh",
+    "workspaceContains:**/scripts/*.sh",
+    "workspaceContains:**/bin/*.sh",
     "onTaskType:taskRunnerUltimate",
     "onView:taskRunnerUltimate.tree",
     "onView:taskRunnerUltimate.explorer"
@@ -861,15 +861,15 @@
         "taskRunnerUltimate.shellScripts": {
           "type": "array",
           "default": [
-            "scripts/**/*.sh",
-            "bin/**/*.sh",
+            "**/scripts/**/*.sh",
+            "**/bin/**/*.sh",
             "*.sh"
           ],
           "uniqueItems": true,
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Where shell scripts are looked for, as globs relative to each workspace folder — so `*.sh` is the root level alone. Every script found becomes a row, grouped under the directory it sits in.\n\nThe executable bit is deliberately not consulted: it is invisible to VS Code’s own file API, and reading it would mean giving up Remote SSH and Dev Containers. The convention — a `.sh` in `scripts/`, `bin/` or the root — is the signal instead.\n\nAt most 200 scripts are read, budgeted apart from the manifests. Narrow these patterns if a repository has more."
+          "markdownDescription": "Where shell scripts are looked for, as globs matched against each file’s path **relative to its workspace folder**. Every script found becomes a row, grouped under the directory it sits in.\n\nThe leading `**/` is what carries the first two past the root: without it a `scripts` folder would have to sit at the very top, and `apps/web/scripts/deploy.sh` would never be found. The third pattern keeps no prefix on purpose, so loose scripts are listed where a project root is rather than in every directory.\n\nThe executable bit is deliberately not consulted: it is invisible to VS Code’s own file API, and reading it would mean giving up Remote SSH and Dev Containers. The convention — a `.sh` under `scripts`, under `bin`, or in the root — is the signal instead.\n\nAt most 200 scripts are read, budgeted apart from the manifests. Narrow these patterns if a repository has more."
         },
         "taskRunnerUltimate.shellRunner": {
           "type": "string",

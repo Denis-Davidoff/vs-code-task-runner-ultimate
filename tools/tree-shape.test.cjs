@@ -25,7 +25,7 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [] } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [] } = {}) {
   const vscode = {
     workspace: {
       getConfiguration: () => ({
@@ -88,7 +88,16 @@ function harness({ settings = {}, stored = {}, executions = [] } = {}) {
           : // The tree reads one thing out of the scan module, and it is the one
             // that decides which parent row a heading lands under.
             name === './sources'
-            ? { ecosystemOf: (kind) => ECOSYSTEMS[kind], ALL_ECOSYSTEMS: [...new Set(Object.values(ECOSYSTEMS))] }
+            ? {
+                ecosystemOf: (kind) => ECOSYSTEMS[kind],
+                ALL_ECOSYSTEMS: [...new Set(Object.values(ECOSYSTEMS))],
+                collectScripts: async () => scan,
+                emptyManifests: () => [],
+                scriptKey: (manifest, task) => `${manifest}::${task}`,
+                commandFor: (entry) => entry.name,
+                launchArgv: (entry) => [entry.name],
+                plainArgument: () => true,
+              }
             : {},
   });
 
@@ -97,7 +106,8 @@ function harness({ settings = {}, stored = {}, executions = [] } = {}) {
       `
     storage = memento;
     keyForTask = () => undefined;
-    exports.tree = { buildTreeRoots, groupedByEcosystem, treeItemFor, running };
+    repaint = () => {};
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, running };
   `,
     Object.assign(context, { memento }),
   );
@@ -376,4 +386,159 @@ test('ecosystem mode files compose and shell by what they are, not by whom they 
   // The compose file itself is what the Docker row opens into.
   assert.deepEqual(ids(roots[1].children), ['group:file:///repo/docker-compose.yml']);
   assert.equal(roots[1].children[0].place, 'docker-compose.yml');
+});
+
+// --- the landing position of a drop -------------------------------------------
+
+/** The refs of a scan's groups, in the order `savedOrder` settles on. */
+const scopes = (h, saved) => [...new Set([...saved].map((entry) => entry.manifest.toString()))];
+
+test('a dragged block lands on the row it was dropped on, not past it', async () => {
+  // Two packages in Node, one each in Rust and Make: dropping Node on Rust has
+  // to leave Make behind it. Reading the anchor's index straight out of the
+  // unfiltered order overshoots by the size of the block, which is invisible
+  // with two ecosystems and wrong with three.
+  const N1 = script('/repo/web/package.json', 'dev', 'npm');
+  const N2 = script('/repo/api/package.json', 'start', 'npm');
+  const R1 = script('/repo/engine/Cargo.toml', 'build', 'cargo');
+  const M1 = script('/repo/Makefile', 'all', 'make');
+  const scan = [N1, N2, R1, M1];
+  const h = harness({ settings: { grouping: 'ecosystem' }, scan });
+
+  const roots = h.buildTreeRoots(scan);
+  const node = roots.find((n) => n.id === 'group:eco:node');
+  const rust = roots.find((n) => n.id === 'group:eco:rust');
+  await h.dropGroups([...node.children].map((c) => c.ref), rust, 'node');
+
+  assert.deepEqual([...h.memento.data.groupOrder], [
+    'file:///repo/engine/Cargo.toml',
+    'file:///repo/web/package.json',
+    'file:///repo/api/package.json',
+    'file:///repo/Makefile',
+  ]);
+});
+
+test('two headings dragged together land on the row they were dropped on', async () => {
+  // The same arithmetic on the ordinary path: a multi-select must not overshoot
+  // its target by the number of rows travelling with it.
+  const A = script('/repo/a/package.json', 'dev', 'npm');
+  const B = script('/repo/b/package.json', 'dev', 'npm');
+  const C = script('/repo/c/package.json', 'dev', 'npm');
+  const D = script('/repo/d/package.json', 'dev', 'npm');
+  const scan = [A, B, C, D];
+  const h = harness({ settings: { grouping: 'flat' }, scan });
+  const roots = h.buildTreeRoots(scan);
+  await h.dropGroups([roots[0].ref, roots[1].ref], roots[2], undefined);
+
+  assert.deepEqual([...h.memento.data.groupOrder], [
+    'file:///repo/c/package.json',
+    'file:///repo/a/package.json',
+    'file:///repo/b/package.json',
+    'file:///repo/d/package.json',
+  ]);
+});
+
+// --- a heading on its way out of the pile --------------------------------------
+
+test('a hidden compose file comes back when it is dropped on a package', async () => {
+  // The rule that a compose file stays inside its project has nothing to say
+  // about one sitting in the pile: it is drawn inside nothing, and this drop is
+  // the documented way back out.
+  const PKG = script('/repo/package.json', 'build', 'npm');
+  const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
+  const API = script('/repo/api/package.json', 'dev', 'npm');
+  const scan = [PKG, COMPOSE, API];
+  const h = harness({ scan, stored: { hidden: ['file:///repo/docker-compose.yml'] } });
+
+  const roots = h.buildTreeRoots(scan);
+  const pile = roots.find((n) => n.id === 'group:hidden');
+  const api = roots.find((n) => n.id === 'group:file:///repo/api/package.json');
+  assert.deepEqual(ids(pile.children), ['group:file:///repo/docker-compose.yml']);
+
+  await h.dropGroups([pile.children[0].ref], api, undefined);
+  assert.deepEqual([...h.hiddenRefs()], []);
+});
+
+test('a heading whose project is hidden is droppable, since it is drawn at the root', async () => {
+  const PKG = script('/repo/package.json', 'build', 'npm');
+  const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
+  const API = script('/repo/api/package.json', 'dev', 'npm');
+  const scan = [PKG, COMPOSE, API];
+  const h = harness({ scan, stored: { hidden: ['file:///repo/package.json'] } });
+
+  const roots = h.buildTreeRoots(scan);
+  // With its project put away, the compose file is a root heading like any other.
+  assert.deepEqual(ids(roots).slice(0, 2), [
+    'group:file:///repo/docker-compose.yml',
+    'group:file:///repo/api/package.json',
+  ]);
+  await h.dropGroups([roots[1].ref], roots[0], undefined);
+  assert.ok(h.memento.data.groupOrder, 'the drop must be honoured, not refused');
+});
+
+// --- one order, both surfaces --------------------------------------------------
+
+test('the dropdown lists the blocks in the order the tree nests them', async () => {
+  // `runScan` appends the shell groups after every manifest, so without an
+  // ordering pass the tree drew `scripts` inside the root package while the
+  // dropdown listed it last — two orders for what the README calls one thing.
+  const PKG = script('/repo/package.json', 'build', 'npm');
+  const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
+  const API = script('/repo/api/package.json', 'dev', 'npm');
+  const SCRIPTS = shell('/repo/scripts', 'deploy.sh');
+  const scan = [PKG, COMPOSE, API, SCRIPTS];
+  const h = harness({ scan });
+
+  const saved = await h.savedOrder();
+  assert.deepEqual(scopes(h, saved), [
+    'file:///repo/package.json',
+    'file:///repo/docker-compose.yml',
+    'file:///repo/scripts',
+    'file:///repo/api/package.json',
+  ]);
+
+  const roots = h.buildTreeRoots(saved);
+  assert.deepEqual(ids(roots), [
+    'group:file:///repo/package.json',
+    'group:file:///repo/api/package.json',
+  ]);
+  assert.deepEqual(ids(roots[0].children.slice(1)), [
+    'group:file:///repo/docker-compose.yml',
+    'group:file:///repo/scripts',
+  ]);
+
+  // The same blocks, in the same order, flattened.
+  const separators = [...h.buildItems(saved)]
+    .filter((item) => item.kind === -1)
+    .map((item) => item.label);
+  assert.deepEqual(separators, [
+    'repo/package.json',
+    'repo/docker-compose.yml',
+    'repo/scripts',
+    'repo/api/package.json',
+  ]);
+});
+
+test('orderedByHost leaves an ecosystem-mode list alone', () => {
+  const PKG = script('/repo/package.json', 'build', 'npm');
+  const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
+  const input = [PKG, COMPOSE];
+  const { orderedByHost } = harness({ settings: { grouping: 'ecosystem' } });
+  assert.equal(orderedByHost(input), input);
+});
+
+// --- a compose heading is its file ----------------------------------------------
+
+test('two compose files sharing a `name:` stay tellable apart', () => {
+  // The Compose Spec `name:` is very often the same word in both files of a
+  // project, and inside a project heading there is no path left to separate the
+  // rows — so the file name is what the heading shows.
+  const PKG = script('/repo/package.json', 'dev', 'npm');
+  const C1 = { ...script('/repo/docker-compose.yml', 'up', 'docker-compose'), packageName: 'acme' };
+  const C2 = { ...script('/repo/docker-compose.dev.yml', 'up', 'docker-compose'), packageName: 'acme' };
+  const { buildTreeRoots } = harness({ scan: [PKG, C1, C2] });
+  const inside = buildTreeRoots([PKG, C1, C2])[0].children.filter((n) => n.kind === 'group');
+  assert.deepEqual([...inside].map((n) => n.place), ['docker-compose.yml', 'docker-compose.dev.yml']);
+  // The name it calls itself survives where there is room for it.
+  assert.deepEqual([...inside].map((n) => n.label), ['acme', 'acme']);
 });

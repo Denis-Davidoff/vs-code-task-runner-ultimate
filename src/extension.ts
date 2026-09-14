@@ -1494,6 +1494,60 @@ function groupedByEcosystem(scripts: ScriptEntry[]): ScriptEntry[] {
 }
 
 /**
+ * The scan with each compose file and script folder moved to sit directly after
+ * the project it belongs to, in `flat` mode.
+ *
+ * The twin of `groupedByEcosystem`, and here for the same load-bearing reason.
+ * The tree re-parents these rows by their paths, which changes what is drawn but
+ * not the flat list underneath — so the dropdown listed them in scan order, the
+ * drag arithmetic computed against a third order, and the two surfaces the
+ * README calls "the tree flattened" disagreed out of the box. Moving the blocks
+ * here makes every reader of `savedOrder` agree, and `attachToHosts` is then
+ * only folding a list that is already in the right order.
+ *
+ * Returns the input untouched in `ecosystem` mode, where nothing is attached.
+ */
+function orderedByHost(scripts: ScriptEntry[]): ScriptEntry[] {
+  if (hierarchical()) {
+    return scripts;
+  }
+  const blocks = [...groupSlots(scripts).entries()].map(([ref, indices]) => ({
+    ref,
+    indices,
+    // Every row in a block comes from one manifest, so one row settles its kind.
+    script: scripts[indices[0]],
+  }));
+
+  const hosts = new Map<string, string>();
+  for (const block of blocks) {
+    const folder = manifestFolder(block.script);
+    if (HOST_KINDS.has(block.script.kind) && !hosts.has(folder)) {
+      hosts.set(folder, block.ref);
+    }
+  }
+
+  const attached = new Map<string, Array<(typeof blocks)[number]>>();
+  const roots: Array<(typeof blocks)[number]> = [];
+  for (const block of blocks) {
+    const host = attachable(block.script.kind)
+      ? hostOf(manifestFolder(block.script), hosts)
+      : undefined;
+    if (host === undefined || host === block.ref) {
+      roots.push(block);
+      continue;
+    }
+    attached.set(host, [...(attached.get(host) ?? []), block]);
+  }
+  if (attached.size === 0) {
+    return scripts;
+  }
+
+  return roots
+    .flatMap((block) => [block, ...(attached.get(block.ref) ?? [])])
+    .flatMap((block) => block.indices.map((slot) => scripts[slot]));
+}
+
+/**
  * The refs of every group the scan found, top to bottom, in the saved order —
  * hidden ones included. A move reads and rewrites this list whole, so a heading
  * parked in HIDDEN keeps the slot it will come back to.
@@ -1636,7 +1690,10 @@ async function savedOrder(): Promise<ScriptEntry[]> {
   // go through, and it is the only place that holds a fresh list and the stores
   // that annotate it at the same time.
   await pruneStaleRefs(scripts);
-  return groupedByEcosystem(orderedGroups(orderedScripts(scripts)));
+  // The two grouping passes are exclusive by mode, and each is the last word on
+  // where a block sits: one gathers ecosystems, the other tucks a project's
+  // surroundings in behind it.
+  return orderedByHost(groupedByEcosystem(orderedGroups(orderedScripts(scripts))));
 }
 
 // --- pruning what the manifests no longer declare -----------------------------
@@ -2415,7 +2472,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     // land in front of it, on the row below they land behind it, which is what
     // a highlighted row reads as when the tree draws no gap to aim at. Dropping
     // on the group heading has no row to take, so it means the end of the list.
-    const at = anchor ? Math.min(current.indexOf(anchor), rest.length) : rest.length;
+    const at = anchor ? dropIndex(current, rest, moved, anchor) : rest.length;
     await saveOrder(scope, [...rest.slice(0, at), ...moved, ...rest.slice(at)]);
     clearHint();
     repaint();
@@ -2462,12 +2519,10 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
       return;
     }
     const rest = current.filter((ref) => !run.includes(ref));
-    // The index in `current` rather than in `rest`, which is what carries the
-    // direction: dropped on a run below, the removal has already shifted every
-    // position down by the size of this one, so the block lands after it. The
-    // same arithmetic a package drop does, for the same reason.
+    // The first heading of the run that was dropped on: a block takes that run's
+    // place, the way a package takes another package's.
     const anchor = current.find((ref) => ecosystems.get(ref) === where);
-    const at = anchor ? Math.min(current.indexOf(anchor), rest.length) : rest.length;
+    const at = anchor ? dropIndex(current, rest, run, anchor) : rest.length;
     await saveGroupOrder([...rest.slice(0, at), ...run, ...rest.slice(at)]);
     clearHint();
     repaint();
@@ -2494,7 +2549,11 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
   // stored — so a drop that would take one out of its project cannot be
   // honoured: the order would be rewritten and the next repaint would put the
   // row straight back. Said out loud for the same reason the ecosystem rule is.
-  if (!nested && anchor) {
+  // A heading on its way out of the pile is not drawn inside anything yet, so
+  // the rule about staying inside a project has nothing to say about it — and
+  // saying it anyway refused the one gesture that brings such a heading back.
+  const returning = moved.some((ref) => buried.has(ref));
+  if (!nested && anchor && !returning) {
     const hosts = await groupHosts();
     const inside = (ref: string) => hosts.get(ref) ?? '';
     const from = new Set(moved.map(inside));
@@ -2529,7 +2588,7 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
       return;
     }
     // The same rule a task drop follows: the dragged rows take the target's place.
-    at = Math.min(current.indexOf(anchor), rest.length);
+    at = dropIndex(current, rest, moved, anchor);
   } else if (nested && where && where === home) {
     // Dropped on the ecosystem's own row, which has no slot of its own to take:
     // the end of its run, the way a task dropped on its heading means the end of
@@ -2560,12 +2619,21 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
  * drawing: one in the hidden pile keeps its slot in the order a drop rewrites.
  */
 async function groupHosts(): Promise<Map<string, string>> {
+  // Put-away headings are left out of both halves, which is what keeps this
+  // answer and the tree's the same one: `attachToHosts` is handed the visible
+  // groups, so a hidden project hosts nothing and a hidden compose file is
+  // inside nothing. Reading them here instead had the drop logic insist a row
+  // was nested that the tree had drawn at the root.
+  const buried = new Set(hiddenRefs());
   const scripts = await savedOrder();
   const hosts = new Map<string, string>();
   const sample = new Map<string, ScriptEntry>();
 
   for (const script of scripts) {
     const ref = groupRef(script);
+    if (buried.has(ref)) {
+      continue;
+    }
     if (!sample.has(ref)) {
       sample.set(ref, script);
     }
@@ -2596,6 +2664,32 @@ async function groupEcosystems(): Promise<Map<string, Ecosystem>> {
     map.set(groupRef(script), ecosystemOf(script.kind));
   }
   return map;
+}
+
+/**
+ * Where a set of dragged refs lands when it is dropped on `anchor`.
+ *
+ * The rule every drop in this tree follows: the dragged rows take the target's
+ * place — dropped on a row above they land in front of it, on a row below they
+ * land behind it.
+ *
+ * The arithmetic has to be done against the list the moved rows have already
+ * been taken out of, plus one when any of them came from above the anchor.
+ * Reading the index straight out of `current` overshoots by however many of them
+ * sat in front of it: invisible while that is one row, and wrong the moment it
+ * is two — which for a whole ecosystem block is the ordinary case, not the
+ * exception.
+ */
+function dropIndex(
+  current: ReadonlyArray<string>,
+  rest: ReadonlyArray<string>,
+  moved: ReadonlyArray<string>,
+  anchor: string,
+): number {
+  const target = current.indexOf(anchor);
+  const above = moved.some((ref) => current.indexOf(ref) < target);
+  const landing = rest.indexOf(anchor);
+  return landing < 0 ? rest.length : Math.min(landing + (above ? 1 : 0), rest.length);
 }
 
 /** The heading a drop lands on: the row itself, or the one a task row sits under. */
@@ -3407,7 +3501,12 @@ function manifestFolder(script: ScriptEntry): string {
  * the file name is the only half that tells the two groups apart.
  */
 function packageHeading(script: ScriptEntry, shared: boolean): string {
-  if (script.packageName) {
+  // Except for compose, which is named by its file whatever it calls itself. A
+  // project root holding `docker-compose.yml` and `docker-compose.dev.yml` very
+  // often has the same `name:` in both, and inside a project heading there is no
+  // path left to tell two rows apart — so the `name:` would leave the two of
+  // them identical. It survives in the tooltip, which is built from `label`.
+  if (script.packageName && script.kind !== 'docker-compose') {
     return script.packageName;
   }
   // A shell group's "manifest" is the folder itself, so the name it goes by is

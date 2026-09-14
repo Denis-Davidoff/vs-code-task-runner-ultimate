@@ -40,10 +40,13 @@ export type Ecosystem =
   | 'shell';
 
 /**
- * Every ecosystem, in the order the tree groups them under and the settings
- * schema lists them. The `sources` default array in package.json is written out
- * by hand to match this one, so an entry added here is added there too — and in
- * the same place, since `enumDescriptions` is matched to `enum` by position.
+ * Every ecosystem, in the order the settings schema lists them. The `sources`
+ * default array in package.json is written out by hand to match this one, so an
+ * entry added here is added there too — and in the same place, since
+ * `enumDescriptions` is matched to `enum` by position.
+ *
+ * Not the order the tree draws them in: that one is decided per workspace, by
+ * where each ecosystem's first package sits. See `groupedByEcosystem`.
  */
 export const ALL_ECOSYSTEMS: ReadonlyArray<Ecosystem> = [
   'node',
@@ -161,11 +164,11 @@ const COMPOSE_OVERRIDE_FILES: ReadonlyArray<string> = [
  * — so it is matched, and then `parseCompose` insists on seeing a `services:`
  * or `include:` block before it will believe a name it was not sure about.
  *
- * The pattern is deliberately tight. `compose` has to be followed by a dot, so
- * `composer.yml` — which the scan glob below does match — is turned away here.
+ * The pattern is deliberately tight: `compose` has to be followed by a dot. That
+ * is defence in depth rather than the only defence — the scan glob below is
+ * already narrow enough that `composer.yml` never reaches this test.
  */
 const COMPOSE_NAME = /^(?:docker-)?compose(?:\.[A-Za-z0-9_-]+)*\.ya?ml$/;
-const COMPOSE_OVERRIDE_NAME = /\.override\.ya?ml$/;
 
 /**
  * The globs that find the profile-named files above. The four default names are
@@ -189,7 +192,10 @@ function manifestKind(uri: vscode.Uri): SourceKind | undefined {
   if (Object.prototype.hasOwnProperty.call(MANIFEST_KINDS, name)) {
     return MANIFEST_KINDS[name];
   }
-  if (COMPOSE_NAME.test(name) && !COMPOSE_OVERRIDE_NAME.test(name)) {
+  // The four real override names, and only those: `docker-compose.prod.override.yml`
+  // is not one of them — compose never merges it on its own — so it is a
+  // standalone file and gets a heading like any other profile-named one.
+  if (COMPOSE_NAME.test(name) && !COMPOSE_OVERRIDE_FILES.includes(name)) {
     return 'docker-compose';
   }
   return undefined;
@@ -1581,14 +1587,19 @@ async function composeOverride(cwd: vscode.Uri): Promise<string | undefined> {
 // --- shell scripts -----------------------------------------------------------
 
 /**
- * Where shell scripts are looked for. Narrow on purpose: these three patterns
- * are the convention — a `.sh` under `scripts/`, under `bin/`, or in the root —
- * and anything wider turns every vendored helper in a repository into a row.
+ * Where shell scripts are looked for. Narrow on purpose: the convention is a
+ * `.sh` under a `scripts` or `bin` folder, or in the root — and anything wider
+ * turns every vendored helper in a repository into a row.
  *
- * `findFiles` globs are relative to the workspace folder, so `*.sh` is the root
- * level alone rather than every directory.
+ * `findFiles` matches its glob against the path *relative to the workspace
+ * folder*, so the leading globstar is what carries the first two patterns past
+ * the root. Without it `scripts` would have to be a directory at the very top,
+ * and `apps/web/scripts/deploy.sh` — the case the nesting in the tree exists for
+ * — would never be found at all. The third pattern keeps no prefix on purpose:
+ * loose scripts are worth listing where a project root is, not in every
+ * directory of the repository.
  */
-const DEFAULT_SHELL_SCRIPTS: ReadonlyArray<string> = ['scripts/**/*.sh', 'bin/**/*.sh', '*.sh'];
+const DEFAULT_SHELL_SCRIPTS: ReadonlyArray<string> = ['**/scripts/**/*.sh', '**/bin/**/*.sh', '*.sh'];
 
 /**
  * The words a script is run through. `bash` rather than the file itself, because
