@@ -904,9 +904,6 @@ async function editTitle(node: TreeNode | undefined): Promise<void> {
  * anything else.
  */
 async function openManifest(node: TreeNode | undefined): Promise<void> {
-  // OTHER TASKS and HIDDEN are groups of ours rather than files, and carry no
-  // manifest — the `when` clauses keep them out of the menu, and this keeps them
-  // out of the command.
   // A heading that stands for a folder rather than a file — the shell groups —
   // has nothing to open as a document, so the folder is revealed instead.
   // Leaving it without a manifest would make the menu entry a silent no-op.
@@ -915,6 +912,9 @@ async function openManifest(node: TreeNode | undefined): Promise<void> {
     return;
   }
 
+  // OTHER TASKS and HIDDEN are groups of ours rather than files, and carry no
+  // manifest — the `when` clauses keep them out of the menu, and this keeps them
+  // out of the command.
   const source: { file: vscode.Uri; where: string; task?: ScriptEntry } | undefined =
     node?.kind === 'script'
       ? {
@@ -2941,6 +2941,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // on the label and on the icon alike: the point of painting one is to find it
     // in a column of headings that otherwise all look the same. OTHER TASKS takes
     // one too — it is a row on the same list, whatever it cannot be renamed to.
+    //
     // What the row's ecosystem wants it to look like, when it is a row that
     // wears one: a parent row always does — it *is* the ecosystem — and a
     // manifest row does while `groupIcons` says `type`. OTHER TASKS and the
