@@ -84,6 +84,12 @@
     "workspaceContains:**/go.mod",
     "workspaceContains:**/mise.toml",
     "workspaceContains:**/.mise.toml",
+    "workspaceContains:**/docker-compose.yml",
+    "workspaceContains:**/docker-compose.yaml",
+    "workspaceContains:**/compose.yml",
+    "workspaceContains:**/compose.yaml",
+    "workspaceContains:scripts/*.sh",
+    "workspaceContains:bin/*.sh",
     "onTaskType:taskRunnerUltimate",
     "onView:taskRunnerUltimate.tree",
     "onView:taskRunnerUltimate.explorer"
@@ -381,12 +387,12 @@
         {
           "command": "taskRunnerUltimate.restartGroup",
           "group": "inline@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?:running$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:hidden)?|eco):running$/"
         },
         {
           "command": "taskRunnerUltimate.stopGroup",
           "group": "inline@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?:running$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:hidden)?|eco):running$/"
         },
         {
           "command": "taskRunnerUltimate.runItemMenu",
@@ -730,7 +736,9 @@
             "task",
             "go",
             "php",
-            "mise"
+            "mise",
+            "docker",
+            "shell"
           ],
           "uniqueItems": true,
           "items": {
@@ -744,7 +752,9 @@
               "task",
               "go",
               "php",
-              "mise"
+              "mise",
+              "docker",
+              "shell"
             ],
             "enumDescriptions": [
               "package.json (scripts) and deno.json(c) (tasks).",
@@ -755,7 +765,9 @@
               "Taskfile.yml and friends (go-task).",
               "go.mod — the standard go subcommands.",
               "composer.json (scripts).",
-              "mise.toml and .mise.toml ([tasks])."
+              "mise.toml and .mise.toml ([tasks]).",
+              "docker-compose.yml, compose.yml and their .yaml spellings — the compose subcommands.",
+              "Shell scripts (*.sh) under scripts/, bin/ and the workspace root."
             ]
           },
           "markdownDescription": "Which kinds of manifest are scanned. Remove an entry to stop reading that ecosystem entirely — the files are then never opened, which is also the fastest way to quieten a repository that carries a `Makefile` nobody runs."
@@ -814,6 +826,52 @@
           ],
           "markdownDescription": "How `[project.scripts]` entry points are entered. Tasks that name their own runner — `[tool.pdm.scripts]`, `[tool.poetry.scripts]` and the rest — ignore this."
         },
+        "taskRunnerUltimate.dockerCompose": {
+          "type": "string",
+          "enum": [
+            "docker compose",
+            "docker-compose"
+          ],
+          "default": "docker compose",
+          "enumDescriptions": [
+            "The v2 plugin, which is what a current Docker installs.",
+            "The standalone v1 binary, end-of-life since July 2023."
+          ],
+          "markdownDescription": "How compose is invoked. Spelled as the command and split on whitespace, so what is written here is what reaches the terminal.\n\nThere is no `auto`: the only honest way to tell the two apart is to run `docker compose version`, and a scan never starts a process."
+        },
+        "taskRunnerUltimate.dockerComposeCommands": {
+          "type": "array",
+          "default": [
+            "up",
+            "down",
+            "build",
+            "logs",
+            "ps"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Compose subcommands listed for every compose file, since a compose file declares services rather than tasks. Known names (`up`, `down`, `build`, `logs`, `ps`, `start`, `stop`, `restart`, `pull`, `config`) get their usual flags — `logs` is followed, so the row keeps running — and anything else runs as `docker compose <name>`.\n\n`up` is special: it lists a bare row for the whole file plus one `up: <service>` row per service, whenever the file declares more than one.\n\nNothing here is ever run detached. A `-d` row would exit the moment it started, leaving the containers up and Stop with nothing to stop.\n\nEvery row passes `-f <file>`, plus a second `-f` for the `*.override.*` file beside it when there is one — which is the merge compose would have done on its own."
+        },
+        "taskRunnerUltimate.shellScripts": {
+          "type": "array",
+          "default": [
+            "scripts/**/*.sh",
+            "bin/**/*.sh",
+            "*.sh"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Where shell scripts are looked for, as globs relative to each workspace folder — so `*.sh` is the root level alone. Every script found becomes a row, grouped under the directory it sits in.\n\nThe executable bit is deliberately not consulted: it is invisible to VS Code’s own file API, and reading it would mean giving up Remote SSH and Dev Containers. The convention — a `.sh` in `scripts/`, `bin/` or the root — is the signal instead.\n\nAt most 200 scripts are read, budgeted apart from the manifests. Narrow these patterns if a repository has more."
+        },
+        "taskRunnerUltimate.shellRunner": {
+          "type": "string",
+          "default": "bash",
+          "markdownDescription": "What a shell row is run through, from the workspace folder root: `bash ./scripts/deploy.sh`. Leave empty to run the path on its own, which then needs both the executable bit and a shebang.\n\nOn Windows this wants Git Bash or WSL on the `PATH`."
+        },
         "taskRunnerUltimate.colorIcons": {
           "type": "boolean",
           "default": true,
@@ -823,6 +881,32 @@
           "type": "boolean",
           "default": false,
           "description": "Show running tasks first inside the group they belong to, in the tree and in the dropdown alike. Off by default: a row that stays put is a row you stop where you started it."
+        },
+        "taskRunnerUltimate.grouping": {
+          "type": "string",
+          "enum": [
+            "flat",
+            "ecosystem"
+          ],
+          "default": "flat",
+          "enumDescriptions": [
+            "One row per manifest, all at the top level.",
+            "One row per ecosystem, with that ecosystem’s manifests inside it."
+          ],
+          "markdownDescription": "How the package headings are arranged, in the tree and in the dropdown alike. `ecosystem` gathers the manifests of each language or runner under a row of their own, which is what a polyglot repository reads better as; the order inside a run is still yours to drag.\n\nAlso on the ☰ menu, as **Group by ecosystem**."
+        },
+        "taskRunnerUltimate.groupIcons": {
+          "type": "string",
+          "enum": [
+            "type",
+            "uniform"
+          ],
+          "default": "type",
+          "enumDescriptions": [
+            "Each heading wears its ecosystem’s glyph, in that ecosystem’s colour.",
+            "Every heading wears the same stack glyph."
+          ],
+          "markdownDescription": "What a package heading is drawn with. `type` is what tells a Node heading from a Rust one at a glance; `uniform` is the quieter column the tree used to have, for when the headings should stay out of the way of the rows under them.\n\nAn icon picked by hand on a row wins over both."
         },
         "taskRunnerUltimate.categories": {
           "type": "array",
@@ -946,6 +1030,116 @@
           "light": "#767676",
           "highContrast": "#B0B0B0",
           "highContrastLight": "#5A5A5A"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.node",
+        "description": "Colour of the Node headings (package.json and deno.json(c)) and of the Node row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#E05A5A",
+          "light": "#CB3837",
+          "highContrast": "#FF8A8A",
+          "highContrastLight": "#A5231F"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.rust",
+        "description": "Colour of the Rust headings (Cargo.toml and Makefile.toml) and of the Rust row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#E8A33D",
+          "light": "#B7500A",
+          "highContrast": "#FFBE5C",
+          "highContrastLight": "#8A3B00"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.python",
+        "description": "Colour of the Python headings (pyproject.toml, Pipfile, tox.ini, noxfile) and of the Python row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#4B8BBE",
+          "light": "#2B6CA3",
+          "highContrast": "#79B8E8",
+          "highContrastLight": "#17456B"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.make",
+        "description": "Colour of the Make headings (Makefile and friends) and of the Make row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#C08A5E",
+          "light": "#8A5A2B",
+          "highContrast": "#DDA97A",
+          "highContrastLight": "#6B4218"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.just",
+        "description": "Colour of the just headings (justfile and friends) and of the just row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#E3C05C",
+          "light": "#9A7B10",
+          "highContrast": "#FFE08A",
+          "highContrastLight": "#6E5700"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.task",
+        "description": "Colour of the go-task headings (Taskfile.yml and friends) and of the go-task row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#4DB6AC",
+          "light": "#00796B",
+          "highContrast": "#7FD9CF",
+          "highContrastLight": "#00544A"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.go",
+        "description": "Colour of the Go headings (go.mod) and of the Go row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#5DC9E2",
+          "light": "#007D9C",
+          "highContrast": "#8EDFF0",
+          "highContrastLight": "#005A70"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.php",
+        "description": "Colour of the PHP headings (composer.json) and of the PHP row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#9B8CE0",
+          "light": "#5C5FA8",
+          "highContrast": "#BFB3FF",
+          "highContrastLight": "#3F4280"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.mise",
+        "description": "Colour of the mise headings (mise.toml and .mise.toml) and of the mise row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#E28FC0",
+          "light": "#A8437E",
+          "highContrast": "#FFB0D8",
+          "highContrastLight": "#7A2A59"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.docker",
+        "description": "Colour of the Docker headings (docker-compose.yml and friends) and of the Docker row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#3FA8E8",
+          "light": "#1A6FB5",
+          "highContrast": "#7FCBFF",
+          "highContrastLight": "#114F82"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.ecosystem.shell",
+        "description": "Colour of the Shell headings (scripts under scripts/, bin/ and the root) and of the Shell row in the Task & Script Explorer view.",
+        "defaults": {
+          "dark": "#6FC26F",
+          "light": "#2F7D32",
+          "highContrast": "#9BE39B",
+          "highContrastLight": "#1B5E20"
         }
       },
       {

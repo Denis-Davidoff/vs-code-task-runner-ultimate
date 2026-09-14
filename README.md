@@ -92,9 +92,10 @@ above it. Everything else names its own runner by the table it is declared in: a
 `[tool.pdm.scripts]` is a pdm task wherever it lives. So one list works unchanged across a mixed
 monorepo.
 
-- **Every task, one list** — [nine ecosystems](#what-gets-scanned): Node, Rust, Python, Make, just,
-  go-task, Go, Composer and mise, grouped per manifest, `node_modules`, `target`, `.venv` and build
-  output skipped.
+- **Every task, one list** — [eleven ecosystems](#what-gets-scanned): Node, Rust, Python, Make, just,
+  go-task, Go, Composer, mise, Docker Compose and the `scripts/*.sh` every repository accumulates —
+  grouped per manifest, or [per ecosystem](#grouping-by-ecosystem), with `node_modules`, `target`,
+  `.venv` and build output skipped.
 - **Searchable by command, not just by name** — type `vitest` and find the script that runs it.
 - **Running tasks included** — even ones this extension did not start: tasks from `tasks.json`, other
   extensions, or the built-in npm list. Stop or restart them from the same place.
@@ -107,8 +108,8 @@ monorepo.
 - **Show Terminal** — click a running row, or right-click it, to go to its output without stopping
   or restarting anything.
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
-  at the line the task is on, in all nine ecosystems; on a heading, **Open Manifest File** opens the
-  file itself.
+  at the line the task is on, wherever a task has one to point at; on a heading, **Open Manifest
+  File** opens the file itself, and on a shell row it opens the script.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
 - **Favorites** — star the two or three tasks you actually run and they pin to the very top of the
   tree, above everything, without leaving the manifest they belong to.
@@ -144,6 +145,8 @@ monorepo.
 | **Go** | `go.mod` | the standard subcommands | `go test ./...`, … |
 | **PHP** | `composer.json` | `scripts` | `composer run-script <name>` |
 | **mise** | `mise.toml`, `.mise.toml` | `[tasks.*]` | `mise run <name>` |
+| **Docker** | `docker-compose.yml`, `compose.yml` and their `.yaml` spellings | `services:` — see [below](#docker-compose) | `docker compose -f <file> up <service>`, … |
+| **Shell** | `scripts/**/*.sh`, `bin/**/*.sh`, `*.sh` | the files themselves — see [below](#shell-scripts) | `bash ./scripts/deploy.sh` |
 
 Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's files are never
 opened at all, which is also the fastest way to quieten a repository carrying a `Makefile` nobody
@@ -195,6 +198,71 @@ then whichever `[tool.*]` table the project configures. If neither answers, the 
 left out rather than listed with a command that would not work. `taskRunnerUltimate.pythonRunner`
 pins it, and `none` hides them entirely.
 
+### Docker Compose
+
+A compose file declares services, not tasks, so its rows are the subcommands worth having on a list —
+`up`, `down`, `build`, `logs` and `ps` by default, set by `taskRunnerUltimate.dockerComposeCommands`.
+Known names get their usual flags, anything else runs as `docker compose <name>`.
+
+`up` is the one that fans out. A file with several services gets a bare `up` row for the whole stack
+plus one `up: <service>` row each, which is eleven rows for six services rather than the thirty a
+full commands × services grid would be:
+
+```
+compose • docker-compose.yml
+  ▶ up              docker compose -f docker-compose.yml up
+  ▶ up: web         docker compose -f docker-compose.yml up web
+  ▶ up: db          docker compose -f docker-compose.yml up db
+  🗑 down            docker compose -f docker-compose.yml down
+  📦 build          docker compose -f docker-compose.yml build
+```
+
+Two details are deliberate. **Nothing is ever run detached**: a `-d` row exits the moment it starts,
+which would leave the row idle with the containers still up and the ■ button with nothing to stop.
+And `logs` is always followed (`logs -f`) for the same reason. If you want a detached `up`, that is
+a terminal command, not a row that lies about its own state.
+
+Every row passes `-f <file>`, because what the scan saw is not what compose would pick — it has its
+own precedence across four spellings. Passing `-f` turns off the automatic merge of
+`docker-compose.override.yml`, though, and that file is a live development workflow, so the matching
+override beside the manifest is looked for and appended as a second `-f`: the merge compose would
+have done, spelled out.
+
+`taskRunnerUltimate.dockerCompose` chooses between `docker compose` (the default — the v1 binary has
+been end-of-life since July 2023) and `docker-compose`. There is no `auto`: the only honest way to
+tell them apart is to run `docker compose version`, and a scan never starts a process.
+
+### Shell scripts
+
+Every `.sh` under `scripts/`, under `bin/`, or in the root of a workspace folder becomes a row,
+grouped under **the directory it lives in** — twelve scripts across two folders are two headings,
+not twelve one-row headings. `taskRunnerUltimate.shellScripts` is the list of globs, relative to each
+workspace folder, so `*.sh` means the root level alone.
+
+The dimmed text is the first comment line in the file written for a person — the shebang, and the
+`# shellcheck`, `# vim:` and `# -*-` pragmas under it, are skipped:
+
+```bash
+#!/usr/bin/env bash
+# shellcheck disable=SC2086
+# Deploy the API to staging.     ← this is what the row shows
+set -euo pipefail
+```
+
+A row runs as `bash ./scripts/deploy.sh` **from the workspace folder root**, which is where a
+`scripts/*.sh` is nearly always written to be run from. `taskRunnerUltimate.shellRunner` changes the
+`bash`; empty runs the path on its own, which then needs both the executable bit and a shebang. On
+Windows this wants Git Bash or WSL on the `PATH`.
+
+The executable bit is deliberately not consulted. It is invisible through VS Code's own file API —
+`FilePermission` carries only `Readonly` — so reading it would mean importing `node:fs`, and that is
+what would break Remote SSH and Dev Containers. The convention is the signal instead: a `.sh` in
+`scripts/`, `bin/` or the root.
+
+At most 200 scripts are read per scan, budgeted apart from the manifests so a repository full of
+them cannot crowd out real tasks. This is the one source that ships enabled *and* changes an existing
+tree on upgrade; `shell` out of `taskRunnerUltimate.sources` is the way back.
+
 ## Where the button appears
 
 | Place | Notes |
@@ -233,6 +301,44 @@ then come first inside their own group, in the tree and in the dropdown alike. C
 a row runs it, clicking a running one goes to its terminal, and a double click stops it —
 and hovering one reveals inline ☆ / ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as a real VS Code
 badge.
+
+Each heading wears its ecosystem's own glyph and colour — a red package for Node, an orange gear for
+Rust, a green `terminal-bash` for shell — so a polyglot repository says which row is which without
+being read. `taskRunnerUltimate.groupIcons: "uniform"` puts the single stack glyph back on all of
+them, for when the headings should stay out of the way of the rows under them. An icon or colour
+[picked by hand](#painting-a-row) on a row always wins over both.
+
+#### Grouping by ecosystem
+
+By default every manifest heading sits at the top level, which in a polyglot repository is one long
+column. Set `taskRunnerUltimate.grouping` to `"ecosystem"` — or pick **Group by ecosystem** from
+[the ☰ menu](#the-menu) — and they gather one level down, under a row per language or runner:
+
+```
+Node (2)
+  web • apps/web
+    ▶ dev
+  api • services/api
+    ▶ start
+Rust (1)
+  engine • crates/engine
+    ▶ run
+Docker (1)
+  acme • docker-compose.yml
+    ▶ up
+```
+
+An ecosystem row is a row like any other in the ways that matter: fold it and the fold survives a
+reload, paint it, give it an icon, and stop or restart everything running anywhere under it. It is
+*not* renameable or hideable — there is no name on disk for a rename to restore, and hiding a whole
+ecosystem is what `taskRunnerUltimate.sources` does properly.
+
+Dragging still works, with one boundary: a package moves inside its own ecosystem, and an ecosystem
+row drags its whole block above or below another. A package dropped on a foreign ecosystem is
+refused with a note in the status bar rather than snapping back — the tree cannot grey out a
+forbidden target while the mouse is over it, so it says so instead.
+
+The dropdown follows: the same order, with the ecosystem naming the first separator of each run.
 
 #### Clicking a row versus pressing Run
 
@@ -339,6 +445,7 @@ The ☰ in the view header opens everything that is not aimed at one row:
 | --- | --- |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
+| **Group by ecosystem** | Toggles [the hierarchical layout](#grouping-by-ecosystem), saying `on` or `off` as it stands now. Written to your user settings, so a click here never adds `.vscode/settings.json` to the project's `git status`. |
 | **Reset all applied styles** | Restores every custom title, colour and icon while leaving favorites, visibility, ordering and folded groups untouched. |
 | **Reset all titles** | Every [renamed](#renaming-a-row) row and group heading goes back to the name its manifest gives it. |
 | **Reset sort order** | Every list goes back to the order its manifest declares, undoing [the drags](#reordering-rows). |
@@ -619,6 +726,13 @@ everything they had. Hidden packages, folded groups and the order of the heading
 manifest rather than by a task, and are never touched by this — a manifest losing a script says
 nothing about whether the manifest is still there.
 
+An [ecosystem row](#grouping-by-ecosystem) has no manifest at all, so its fold, its colour and its
+icon are filed under a constant of ours — `group:eco:rust` — exactly as **OTHER TASKS** and the
+hidden pile are. Nothing about it can go stale, and the prune above never looks at it: it names no
+task, so there is no task whose disappearance could take it away. The ecosystems themselves are
+ordered by where their first package sits in the one saved order the headings already have, so
+dragging a whole ecosystem and dragging one package inside it write the same store.
+
 ## In the dropdown
 
 The dropdown is the tree flattened — the same blocks in the same order, so the two surfaces are one
@@ -643,7 +757,10 @@ Makefile ───────────────────────�
 
 Favorites first, then anything running that did not come from a manifest, then one block per
 manifest — the manifests in the order the tree has them, and inside a block the order the tree
-shows, drags and all. On a workspace with a single manifest and nothing starred the headings
+shows, drags and all. With [grouping by ecosystem](#grouping-by-ecosystem) on, the blocks arrive
+gathered into runs and the first separator of each run carries its name — `Node · web —
+apps/web/package.json`, then the rest of the Node blocks unprefixed. Repeating it on every separator
+would be the noise the tree already avoids. On a workspace with a single manifest and nothing starred the headings
 are dropped entirely, since the only one there would be repeating the picker's own title.
 
 | Action | Effect |
@@ -711,11 +828,15 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `title` | `Task & Script Explorer` | The heading over the list — in the activity bar view and in the File Explorer section alike. 1 to 100 characters; left empty it goes back to the default. See [Renaming the heading](#renaming-the-heading). |
-| `sources` | all nine | Which ecosystems are scanned: `node`, `rust`, `python`, `make`, `just`, `task`, `go`, `php`, `mise`. A removed one is never read. |
+| `sources` | all eleven | Which ecosystems are scanned: `node`, `rust`, `python`, `make`, `just`, `task`, `go`, `php`, `mise`, `docker`, `shell`. A removed one is never read. |
 | `packageManager` | `auto` | Forces `npm`, `yarn`, `pnpm`, `bun` or `deno` instead of [detecting it](#runner-detection). Node only: `deno.json(c)` ignores it, and no other ecosystem is affected. |
 | `cargoCommands` | `run`, `build`, `test`, `clippy`, `fmt` | The cargo subcommands every crate gets — see [Rust](#rust). |
 | `goCommands` | `run`, `build`, `test`, `vet` | The go subcommands every module gets. |
 | `pythonRunner` | `auto` | How `[project.scripts]` entry points are entered — see [Python](#python). `none` hides them. |
+| `dockerCompose` | `docker compose` | The compose command — the v2 plugin, or the standalone `docker-compose`. See [Docker Compose](#docker-compose). |
+| `dockerComposeCommands` | `up`, `down`, `build`, `logs`, `ps` | The compose subcommands every compose file gets. `up` also fans out over the services. |
+| `shellScripts` | `scripts/**/*.sh`, `bin/**/*.sh`, `*.sh` | Where [shell scripts](#shell-scripts) are looked for, as globs relative to each workspace folder. |
+| `shellRunner` | `bash` | What a shell row is run through. Empty runs the path on its own. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `showInEditorTitle` | `true` | The ▶ icon in the editor title bar. |
 | `showInStatusBar` | `true` | The `Tasks` entry (and its Restart all / Stop all buttons) in the status bar. |
@@ -723,6 +844,8 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
 | `colorIcons` | `true` | Tints task icons by category. Turn off for plain foreground-coloured icons. |
 | `pinRunningTasks` | `false` | Lifts running tasks to the top of their own group, in the tree and the dropdown. Off because a row that stays put is a row you stop where you started it. |
+| `grouping` | `flat` | `ecosystem` gathers the manifest headings under [a row per ecosystem](#grouping-by-ecosystem). `flat` is the default so that an upgrade does not restructure a sidebar nobody asked to have restructured. |
+| `groupIcons` | `type` | `type` gives each heading its ecosystem's glyph and colour; `uniform` gives every heading the same stack glyph. |
 | `categories` | `[]` | Extra category rules, checked *before* the built-in ones. |
 
 The ones worth knowing about in a real project are `sources`, `exclude` and `packageManager`. A
@@ -752,13 +875,16 @@ each has a `taskRunnerUltimate.category.<name>` colour you can override in
   `.venv`, `vendor`, `dist`, `out`, `build`, `.next`, `coverage` and the rest (configurable via
   `taskRunnerUltimate.exclude`). `deno.jsonc` comments and trailing commas are tolerated, and both the
   string and the Deno 2 object task form (`{ "command": …, "description": … }`) are read.
-- TOML, INI, Makefile, justfile and Taskfile parsing is done in-extension: the extension ships with
+- TOML, INI, Makefile, justfile, Taskfile and compose parsing is done in-extension: the extension ships with
   no runtime dependencies, and a manifest that cannot be parsed is skipped rather than reported —
   the file belongs to the project, and a scan that threw would take the whole list down with it.
 - Make skips pattern rules (`%.o:`), targets built out of a variable (`$(BIN):`) and the special
   ones (`.PHONY`); `just` skips `_`-prefixed and `[private]` recipes; go-task skips `internal: true`;
-  cargo-make skips `private` and `disabled`; Composer skips its event hooks.
-- In a monorepo the idle list is grouped per manifest, showing the package name and relative path.
+  cargo-make skips `private` and `disabled`; Composer skips its event hooks. Compose reads its
+  `services:` block by indentation, which is enough for the names and stops short of YAML anchors,
+  multi-document files and flow style.
+- In a monorepo the idle list is grouped per manifest, showing the package name and relative path —
+  or [per ecosystem](#grouping-by-ecosystem), with the manifests one level down.
 - Tasks run through the VS Code **task** system (not a raw terminal), which is what makes running
   state, stop and restart reliable. Each task gets a dedicated task terminal that is cleared on
   restart. They also show up under **Run Task…** as `scripts: <name>`.

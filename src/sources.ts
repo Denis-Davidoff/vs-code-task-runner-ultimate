@@ -21,11 +21,30 @@ export type SourceKind =
   | 'just'
   | 'taskfile'
   | 'go'
-  | 'mise';
+  | 'mise'
+  | 'docker-compose'
+  | 'shell';
 
 /** What the `sources` setting switches on and off: a language or a task runner, not a file. */
-export type Ecosystem = 'node' | 'php' | 'rust' | 'python' | 'make' | 'just' | 'task' | 'go' | 'mise';
+export type Ecosystem =
+  | 'node'
+  | 'php'
+  | 'rust'
+  | 'python'
+  | 'make'
+  | 'just'
+  | 'task'
+  | 'go'
+  | 'mise'
+  | 'docker'
+  | 'shell';
 
+/**
+ * Every ecosystem, in the order the tree groups them under and the settings
+ * schema lists them. The `sources` default array in package.json is written out
+ * by hand to match this one, so an entry added here is added there too — and in
+ * the same place, since `enumDescriptions` is matched to `enum` by position.
+ */
 export const ALL_ECOSYSTEMS: ReadonlyArray<Ecosystem> = [
   'node',
   'rust',
@@ -36,6 +55,8 @@ export const ALL_ECOSYSTEMS: ReadonlyArray<Ecosystem> = [
   'go',
   'php',
   'mise',
+  'docker',
+  'shell',
 ];
 
 const ECOSYSTEM_OF: Record<SourceKind, Ecosystem> = {
@@ -53,7 +74,18 @@ const ECOSYSTEM_OF: Record<SourceKind, Ecosystem> = {
   taskfile: 'task',
   go: 'go',
   mise: 'mise',
+  'docker-compose': 'docker',
+  shell: 'shell',
 };
+
+/**
+ * The ecosystem a kind belongs to. The record above stays private — it is a
+ * total map the compiler checks against `SourceKind`, and a caller that could
+ * index it could also index it with something that is not a kind.
+ */
+export function ecosystemOf(kind: SourceKind): Ecosystem {
+  return ECOSYSTEM_OF[kind];
+}
 
 /**
  * File name -> what it holds. Matching on the whole name rather than an
@@ -87,7 +119,23 @@ const MANIFEST_KINDS: Record<string, SourceKind> = {
   'go.mod': 'go',
   'mise.toml': 'mise',
   '.mise.toml': 'mise',
+  'docker-compose.yml': 'docker-compose',
+  'docker-compose.yaml': 'docker-compose',
+  'compose.yml': 'docker-compose',
+  'compose.yaml': 'docker-compose',
 };
+
+/**
+ * The override file compose merges on top of the one beside it, for each
+ * spelling. Deliberately not in `MANIFEST_KINDS`: an override declares the same
+ * services the base file does, so a group of its own would be the same rows
+ * twice. `parseCompose` looks for the matching one and passes it as a second
+ * `-f`; see there for why that is needed at all.
+ */
+function composeOverride(file: string): string | undefined {
+  const dot = file.lastIndexOf('.');
+  return dot > 0 ? `${file.slice(0, dot)}.override${file.slice(dot)}` : undefined;
+}
 
 /** The kind of manifest a path is, by its file name alone. */
 function manifestKind(uri: vscode.Uri): SourceKind | undefined {
@@ -184,6 +232,15 @@ const PYTHON_LOCKS: ReadonlyArray<[string, PythonRunner]> = [
 export const WATCH_GLOB = `**/{${[
   ...new Set([
     ...Object.keys(MANIFEST_KINDS),
+    // The compose override files, which are read as part of the manifest beside
+    // them rather than being one: whether one exists decides whether the rows
+    // carry a second `-f`, so it has to be watched like the manifest itself.
+    ...Object.keys(MANIFEST_KINDS)
+      .filter((name) => MANIFEST_KINDS[name] === 'docker-compose')
+      .flatMap((name) => {
+        const override = composeOverride(name);
+        return override ? [override] : [];
+      }),
     ...DETECTION_FILES.map(([file]) => file),
     ...PYTHON_LOCKS.map(([file]) => file),
   ]),
@@ -210,6 +267,18 @@ export const WATCH_GLOB = `**/{${[
 export const SOURCE_GLOB =
   '**/{src/main.rs,src/bin/*,src/bin/*/main.rs,examples/*,examples/*/main.rs,main.go}';
 
+/**
+ * What the shell watcher listens to. Every `.sh` in the workspace, and not the
+ * `shellScripts` patterns the scan actually uses: the watchers are built once in
+ * `activate` and never rebuilt, so a glob compiled from a setting would go stale
+ * the moment that setting changed. Over-hearing costs a debounced rescan that
+ * finds nothing; under-hearing costs a row that never appears.
+ *
+ * Creation and deletion only, as `SOURCE_GLOB` is. The file being there is the
+ * row; the comment line inside it is dimmed text a Refresh picks up.
+ */
+export const SHELL_GLOB = '**/*.sh';
+
 export interface ScriptEntry {
   /** Stable identity of a task: its manifest plus the task name. */
   key: string;
@@ -217,8 +286,19 @@ export interface ScriptEntry {
   name: string;
   /** What the task does, shown as dimmed text: the raw command, or its description. */
   command: string;
-  /** The file the task came from. */
+  /**
+   * The file the task came from — for the shell rows, the directory the group
+   * stands for, since there the group is a folder of scripts and no one file
+   * declares them. Its identity, its heading and its storage ref are all read
+   * off this, so it is a URI either way and `file` carries the real one.
+   */
   manifest: vscode.Uri;
+  /**
+   * The file this row opens, when that is not the manifest itself. Only the
+   * shell rows set it: their `manifest` is the directory they are grouped by,
+   * and the script is what "go to definition" has to reach.
+   */
+  file?: vscode.Uri;
   /** What kind of file that is, which is what decides the parser and the runner. */
   kind: SourceKind;
   /**
@@ -267,6 +347,14 @@ interface NodeHints {
  * silently truncating the list.
  */
 const MAX_MANIFESTS = 2000;
+/**
+ * Ceiling on shell scripts read in one scan, budgeted apart from the manifests
+ * above. A repository that keeps three hundred `.sh` files around must not spend
+ * the manifest budget on them — the truncation warning tells the user to trim
+ * `sources`, and for a shell overflow that advice would be aimed at the wrong
+ * setting. Narrowing `shellScripts` is the remedy here.
+ */
+const MAX_SHELL_SCRIPTS = 200;
 /** Manifests above this size are skipped: nothing hand-written comes close. */
 const MAX_MANIFEST_BYTES = 1_000_000;
 /** The truncation warning is shown once per window, not once per scan. */
@@ -422,6 +510,12 @@ async function runScan(): Promise<ScriptEntry[]> {
     }
   }
 
+  // Shell scripts are matched by pattern rather than by file name, so they do
+  // not go through `MANIFEST_KINDS` and get a pass — and a budget — of their own.
+  if (enabled.has('shell')) {
+    entries.push(...(await collectShellScripts(exclude)));
+  }
+
   if (started === generation) {
     await detectPackageManagers(entries, started);
   }
@@ -516,6 +610,10 @@ async function parseManifest(
       return parseGoMod(text, cwd);
     case 'mise':
       return parseMise(text);
+    case 'docker-compose':
+      return parseCompose(text, file, cwd);
+    // `shell` never reaches here: its rows are built by `collectShellScripts`,
+    // from files no `MANIFEST_KINDS` entry names.
     default:
       return undefined;
   }
@@ -1159,25 +1257,33 @@ function parseJustfile(text: string, file: string): ParsedManifest | undefined {
 // --- Taskfile (go-task) ------------------------------------------------------
 
 /**
- * Only the task names are needed, and they are the keys one level under a
- * top-level `tasks:` — so the block is found by indentation rather than by
- * parsing YAML, which would mean bundling a parser for a list of keys.
+ * The keys one level under a named top-level block, each with the lines of its
+ * body — found by indentation rather than by parsing YAML, which would mean
+ * bundling a parser to read a list of keys.
+ *
+ * Shared by go-task's `tasks:` and compose's `services:`, which want exactly the
+ * same thing from a file of the same shape. What it does not do is what neither
+ * of them needs: an anchor merged into a body hides that body (the names still
+ * come out right), a second document in the same file runs its keys together,
+ * and flow style is not read at all.
+ *
+ * Exported so `locate.ts` can find a key with the rule that put it in the list.
  */
-function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
-  // task has its own order for Taskfile.yml, Taskfile.yaml and the dist
-  // variants, and would otherwise open whichever of them it prefers.
-  const runner = ['task', '--taskfile', file];
-  const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((line) => /^tasks:\s*(#.*)?$/.test(line));
+export function yamlBlockKeys(
+  lines: ReadonlyArray<string>,
+  block: string,
+): Array<{ name: string; body: string[]; line: number }> {
+  const start = lines.findIndex((line) => new RegExp(`^${block}:\\s*(#.*)?$`).test(line));
   if (start < 0) {
-    return undefined;
+    return [];
   }
 
-  const block: Array<{ name: string; body: string[] }> = [];
+  const entries: Array<{ name: string; body: string[]; line: number }> = [];
   let indent: number | undefined;
-  let current: { name: string; body: string[] } | undefined;
+  let current: { name: string; body: string[]; line: number } | undefined;
 
-  for (const line of lines.slice(start + 1)) {
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index];
     if (!line.trim() || line.trimStart().startsWith('#')) {
       continue;
     }
@@ -1198,9 +1304,18 @@ function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
     if (!key) {
       continue;
     }
-    current = { name: key[1].trim().replace(/^["']|["']$/g, ''), body: [] };
-    block.push(current);
+    current = { name: key[1].trim().replace(/^["']|["']$/g, ''), body: [], line: index };
+    entries.push(current);
   }
+
+  return entries;
+}
+
+function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
+  // task has its own order for Taskfile.yml, Taskfile.yaml and the dist
+  // variants, and would otherwise open whichever of them it prefers.
+  const runner = ['task', '--taskfile', file];
+  const block = yamlBlockKeys(text.split(/\r?\n/), 'tasks');
 
   const tasks: RawTask[] = [];
   for (const entry of block) {
@@ -1270,6 +1385,237 @@ function parseMise(text: string): ParsedManifest | undefined {
     });
   }
   return { tasks: out };
+}
+
+// --- Docker compose ----------------------------------------------------------
+
+/**
+ * Compose declares services, not tasks, so the rows for a file are the
+ * subcommands worth having on a list — the same shape cargo's rows take, and for
+ * the same reason.
+ */
+const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['up', 'down', 'build', 'logs', 'ps'];
+
+/**
+ * The arguments each command name stands for, after the `docker compose -f
+ * <file>` every row already carries. Anything not listed runs as itself.
+ *
+ * `logs` is the one that is not one-for-one: without `-f` it prints what has
+ * happened and exits, and a row that ends the moment you click it is a row that
+ * was never worth a spinner. `up` is deliberately not given `-d` for the
+ * opposite reason — see `parseCompose`.
+ */
+const DOCKER_COMPOSE_COMMANDS: Record<string, string[]> = {
+  up: ['up'],
+  down: ['down'],
+  build: ['build'],
+  logs: ['logs', '-f'],
+  ps: ['ps'],
+  start: ['start'],
+  stop: ['stop'],
+  restart: ['restart'],
+  pull: ['pull'],
+  config: ['config'],
+};
+
+/**
+ * How compose is invoked here: the v2 plugin by default, since the standalone
+ * v1 binary has been end-of-life since July 2023.
+ *
+ * A two-value setting and no `auto`, unlike `pythonRunner`: there the choice is
+ * decided by a lock file the scan can read, and the only honest detection for
+ * this one is running `docker compose version` — and a scan never spawns a
+ * process. Spelled as the command and split on whitespace, so what is in
+ * settings.json is what ends up in the terminal.
+ */
+function composeProgram(): string[] {
+  const configured = setting<string>('dockerCompose');
+  const value = (typeof configured === 'string' ? configured : '').trim();
+  return (value || 'docker compose').split(/\s+/);
+}
+
+/**
+ * The rows for one compose file.
+ *
+ * `-f <basename>` for the reason make, just and go-task all name their own file:
+ * what the scan saw is not what the runner would pick, and compose has its own
+ * precedence across four spellings. The catch is that passing `-f` turns off the
+ * automatic merge of `docker-compose.override.yml`, which is a live development
+ * workflow — so the matching override is looked for and appended as a second
+ * `-f`, which is exactly what the merge would have done.
+ *
+ * `up` is the command that fans out: a bare row, plus one row per service when
+ * the file declares more than one. Unlike cargo's `run` the bare row stays —
+ * `docker compose up` across the whole stack is the row most people want, not an
+ * ambiguity. Six services is eleven rows rather than the thirty a full
+ * services × commands product would be.
+ *
+ * Nothing here ever passes `-d`. A detached `up` exits at once: the row would go
+ * idle with the containers still running, and Stop would stop nothing.
+ */
+async function parseCompose(
+  text: string,
+  file: string,
+  cwd: vscode.Uri,
+): Promise<ParsedManifest | undefined> {
+  const commands = settingList('dockerComposeCommands', DEFAULT_COMPOSE_COMMANDS);
+  // Not `{ tasks: [] }`: an empty parse counts as "the file declares nothing",
+  // which lands in `emptyManifests` and lets `pruneStaleRefs` delete every star
+  // and colour on it. Emptying a setting must not cost the user their marks.
+  if (commands.length === 0) {
+    return undefined;
+  }
+
+  const program = composeProgram();
+  const files = ['-f', file];
+  const override = composeOverride(file);
+  if (override && (await exists(vscode.Uri.joinPath(cwd, override)))) {
+    files.push('-f', override);
+  }
+
+  const lines = text.split(/\r?\n/);
+  const services = yamlBlockKeys(lines, 'services')
+    .map((entry) => entry.name)
+    .filter(Boolean);
+  // The Compose Spec's own top-level `name:`, so the heading reads the project's
+  // name rather than the folder it happens to sit in.
+  const named = /^name:\s*["']?([^"'#\s]+)/m.exec(text);
+
+  const tasks: RawTask[] = [];
+  const push = (name: string, args: string[]) => {
+    const argv = [...program, ...files, ...args];
+    tasks.push({ name, command: argv.join(' '), argv });
+  };
+
+  for (const command of commands) {
+    const args = known(DOCKER_COMPOSE_COMMANDS, command) ?? [command];
+    push(command, args);
+    if (command === 'up' && services.length > 1) {
+      for (const service of services) {
+        push(`up: ${service}`, [...args, service]);
+      }
+    }
+  }
+
+  return { tasks, packageName: named?.[1] };
+}
+
+// --- shell scripts -----------------------------------------------------------
+
+/**
+ * Where shell scripts are looked for. Narrow on purpose: these three patterns
+ * are the convention — a `.sh` under `scripts/`, under `bin/`, or in the root —
+ * and anything wider turns every vendored helper in a repository into a row.
+ *
+ * `findFiles` globs are relative to the workspace folder, so `*.sh` is the root
+ * level alone rather than every directory.
+ */
+const DEFAULT_SHELL_SCRIPTS: ReadonlyArray<string> = ['scripts/**/*.sh', 'bin/**/*.sh', '*.sh'];
+
+/**
+ * The words a script is run through. `bash` rather than the file itself, because
+ * running `./deploy.sh` needs both the executable bit and a shebang — and the
+ * bit is invisible to `vscode.workspace.fs` (`FilePermission` carries only
+ * `Readonly`), so checking it would mean importing `node:fs` and giving up
+ * Remote SSH and Dev Containers, which is the whole reason this file imports
+ * nothing but `path` and `vscode`.
+ *
+ * Empty runs the path on its own, for anyone who wants exactly that.
+ */
+function shellRunner(): string[] {
+  const configured = setting<string>('shellRunner');
+  const value = (typeof configured === 'string' ? configured : 'bash').trim();
+  return value ? value.split(/\s+/) : [];
+}
+
+/** Comment lines that are addressed to a tool rather than to a reader. */
+const SHELL_PRAGMA = /^(shellcheck\b|vim:|emacs:|-\*-|!)/;
+
+/**
+ * The dimmed text a shell row gets: the first comment line in the file that was
+ * written for a person. The shebang goes, and so do the editor and linter
+ * pragmas that sit under it — the same idea as the `##` convention `MAKE_DOC`
+ * reads, for files that have no convention of their own.
+ *
+ * Bounded to the head of the file rather than stopping at the first line of
+ * code: `set -euo pipefail` and a `cd` to the repository root routinely sit
+ * above the comment that says what the script is for.
+ */
+export function shellDescription(text: string): string | undefined {
+  for (const line of text.split(/\r?\n/).slice(0, 40)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('#')) {
+      continue;
+    }
+    const body = trimmed.replace(/^#+\s*/, '').trim();
+    if (body && !SHELL_PRAGMA.test(body)) {
+      return body;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Every shell script the patterns find, as rows grouped by the directory they
+ * sit in.
+ *
+ * One group per directory, not per file: twelve scripts across `scripts/` and
+ * `bin/` are two headings rather than twelve one-row headings, where every group
+ * affordance — fold, hide, rename, drag scope — would be per-script noise. Not
+ * one workspace-wide heading either, which would lose the "where does this live"
+ * cue the rest of the tree is organised around.
+ *
+ * The group's `manifest` is therefore the directory. Its ref is
+ * `<folder>/scripts`, and a real manifest's always ends in a file name, so the
+ * only way the two collide is a directory literally named `package.json`.
+ */
+async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
+  const patterns = settingList('shellScripts', DEFAULT_SHELL_SCRIPTS);
+  if (patterns.length === 0) {
+    return [];
+  }
+  const glob = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
+  const files = await vscode.workspace.findFiles(glob, exclude, MAX_SHELL_SCRIPTS);
+  files.sort((a, b) => a.fsPath.localeCompare(b.fsPath));
+
+  const runner = shellRunner();
+  const entries: ScriptEntry[] = [];
+
+  for (const file of files) {
+    const directory = directoryOf(file);
+    // The workspace folder root, not the script's own directory: a
+    // `scripts/deploy.sh` is written to be run from the root of the repository,
+    // which is where `./scripts/deploy.sh` in a README means.
+    const cwd = vscode.workspace.getWorkspaceFolder(file)?.uri ?? directory;
+    const relative = (from: vscode.Uri, to: vscode.Uri) =>
+      path.relative(from.fsPath, to.fsPath).split(path.sep).join('/');
+
+    const inside = relative(cwd, file) || path.posix.basename(file.path);
+    // A group in the root of its folder has no path of its own to show, so it
+    // falls back to the folder's name — the same fallback a manifest's location
+    // takes when it sits at the root.
+    const location = relative(cwd, directory) || path.posix.basename(directory.path);
+    const argv = [...runner, `./${inside}`];
+    const text = await readText(file);
+
+    entries.push({
+      // The file name keeps its extension: it is the identity in `scriptKey`,
+      // the terminal's title and the tooltip, and the category tokeniser splits
+      // `deploy.sh` to `['deploy', 'sh']` so the icon rules still read it.
+      key: scriptKey(directory.toString(), path.posix.basename(file.path)),
+      name: path.posix.basename(file.path),
+      command: (text !== undefined ? shellDescription(text) : undefined) ?? argv.join(' '),
+      argv,
+      manifest: directory,
+      file,
+      kind: 'shell',
+      cwd,
+      location,
+      directory: location.includes('/') ? location.slice(0, location.lastIndexOf('/')) : '',
+    });
+  }
+
+  return entries;
 }
 
 // --- shared parsing helpers --------------------------------------------------

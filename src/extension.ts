@@ -2,14 +2,18 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { locateTask } from './locate';
 import {
+  ALL_ECOSYSTEMS,
   collectScripts,
   commandFor,
+  Ecosystem,
+  ecosystemOf,
   emptyManifests,
   launchArgv,
   plainArgument,
   resetSources,
   scriptKey,
   ScriptEntry,
+  SHELL_GLOB,
   SOURCE_GLOB,
   WATCH_GLOB,
 } from './sources';
@@ -112,9 +116,28 @@ const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
 ];
 
 /** Settings a scan reads, so a change to one has to throw the cached list away. */
-const SCAN_SETTINGS = ['exclude', 'sources', 'cargoCommands', 'goCommands', 'pythonRunner'];
+const SCAN_SETTINGS = [
+  'exclude',
+  'sources',
+  'cargoCommands',
+  'goCommands',
+  'pythonRunner',
+  // Both are baked into a row's `argv` by the parser rather than resolved when
+  // it launches, so a change to either has to be read again off disk.
+  'dockerCompose',
+  'dockerComposeCommands',
+  'shellScripts',
+  'shellRunner',
+];
 /** Settings that only change how the list is drawn — no rescan, just a repaint. */
-const DISPLAY_SETTINGS = ['packageManager', 'categories', 'colorIcons', 'pinRunningTasks'];
+const DISPLAY_SETTINGS = [
+  'packageManager',
+  'categories',
+  'colorIcons',
+  'pinRunningTasks',
+  'grouping',
+  'groupIcons',
+];
 
 /**
  * The heading the two views wear until the `title` setting says otherwise. The
@@ -185,6 +208,19 @@ function cancelInvalidate(): void {
 function repaint(): void {
   treeChanged.fire();
   activePicker?.refresh();
+}
+
+/**
+ * The ecosystems `sources` leaves switched on. Read here as well as in the scan
+ * because one watcher has to answer for a setting it cannot be rebuilt from.
+ */
+function enabledSources(): string[] {
+  const configured = vscode.workspace
+    .getConfiguration('taskRunnerUltimate')
+    .get<unknown>('sources');
+  return Array.isArray(configured)
+    ? configured.filter((item): item is string => typeof item === 'string')
+    : [...ALL_ECOSYSTEMS];
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -316,9 +352,24 @@ export function activate(context: vscode.ExtensionContext): void {
   sourceWatcher.onDidCreate(() => invalidateSoon());
   sourceWatcher.onDidDelete(() => invalidateSoon());
 
+  // The shell rows are files rather than entries in a file, so the same
+  // create-and-delete-only trick serves them — see `SHELL_GLOB` for why the
+  // pattern is fixed rather than built from `shellScripts`. The handler, not the
+  // watcher, is what `sources` switches off: a watcher is built once and this
+  // one has to stay right after the setting changes.
+  const shellWatcher = vscode.workspace.createFileSystemWatcher(SHELL_GLOB, false, true, false);
+  const onShellChange = () => {
+    if (enabledSources().includes('shell')) {
+      invalidateSoon();
+    }
+  };
+  shellWatcher.onDidCreate(onShellChange);
+  shellWatcher.onDidDelete(onShellChange);
+
   context.subscriptions.push(
     watcher,
     sourceWatcher,
+    shellWatcher,
     // A rescan waiting on its timer must not outlive the extension.
     { dispose: cancelInvalidate },
     vscode.workspace.onDidChangeWorkspaceFolders(() => invalidate()),
@@ -856,9 +907,25 @@ async function openManifest(node: TreeNode | undefined): Promise<void> {
   // OTHER TASKS and HIDDEN are groups of ours rather than files, and carry no
   // manifest — the `when` clauses keep them out of the menu, and this keeps them
   // out of the command.
+  // A heading that stands for a folder rather than a file — the shell groups —
+  // has nothing to open as a document, so the folder is revealed instead.
+  // Leaving it without a manifest would make the menu entry a silent no-op.
+  if (node?.kind === 'group' && node.directory) {
+    await vscode.commands.executeCommand('revealInExplorer', node.directory);
+    return;
+  }
+
   const source: { file: vscode.Uri; where: string; task?: ScriptEntry } | undefined =
     node?.kind === 'script'
-      ? { file: node.script.manifest, where: node.script.location, task: node.script }
+      ? {
+          // A shell row's manifest is the directory it is grouped under, so the
+          // file it opens is the script itself.
+          file: node.script.file ?? node.script.manifest,
+          where: node.script.file
+            ? vscode.workspace.asRelativePath(node.script.file)
+            : node.script.location,
+          task: node.script,
+        }
       : node?.kind === 'group' && node.manifest
         ? { file: node.manifest, where: node.detail ?? node.manifest.fsPath }
         : undefined;
@@ -1054,6 +1121,7 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
       { id: 'record', name: 'Record' },
       { id: 'check', name: 'Check' },
       { id: 'checklist', name: 'Checklist' },
+      { id: 'tasklist', name: 'Task List' },
       { id: 'sync', name: 'Sync' },
       { id: 'refresh', name: 'Refresh' },
       { id: 'save', name: 'Save' },
@@ -1099,6 +1167,7 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
       { id: 'law', name: 'Law' },
       { id: 'jersey', name: 'Jersey' },
       { id: 'ruby', name: 'Ruby' },
+      { id: 'snake', name: 'Snake' },
       { id: 'mortar-board', name: 'Mortar Board' },
       { id: 'telescope', name: 'Telescope' },
       { id: 'compass', name: 'Compass' },
@@ -1121,6 +1190,7 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
       { id: 'wrench', name: 'Wrench' },
       { id: 'gear', name: 'Gear' },
       { id: 'terminal', name: 'Terminal' },
+      { id: 'terminal-bash', name: 'Terminal Bash' },
       { id: 'code', name: 'Code' },
       { id: 'debug', name: 'Debug' },
       { id: 'extensions', name: 'Extensions' },
@@ -1374,6 +1444,55 @@ function orderedGroups(scripts: ScriptEntry[]): ScriptEntry[] {
 }
 
 /**
+ * Whether the manifest groups sit under one parent row per ecosystem, rather
+ * than all at the root.
+ *
+ * `flat` is the default: it is what the tree has always drawn, and an upgrade
+ * that restructures a sidebar nobody asked to have restructured is an upgrade
+ * that reads as a bug.
+ */
+function hierarchical(): boolean {
+  return (
+    vscode.workspace.getConfiguration('taskRunnerUltimate').get<string>('grouping', 'flat') ===
+    'ecosystem'
+  );
+}
+
+/**
+ * The scan with each ecosystem's groups gathered into one run, in the order the
+ * ecosystems first appear. A near-twin of `orderedGroups` above, and applied
+ * right after it, so a drag still decides the order inside a run.
+ *
+ * This is a pass over the flat list and not something the tree does while it
+ * builds its rows, which is the load-bearing part. `groupScopes()` — what every
+ * drop splices positions into — reads this same list, so bucketing here is what
+ * keeps the order a drag computes against and the order on screen the same
+ * thing. Were the tree to bucket on its own, a stored order of `node, rust,
+ * node` would draw as two blocks while the drop arithmetic still saw three, and
+ * the dropdown would list a third order again.
+ *
+ * A run's rank is where its first member sits, so no second store is needed.
+ * One would have to be reset, pruned and documented on its own, and could
+ * contradict `groupOrder` with nothing to reconcile the two.
+ */
+function groupedByEcosystem(scripts: ScriptEntry[]): ScriptEntry[] {
+  if (!hierarchical()) {
+    return scripts;
+  }
+  const rank = new Map<Ecosystem, number>();
+  const blocks = [...groupSlots(scripts).values()].map((indices, position) => {
+    // Every row in a block comes from one manifest, so one row settles its kind.
+    const ecosystem = ecosystemOf(scripts[indices[0]].kind);
+    if (!rank.has(ecosystem)) {
+      rank.set(ecosystem, rank.size);
+    }
+    return { indices, position, rank: rank.get(ecosystem) ?? 0 };
+  });
+  blocks.sort((a, b) => a.rank - b.rank || a.position - b.position);
+  return blocks.flatMap((block) => block.indices.map((slot) => scripts[slot]));
+}
+
+/**
  * The refs of every group the scan found, top to bottom, in the saved order —
  * hidden ones included. A move reads and rewrites this list whole, so a heading
  * parked in HIDDEN keeps the slot it will come back to.
@@ -1516,7 +1635,7 @@ async function savedOrder(): Promise<ScriptEntry[]> {
   // go through, and it is the only place that holds a fresh list and the stores
   // that annotate it at the same time.
   await pruneStaleRefs(scripts);
-  return orderedGroups(orderedScripts(scripts));
+  return groupedByEcosystem(orderedGroups(orderedScripts(scripts)));
 }
 
 // --- pruning what the manifests no longer declare -----------------------------
@@ -1687,6 +1806,20 @@ function openSettings(): void {
 }
 
 /**
+ * Flips `grouping` between its two modes.
+ *
+ * Written globally rather than to the workspace: a click in a menu should not
+ * put a `.vscode/settings.json` into the user's `git status`. No repaint
+ * follows, because `update` resolves after the configuration event has fired and
+ * `grouping` is on `DISPLAY_SETTINGS` — the redraw is already on its way.
+ */
+async function toggleGrouping(): Promise<void> {
+  await vscode.workspace
+    .getConfiguration('taskRunnerUltimate')
+    .update('grouping', hierarchical() ? 'flat' : 'ecosystem', vscode.ConfigurationTarget.Global);
+}
+
+/**
  * Everything the view can do that is not aimed at one row: the rescan, the
  * settings, and the stores the menu can empty. Each reset says how much is in
  * its scope before you pick it and asks once after — a mis-click here can cost
@@ -1825,6 +1958,14 @@ async function showMenu(): Promise<void> {
       description: 'every option this extension has',
       run: async () => openSettings(),
     },
+    {
+      label: '$(list-tree) Group by ecosystem',
+      // The same idiom the resets below use for a state: what it is now, on the
+      // right, where the eye is already going for the count.
+      description: hierarchical() ? 'on' : 'off',
+      detail: 'One row per ecosystem — Node, Rust, Docker — with the packages inside it.',
+      run: toggleGrouping,
+    },
     { label: 'Reset', kind: vscode.QuickPickItemKind.Separator },
     resetItem(resetStyles),
     ...stores.map(resetItem),
@@ -1908,6 +2049,19 @@ type TreeNode =
        */
       manifest?: vscode.Uri;
       /**
+       * The directory a heading stands for, when it stands for one rather than
+       * for a file — the shell groups, which are a folder of scripts and no one
+       * manifest. It is what Open Manifest reveals instead of trying to open a
+       * directory as a document.
+       */
+      directory?: vscode.Uri;
+      /**
+       * Which ecosystem the heading belongs to. On a manifest group it decides
+       * the glyph and the tint; on a parent row it is what the row *is*, and is
+       * what a drag reads to work out which block it is moving.
+       */
+      ecosystem?: Ecosystem;
+      /**
        * Whether the row is a heading the user put away — the ones under the pile,
        * and the pile itself. It is what swaps the eye on the row for the one that
        * brings it back. The grey belongs to the pile's own row and is decided by
@@ -1925,12 +2079,66 @@ let treeView: vscode.TreeView<TreeNode> | undefined;
 let explorerTreeView: vscode.TreeView<TreeNode> | undefined;
 
 /**
- * One icon for every package row: a stack, for the pile of tasks the row opens
- * into. It used to name the runner instead — npm, cargo, make — but a column of
- * different glyphs made the headings compete with the rows under them, and the
- * runner is already spelled out by the manifest each heading names.
+ * The fallback icon for a package row: a stack, for the pile of tasks the row
+ * opens into.
+ *
+ * It used to name the runner instead — npm, cargo, make — and that was taken out
+ * once because a column of different glyphs made the headings compete with the
+ * rows under them. `groupIcons` is where that judgement now lives: `type` puts
+ * the ecosystem's glyph back on every heading in its own colour, which is what
+ * tells a Node row from a Rust one in a polyglot repository, and `uniform` is
+ * this icon on all of them, the old look one setting away.
  */
 const GROUP_ICON = 'layers';
+
+/**
+ * What each ecosystem is called, what it is drawn as, and the colour that glyph
+ * is tinted.
+ *
+ * Codicons wherever one exists, and nothing else: an icon given as a `Uri` — a
+ * brand logo of our own — cannot resolve a `ThemeColor`, so six tinted codicons
+ * beside a handful of fixed-colour SVGs would read as a bug rather than a set.
+ * Where no codicon is brand-shaped (nothing is, for npm, Rust, Go, PHP, Deno or
+ * Docker) the nearest honest glyph is used: Rust's own mark *is* a gear, a
+ * compose file is a set of machines, a shell script is `terminal-bash`.
+ *
+ * `mise` keeps its own casing, which is the rule the rest of the tree already
+ * applies to the names a project gives itself.
+ *
+ * The colours are ids of their own rather than the `palette.*` ten: the palette
+ * is what a user paints *with*, and retheming one of those should not silently
+ * retheme every Rust heading in the tree.
+ */
+const ECOSYSTEMS: Record<Ecosystem, { label: string; icon: string; color: string }> = {
+  node: { label: 'Node', icon: 'package', color: 'taskRunnerUltimate.ecosystem.node' },
+  rust: { label: 'Rust', icon: 'gear', color: 'taskRunnerUltimate.ecosystem.rust' },
+  python: { label: 'Python', icon: 'snake', color: 'taskRunnerUltimate.ecosystem.python' },
+  make: { label: 'Make', icon: 'tools', color: 'taskRunnerUltimate.ecosystem.make' },
+  just: { label: 'Just', icon: 'list-ordered', color: 'taskRunnerUltimate.ecosystem.just' },
+  task: { label: 'Task', icon: 'tasklist', color: 'taskRunnerUltimate.ecosystem.task' },
+  go: { label: 'Go', icon: 'symbol-event', color: 'taskRunnerUltimate.ecosystem.go' },
+  php: { label: 'PHP', icon: 'globe', color: 'taskRunnerUltimate.ecosystem.php' },
+  mise: { label: 'mise', icon: 'versions', color: 'taskRunnerUltimate.ecosystem.mise' },
+  docker: { label: 'Docker', icon: 'vm', color: 'taskRunnerUltimate.ecosystem.docker' },
+  shell: { label: 'Shell', icon: 'terminal-bash', color: 'taskRunnerUltimate.ecosystem.shell' },
+};
+
+/** The id an ecosystem's parent row is built with, and files its fold and colour under. */
+function ecosystemId(ecosystem: Ecosystem): string {
+  return `group:eco:${ecosystem}`;
+}
+
+/**
+ * Whether a manifest heading wears its ecosystem's glyph, or the one stack icon
+ * every heading used to wear. Parent rows always wear the type icon: a row that
+ * *is* the ecosystem has nothing else to say.
+ */
+function typeIcons(): boolean {
+  return (
+    vscode.workspace.getConfiguration('taskRunnerUltimate').get<string>('groupIcons', 'type') ===
+    'type'
+  );
+}
 
 /** Private URI scheme for group rows, so decorations cannot hit real files. */
 const DECORATION_SCHEME = 'taskrunnerultimate';
@@ -2032,6 +2240,29 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     // The two never mix in one gesture — the row the drag started on decides which
     // it is, and rows of the other kind travelling with it are left where they are.
     if (source[0]?.kind === 'group') {
+      // An ecosystem parent moves the whole run under it. The payload keeps
+      // `GROUPS_SCOPE`, so `handleDrop` dispatches exactly as it did; the extra
+      // `block` is what tells the two gestures apart once it gets there.
+      const parent = source[0];
+      if (parent.ecosystem && !parent.ref) {
+        const refs = parent.children.flatMap((child) =>
+          child.kind === 'group' && child.ref ? [child.ref] : [],
+        );
+        if (refs.length === 0) {
+          return;
+        }
+        const payload = new vscode.DataTransferItem(
+          JSON.stringify({ scope: GROUPS_SCOPE, refs, block: parent.ecosystem }),
+        );
+        for (const mime of DRAG_MIMES) {
+          transfer.set(mime, payload);
+        }
+        hint(
+          `$(move) Moving ${ECOSYSTEMS[parent.ecosystem].label} — drop on another ecosystem to reorder`,
+        );
+        return;
+      }
+
       const groups = source.flatMap((node) => (node.kind === 'group' && node.ref ? [node] : []));
       const first = groups[0];
       if (!first) {
@@ -2043,10 +2274,12 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
         transfer.set(mime, payload);
       }
       const what = refs.length > 1 ? `${refs.length} packages` : `"${groupHeading(first)}"`;
+      const inside =
+        hierarchical() && first.ecosystem ? ` inside ${ECOSYSTEMS[first.ecosystem].label}` : '';
       hint(
         first.hidden
           ? `$(move) Moving ${what} — drop on any package outside hidden to bring it back`
-          : `$(move) Moving ${what} — drop on another package to reorder, or on hidden to put it away`,
+          : `$(move) Moving ${what} — drop on another package${inside} to reorder, or on hidden to put it away`,
       );
       return;
     }
@@ -2080,7 +2313,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
       return;
     }
 
-    let payload: { scope?: unknown; refs?: unknown };
+    let payload: { scope?: unknown; refs?: unknown; block?: unknown };
     try {
       payload = JSON.parse(raw) as typeof payload;
     } catch {
@@ -2088,13 +2321,16 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     }
     const scope = typeof payload.scope === 'string' ? payload.scope : undefined;
     const dragged = Array.isArray(payload.refs) ? payload.refs.filter((ref): ref is string => typeof ref === 'string') : [];
+    // Present only when an ecosystem row was the thing dragged, and checked
+    // against the table rather than trusted: it arrives as JSON off a clipboard.
+    const block = ALL_ECOSYSTEMS.find((name) => name === payload.block);
     if (!scope || dragged.length === 0) {
       clearHint();
       return;
     }
 
     if (scope === GROUPS_SCOPE) {
-      await dropGroups(dragged, target);
+      await dropGroups(dragged, target, block);
       return;
     }
 
@@ -2143,33 +2379,86 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
  * A task row is a legal target as well: it names the heading it sits under, and
  * aiming at a package by one of its tasks is what a half-open tree offers.
  */
-async function dropGroups(dragged: string[], target: TreeNode): Promise<void> {
+async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem): Promise<void> {
   if (target.kind === 'group' && target.id === HIDDEN_GROUP_ID) {
     await setGroupsHidden(dragged, true);
     return;
   }
 
   const buried = new Set(hiddenRefs());
-  const anchor = anchorGroup(target);
-  if (!anchor) {
-    hint('$(circle-slash) Not a drop target — a package moves between packages, or onto hidden');
-    return;
-  }
-  if (buried.has(anchor)) {
-    await setGroupsHidden(dragged, true);
+  const nested = hierarchical();
+  const ecosystems = nested ? await groupEcosystems() : new Map<string, Ecosystem>();
+  const current = await groupScopes();
+  const moved = dragged.filter((ref) => current.includes(ref));
+  // Where the drop landed, as an ecosystem: a heading carries its own, a parent
+  // row is one outright, and a task row names the heading it sits under.
+  const where =
+    target.kind === 'group'
+      ? target.ecosystem
+      : target.kind === 'script' && !target.inFavorites
+        ? ecosystems.get(groupRef(target.script))
+        : undefined;
+
+  if (block) {
+    // A whole ecosystem moved: it takes the place of the one it was dropped on,
+    // which is the rule every other drop in this tree follows.
+    if (moved.length === 0 || !where || where === block) {
+      clearHint();
+      return;
+    }
+    const rest = current.filter((ref) => !moved.includes(ref));
+    const anchor = rest.find((ref) => ecosystems.get(ref) === where);
+    const at = anchor ? rest.indexOf(anchor) : rest.length;
+    await saveGroupOrder([...rest.slice(0, at), ...moved, ...rest.slice(at)]);
+    clearHint();
+    repaint();
     return;
   }
 
-  const current = await groupScopes();
-  const moved = dragged.filter((ref) => current.includes(ref));
-  // Dropped on itself, or on a heading travelling with it: nothing to work out.
-  if (moved.length === 0 || moved.includes(anchor)) {
+  const anchor = anchorGroup(target);
+  if (anchor && buried.has(anchor)) {
+    await setGroupsHidden(dragged, true);
+    return;
+  }
+  if (moved.length === 0) {
     clearHint();
     return;
   }
+
+  // In `ecosystem` mode a heading cannot leave the run it belongs to. Allowing
+  // it would splice the ref into the flat order and `groupedByEcosystem` would
+  // pull it straight back, so the drop would read as nothing having happened —
+  // which is worse than a refusal, and a refusal is all there is: the API gives
+  // an extension no way to grey out a target under the mouse.
+  const home = ecosystems.get(moved[0]);
+  if (nested && home && where && where !== home) {
+    hint(
+      `$(circle-slash) Not a drop target — a package moves inside ${ECOSYSTEMS[home].label}, or onto hidden`,
+    );
+    return;
+  }
+
   const rest = current.filter((ref) => !moved.includes(ref));
-  // The same rule a task drop follows: the dragged rows take the target's place.
-  const at = Math.min(current.indexOf(anchor), rest.length);
+  let at: number;
+  if (anchor) {
+    // Dropped on itself, or on a heading travelling with it: nothing to work out.
+    if (moved.includes(anchor)) {
+      clearHint();
+      return;
+    }
+    // The same rule a task drop follows: the dragged rows take the target's place.
+    at = Math.min(current.indexOf(anchor), rest.length);
+  } else if (nested && where && where === home) {
+    // Dropped on the ecosystem's own row, which has no slot of its own to take:
+    // the end of its run, the way a task dropped on its heading means the end of
+    // the list.
+    const last = rest.filter((ref) => ecosystems.get(ref) === where).pop();
+    at = last ? rest.indexOf(last) + 1 : rest.length;
+  } else {
+    hint('$(circle-slash) Not a drop target — a package moves between packages, or onto hidden');
+    return;
+  }
+
   await saveGroupOrder([...rest.slice(0, at), ...moved, ...rest.slice(at)]);
   // Landing outside HIDDEN is what brings a put-away heading back, and it comes
   // back where it was dropped rather than where it was hidden from.
@@ -2179,6 +2468,19 @@ async function dropGroups(dragged: string[], target: TreeNode): Promise<void> {
   );
   clearHint();
   repaint();
+}
+
+/**
+ * The ecosystem each heading in the saved order belongs to. Read off the scan
+ * rather than off the tree, because a drop has to place a heading the tree may
+ * not be drawing — one inside the hidden pile keeps its slot in this order.
+ */
+async function groupEcosystems(): Promise<Map<string, Ecosystem>> {
+  const map = new Map<string, Ecosystem>();
+  for (const script of await savedOrder()) {
+    map.set(groupRef(script), ecosystemOf(script.kind));
+  }
+  return map;
 }
 
 /** The heading a drop lands on: the row itself, or the one a task row sits under. */
@@ -2431,6 +2733,11 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
         scope: groupRef(script),
         ref: groupRef(script),
         manifest: script.manifest,
+        // A shell group's manifest *is* a directory — see `collectShellScripts`
+        // — so the row carries it as one as well, and Open Manifest reveals the
+        // folder rather than failing to open it as a document.
+        directory: script.file ? script.manifest : undefined,
+        ecosystem: ecosystemOf(script.kind),
         children: [],
       };
       byManifest.set(key, group);
@@ -2450,7 +2757,15 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   // The saved order, whole: what is running inside a group is no reason to move
   // the group, here or in the picker. Inside one nothing moves either, unless
   // `pinRunningTasks` lifts the rows.
-  const roots: TreeNode[] = [...shown];
+  //
+  // In `ecosystem` mode the same list is drawn one level down, under a parent
+  // row per ecosystem. `savedOrder` has already gathered each ecosystem's groups
+  // into one run, so this only has to fold the runs it is handed — which is why
+  // the tree and the dropdown cannot disagree about the order.
+  //
+  // A single manifest gets no parent, mirroring the rule `buildItems` follows
+  // for package separators: one heading over one heading says nothing.
+  const roots: TreeNode[] = hierarchical() && shown.length > 1 ? parentRows(shown) : [...shown];
 
   // Tasks that are not backed by a manifest have no group of their own.
   const foreign = foreignExecutions();
@@ -2485,6 +2800,11 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   // point is to be out of the way has not moved out of the way if it opens
   // itself. It is a drop target too — dragging a heading onto it puts it away,
   // and dragging one back out onto any other heading brings it back.
+  //
+  // Its children stay manifest groups even in `ecosystem` mode. A pile of
+  // put-away packages routinely spans ecosystems, so parenting it would mostly
+  // produce parent rows holding one child each — and `shown` and `away` are
+  // split above, so a parent's count never includes anything hidden.
   if (away.length > 0) {
     roots.push({
       kind: 'group',
@@ -2496,6 +2816,56 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     });
   }
 
+  return roots;
+}
+
+/**
+ * One row per ecosystem, each holding the manifest groups that belong to it, in
+ * the order they were handed over.
+ *
+ * The row is built with no `ref`, no `scope` and no `manifest`, which is a
+ * choice and not an omission: that is the shape OTHER TASKS and the hidden pile
+ * already have, and the whole set of affordances follows from it with no code of
+ * its own. Fold, colour and icon work through the `node.id` fallbacks
+ * `collapseRef`, `colorRef` and `storedIcon` already take. Rename, Hide and Open
+ * Manifest stay off — there is no name on disk for a rename to restore, no file
+ * to open, and hiding a whole ecosystem is what `sources` does properly.
+ *
+ * The count rides in the label rather than in a description, because the
+ * decoration that tints a row tints its description with it.
+ */
+function parentRows(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] {
+  const parents = new Map<Ecosystem, TreeNode & { kind: 'group' }>();
+  const roots: TreeNode[] = [];
+
+  for (const group of groups) {
+    const ecosystem = group.ecosystem;
+    // Nothing reaches here without one; a group built without a kind to read
+    // stays at the root rather than being filed under a guess.
+    if (!ecosystem) {
+      roots.push(group);
+      continue;
+    }
+    let parent = parents.get(ecosystem);
+    if (!parent) {
+      const type = ECOSYSTEMS[ecosystem];
+      parent = {
+        kind: 'group',
+        id: ecosystemId(ecosystem),
+        label: type.label,
+        icon: type.icon,
+        ecosystem,
+        children: [],
+      };
+      parents.set(ecosystem, parent);
+      roots.push(parent);
+    }
+    parent.children.push(group);
+  }
+
+  for (const parent of parents.values()) {
+    parent.label = `${parent.label} (${parent.children.length})`;
+  }
   return roots;
 }
 
@@ -2571,12 +2941,25 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // on the label and on the icon alike: the point of painting one is to find it
     // in a column of headings that otherwise all look the same. OTHER TASKS takes
     // one too — it is a row on the same list, whatever it cannot be renamed to.
-    const tint = nodeColor(node) ?? (node.id === HIDDEN_GROUP_ID ? HIDDEN_COLOR : TITLE_COLOR);
+    // What the row's ecosystem wants it to look like, when it is a row that
+    // wears one: a parent row always does — it *is* the ecosystem — and a
+    // manifest row does while `groupIcons` says `type`. OTHER TASKS and the
+    // hidden pile carry no ecosystem and are left exactly as they were.
+    const type =
+      node.ecosystem && (node.ref === undefined || typeIcons()) ? ECOSYSTEMS[node.ecosystem] : undefined;
+    // The same order `iconFor` uses on a script row, for the same reason: what
+    // the user chose by hand outranks what the kind of thing implies, and
+    // `colorIcons` turns off the colour we picked and not the one they did.
+    const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
+    const tint =
+      nodeColor(node) ??
+      (type && colored ? type.color : undefined) ??
+      (node.id === HIDDEN_GROUP_ID ? HIDDEN_COLOR : TITLE_COLOR);
     item.resourceUri = decorationUri(tint, node.detail ?? node.label);
     // An icon the user picked stands in for the stock one, in the tint the row
     // already wears — the icon says which row this is, the colour keeps saying
     // what it says on every heading.
-    const glyph = storedIcon(node.ref ?? node.id) ?? node.icon;
+    const glyph = storedIcon(node.ref ?? node.id) ?? type?.icon ?? node.icon;
     if (glyph) {
       item.iconPath = new vscode.ThemeIcon(glyph, new vscode.ThemeColor(tint));
     }
@@ -2587,7 +2970,15 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // one button in two states, and only one of them can be on a row at a time.
     // `:running` marks a heading with something alive under it, which is what
     // puts the stop-all and restart-all buttons on the row and nowhere else.
-    const alive = node.children.some((child) => child.kind === 'script' && running.has(child.script.key));
+    //
+    // An ecosystem parent is the third shape: it has no ref, so it is neither
+    // renameable nor hideable, but it does hold running rows and so keeps the
+    // stop-all and restart-all buttons.
+    const alive = runningScriptsOf(node).length > 0;
+    if (node.ecosystem && !node.ref) {
+      item.contextValue = alive ? 'group:eco:running' : 'group:eco';
+      return item;
+    }
     const state = node.hidden ? 'group:package:hidden' : 'group:package';
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
@@ -2781,9 +3172,16 @@ function crowdedFolders(scripts: ScriptEntry[]): Set<string> {
   return new Set([...manifests].filter(([, seen]) => seen.size > 1).map(([folder]) => folder));
 }
 
-/** Absolute path of the folder a manifest sits in. */
+/**
+ * Absolute path of the folder a row's file sits in.
+ *
+ * For a shell row that is the group's own directory rather than the one above
+ * it: the group *is* a folder — see `collectShellScripts` — and reading its
+ * parent would have `scripts/` share a folder with every manifest in the
+ * repository root and report all of them as crowded.
+ */
 function manifestFolder(script: ScriptEntry): string {
-  return path.posix.dirname(script.manifest.path);
+  return path.posix.dirname((script.file ?? script.manifest).path);
 }
 
 /**
@@ -2807,7 +3205,11 @@ function packageHeading(script: ScriptEntry, shared: boolean): string {
   if (script.packageName) {
     return script.packageName;
   }
-  const folder = path.posix.basename(script.directory);
+  // A shell group's "manifest" is the folder itself, so the name it goes by is
+  // that folder and not the one above it — `location` is the group's own path
+  // where `directory` is its parent, which for `tools/ci` is the difference
+  // between reading `ci` and reading `tools`.
+  const folder = path.posix.basename(script.file ? script.location : script.directory);
   return shared || !folder ? path.posix.basename(script.manifest.path) : folder;
 }
 
@@ -2966,9 +3368,14 @@ function runningScriptsOf(node: TreeNode | undefined): ScriptEntry[] {
   if (node?.kind !== 'group') {
     return [];
   }
-  return node.children.flatMap((child) =>
-    child.kind === 'script' && running.has(child.script.key) ? [child.script] : [],
-  );
+  return node.children.flatMap((child) => {
+    // An ecosystem parent and the hidden pile hold groups rather than rows, so
+    // "everything running under this row" has to go the whole way down.
+    if (child.kind === 'group') {
+      return runningScriptsOf(child);
+    }
+    return child.kind === 'script' && running.has(child.script.key) ? [child.script] : [];
+  });
 }
 
 /** Stops everything running in one package group; the rest of the tree keeps going. */
@@ -3372,8 +3779,11 @@ function buildItems(saved: ScriptEntry[]): Item[] {
     }
   }
 
-  // One block per package, keeping the order the scan produced.
-  const blocks = new Map<string, { label: string; items: Item[] }>();
+  // One block per package, keeping the order the scan produced — which in
+  // `ecosystem` mode is already gathered into one run per ecosystem, since
+  // `savedOrder` did the gathering. That is what keeps this list and the tree in
+  // the same order without either of them knowing about the other.
+  const blocks = new Map<string, { label: string; ecosystem: Ecosystem; items: Item[] }>();
   for (const script of scripts) {
     if (starred.has(script.key)) {
       continue;
@@ -3381,7 +3791,7 @@ function buildItems(saved: ScriptEntry[]): Item[] {
     const key = script.manifest.toString();
     let block = blocks.get(key);
     if (!block) {
-      block = { label: packageLabel(script), items: [] };
+      block = { label: packageLabel(script), ecosystem: ecosystemOf(script.kind), items: [] };
       blocks.set(key, block);
     }
     block.items.push(scriptItem(script, false));
@@ -3392,10 +3802,17 @@ function buildItems(saved: ScriptEntry[]): Item[] {
   // single-package workspace, where on their own they would be pure noise.
   const headings = multiPackage || items.length > 0;
 
+  const nested = hierarchical();
+  let previous: Ecosystem | undefined;
   for (const block of blocks.values()) {
     if (headings) {
-      items.push(separator(block.label));
+      // The ecosystem names the head of its run and nothing after it. Repeating
+      // it on every separator would be the same noise the tree avoids by not
+      // printing the workspace name down the whole column of headings.
+      const opens = nested && block.ecosystem !== previous;
+      items.push(separator(opens ? `${ECOSYSTEMS[block.ecosystem].label} · ${block.label}` : block.label));
     }
+    previous = block.ecosystem;
     items.push(...block.items);
   }
 

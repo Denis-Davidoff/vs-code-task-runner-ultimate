@@ -1,4 +1,4 @@
-import { JUST_RECIPE, MAKE_TARGET, SourceKind } from './sources';
+import { JUST_RECIPE, MAKE_TARGET, SourceKind, yamlBlockKeys } from './sources';
 
 /**
  * Where a task is written down in its manifest: a zero-based line, and the span
@@ -37,6 +37,12 @@ export function locateTask(text: string, kind: SourceKind, name: string): TaskLo
       return jsonKey(text, ['tasks', name]);
     case 'cargo':
     case 'go':
+    // A compose row is a subcommand, not an entry anyone wrote — and the shell
+    // rows name a file rather than a line inside one, which the caller opens
+    // directly. Both are spelled out rather than left to the `default:` below,
+    // which would hand them to `loose` and point the editor at a wrong line.
+    case 'docker-compose':
+    case 'shell':
       return undefined;
     case 'cargo-make':
     case 'mise':
@@ -54,7 +60,7 @@ export function locateTask(text: string, kind: SourceKind, name: string): TaskLo
     case 'just':
       return justRecipe(lines, name);
     case 'taskfile':
-      return taskfileTask(lines, name);
+      return yamlKey(lines, 'tasks', name);
     default:
       return loose(lines, name);
   }
@@ -410,39 +416,18 @@ function justRecipe(lines: ReadonlyArray<string>, name: string): TaskLocation | 
 }
 
 /**
- * The key of a task inside the top-level `tasks:` block, located the way
- * `parseTaskfile` reads it: by indentation, since the names are all that is
- * wanted and a YAML parser is not worth shipping for them.
+ * The key of an entry inside a named top-level block — go-task's `tasks:`, and
+ * whatever else comes to want one. It is `yamlBlockKeys` itself that does the
+ * walking, so the line this opens is found by the same rule that put the name in
+ * the list rather than by a second reading of the same indentation.
  */
-function taskfileTask(lines: ReadonlyArray<string>, name: string): TaskLocation | undefined {
-  const start = lines.findIndex((line) => /^tasks:\s*(#.*)?$/.test(line));
-  if (start < 0) {
-    return undefined;
-  }
-
-  let indent: number | undefined;
-  for (let index = start + 1; index < lines.length; index++) {
-    const line = lines[index];
-    if (!line.trim() || line.trimStart().startsWith('#')) {
-      continue;
-    }
-    const width = line.length - line.trimStart().length;
-    if (width === 0) {
-      break;
-    }
-    if (indent === undefined) {
-      indent = width;
-    }
-    if (width > indent) {
-      continue;
-    }
-    const key = /^(.*?):(\s|$)/.exec(line.trim());
-    if (key && key[1].trim().replace(/^["']|["']$/g, '') === name) {
-      return on(lines, index, name);
-    }
-  }
-
-  return undefined;
+function yamlKey(
+  lines: ReadonlyArray<string>,
+  block: string,
+  name: string,
+): TaskLocation | undefined {
+  const found = yamlBlockKeys(lines, block).find((entry) => entry.name === name);
+  return found ? on(lines, found.line, name) : undefined;
 }
 
 /**

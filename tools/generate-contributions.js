@@ -344,7 +344,9 @@ const inTree = 'view =~ /^taskRunnerUltimate\\.(tree|explorer)$/';
 // four states without letting similarly prefixed context values slip through.
 const PACKAGE = '/^group:package(:running)?$/';
 const HIDDEN_PACKAGE = '/^group:package:hidden(:running)?$/';
-const RUNNING_PACKAGE = '/^group:package(:hidden)?:running$/';
+// An ecosystem parent holds groups rather than rows, but it still has things
+// running under it, so it gets the stop-all and restart-all buttons too.
+const RUNNING_PACKAGE = '/^group:(package(:hidden)?|eco):running$/';
 const PACKAGE_ROW = 'group:package(:hidden)?(:running)?';
 const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
@@ -565,10 +567,23 @@ const MANIFEST_FILES = [
   'go.mod',
   'mise.toml',
   '.mise.toml',
+  'docker-compose.yml',
+  'docker-compose.yaml',
+  'compose.yml',
+  'compose.yaml',
 ];
+
+/*
+ * Shell scripts have no file name to wake on, so the two conventional folders
+ * are named instead. Deliberately narrow, and deliberately not `**\/*.sh`: that
+ * one matches in very nearly every repository, and an extension that wakes up
+ * everywhere is an extension nobody can account for.
+ */
+const SHELL_FOLDERS = ['scripts/*.sh', 'bin/*.sh'];
 
 manifest.activationEvents = [
   ...MANIFEST_FILES.map((file) => `workspaceContains:**/${file}`),
+  ...SHELL_FOLDERS.map((glob) => `workspaceContains:${glob}`),
   'onTaskType:taskRunnerUltimate',
   'onView:taskRunnerUltimate.tree',
   'onView:taskRunnerUltimate.explorer',
