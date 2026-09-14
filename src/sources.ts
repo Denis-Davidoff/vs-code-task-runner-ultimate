@@ -1576,7 +1576,14 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
   }
   const glob = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
   const files = await vscode.workspace.findFiles(glob, exclude, MAX_SHELL_SCRIPTS);
-  files.sort((a, b) => a.fsPath.localeCompare(b.fsPath));
+  // By directory first, so a group's scripts are one run and the shallower
+  // folders come first — the same shape the manifest sort above produces — and
+  // alphabetically inside one, which is the order a folder is read in.
+  files.sort((a, b) => {
+    const left = path.posix.dirname(a.path);
+    const right = path.posix.dirname(b.path);
+    return left.length - right.length || left.localeCompare(right) || a.path.localeCompare(b.path);
+  });
 
   const runner = shellRunner();
   const entries: ScriptEntry[] = [];

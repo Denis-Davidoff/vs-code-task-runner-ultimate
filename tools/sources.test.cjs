@@ -13,22 +13,36 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-function harness({ settings = {}, present = [] } = {}) {
+/** A URI as much as the scan ever asks one to be. */
+function uri(at) {
+  return { path: at, fsPath: at, toString: () => `file://${at}`, with: (c) => uri(c.path ?? at) };
+}
+
+/**
+ * @param present  files `exists` should find, by path
+ * @param found    what `findFiles` hands back, by path
+ * @param root     the workspace folder every file is inside, or none at all
+ */
+function harness({ settings = {}, present = [], found = [], root } = {}) {
   const onDisk = new Set(present);
+  const contents = found && !Array.isArray(found) ? found : Object.fromEntries((found ?? []).map((at) => [at, '']));
   const vscode = {
     workspace: {
       getConfiguration: () => ({ get: (key) => settings[key] }),
+      getWorkspaceFolder: () => (root ? { uri: uri(root) } : undefined),
+      findFiles: async () => Object.keys(contents).map(uri),
       fs: {
-        stat: async (uri) => {
-          if (!onDisk.has(uri.path)) {
-            throw new Error(`no such file: ${uri.path}`);
+        stat: async (target) => {
+          if (!onDisk.has(target.path)) {
+            throw new Error(`no such file: ${target.path}`);
           }
           return {};
         },
+        readFile: async (target) => Buffer.from(contents[target.path] ?? '', 'utf8'),
       },
     },
     Uri: {
-      joinPath: (uri, ...parts) => ({ path: [uri.path, ...parts].join('/') }),
+      joinPath: (target, ...parts) => ({ path: [target.path, ...parts].join('/') }),
     },
   };
   const context = vm.createContext({
@@ -39,7 +53,7 @@ function harness({ settings = {}, present = [] } = {}) {
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, composeOverride };
+    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, composeOverride, collectShellScripts };
   `,
     context,
   );
@@ -189,4 +203,71 @@ test('composeOverride names the file compose would have merged', () => {
   const { composeOverride } = harness();
   assert.equal(composeOverride('docker-compose.yml'), 'docker-compose.override.yml');
   assert.equal(composeOverride('compose.yaml'), 'compose.override.yaml');
+});
+
+// --- the shell scan ----------------------------------------------------------
+
+test('the shell scan groups by directory and runs from the workspace root', async () => {
+  const { collectShellScripts } = harness({
+    root: '/repo',
+    found: {
+      '/repo/scripts/deploy.sh': '#!/usr/bin/env bash\n# Ship it.\n',
+      '/repo/scripts/ci/lint.sh': '',
+      '/repo/release.sh': '',
+    },
+  });
+  const rows = plain(await collectShellScripts('**/none'));
+
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.location, row.directory]),
+    [
+      // Shallower folders first, and a group's scripts in one run: the directory
+      // is the group, so `scripts/ci` is a heading of its own rather than a row
+      // under `scripts`.
+      ['release.sh', 'repo', ''],
+      ['deploy.sh', 'scripts', ''],
+      ['lint.sh', 'scripts/ci', 'scripts'],
+    ],
+  );
+  // The path is relative to the workspace folder root, which is also the cwd —
+  // that is where a `scripts/*.sh` is written to be run from.
+  assert.deepEqual(
+    rows.map((row) => row.argv),
+    [
+      ['bash', './release.sh'],
+      ['bash', './scripts/deploy.sh'],
+      ['bash', './scripts/ci/lint.sh'],
+    ],
+  );
+  assert.deepEqual(
+    rows.map((row) => row.cwd.path),
+    ['/repo', '/repo', '/repo'],
+  );
+  // The manifest is the directory, which is what the group's ref is read off,
+  // and `file` is the script the row actually opens.
+  assert.equal(rows[1].manifest.path, '/repo/scripts');
+  assert.equal(rows[1].file.path, '/repo/scripts/deploy.sh');
+  // The first comment written for a person becomes the dimmed text; a file with
+  // nothing to say falls back to the command.
+  assert.equal(rows[1].command, 'Ship it.');
+  assert.equal(rows[2].command, 'bash ./scripts/ci/lint.sh');
+});
+
+test('the shell scan honours an empty runner and a narrowed pattern list', async () => {
+  const { collectShellScripts } = harness({
+    root: '/repo',
+    settings: { shellRunner: '  ', shellScripts: ['bin/*.sh'] },
+    found: { '/repo/bin/build.sh': '' },
+  });
+  const rows = plain(await collectShellScripts('**/none'));
+  assert.deepEqual(rows[0].argv, ['./bin/build.sh']);
+});
+
+test('the shell scan reads nothing at all when the pattern list is emptied', async () => {
+  const { collectShellScripts } = harness({
+    root: '/repo',
+    settings: { shellScripts: [] },
+    found: { '/repo/bin/build.sh': '' },
+  });
+  assert.deepEqual(plain(await collectShellScripts('**/none')), []);
 });
