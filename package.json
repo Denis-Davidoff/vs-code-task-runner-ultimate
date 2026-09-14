@@ -88,6 +88,10 @@
     "workspaceContains:**/docker-compose.yaml",
     "workspaceContains:**/compose.yml",
     "workspaceContains:**/compose.yaml",
+    "workspaceContains:**/compose.*.yml",
+    "workspaceContains:**/compose.*.yaml",
+    "workspaceContains:**/docker-compose.*.yml",
+    "workspaceContains:**/docker-compose.*.yaml",
     "workspaceContains:scripts/*.sh",
     "workspaceContains:bin/*.sh",
     "onTaskType:taskRunnerUltimate",
@@ -852,7 +856,7 @@
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Compose subcommands listed for every compose file, since a compose file declares services rather than tasks. Known names (`up`, `down`, `build`, `logs`, `ps`, `start`, `stop`, `restart`, `pull`, `config`) get their usual flags — `logs` is followed, so the row keeps running — and anything else runs as `docker compose <name>`.\n\n`up` is special: it lists a bare row for the whole file plus one `up: <service>` row per service, whenever the file declares more than one.\n\nNothing here is ever run detached. A `-d` row would exit the moment it started, leaving the containers up and Stop with nothing to stop.\n\nEvery row passes `-f <file>`, plus a second `-f` for the `*.override.*` file beside it when there is one — which is the merge compose would have done on its own."
+          "markdownDescription": "Compose subcommands listed for every compose file, since a compose file declares services rather than tasks. Known names (`up`, `down`, `build`, `logs`, `ps`, `start`, `stop`, `restart`, `pull`, `config`) get their usual flags — `logs` is followed, so the row keeps running — and anything else runs as `docker compose <name>`.\n\n`up` is special: it lists a bare row for the whole file plus one `up: <service>` row per service, whenever the file declares more than one.\n\nNothing here is ever run detached. A `-d` row would exit the moment it started, leaving the containers up and Stop with nothing to stop.\n\nEvery row passes `-f <file>`. For the four names compose picks by itself — `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml` — a second `-f` is added for the first `*.override.*` file beside it, which is the merge compose would have done. A profile-named file such as `docker-compose.dev.yml` gets none: that merge is something compose does to the file it chose for itself.\n\nProfile-named compose files (`docker-compose.dev.yml`, `compose.prod.yaml`) are found too, and each is a heading of its own. One of those is only believed once it shows a `services:` or `include:` block, since nothing inside a YAML file otherwise says that it is compose."
         },
         "taskRunnerUltimate.shellScripts": {
           "type": "array",
@@ -890,10 +894,10 @@
           ],
           "default": "flat",
           "enumDescriptions": [
-            "One row per manifest, all at the top level.",
+            "One row per manifest, with compose files and script folders inside the project they serve.",
             "One row per ecosystem, with that ecosystem’s manifests inside it."
           ],
-          "markdownDescription": "How the package headings are arranged, in the tree and in the dropdown alike. `ecosystem` gathers the manifests of each language or runner under a row of their own, which is what a polyglot repository reads better as; the order inside a run is still yours to drag.\n\nAlso on the ☰ menu, as **Group by ecosystem**."
+          "markdownDescription": "How the package headings are arranged, in the tree and in the dropdown alike.\n\n`flat` keeps one row per manifest and folds each compose file and script folder in under the nearest project above it, so the infrastructure of a package sits inside that package.\n\n`ecosystem` gathers the manifests of each language or runner under a row of their own — there a compose file is filed under Docker rather than under the package it serves, because that is the question that mode answers.\n\nAlso on the ☰ menu, as **Group by ecosystem**."
         },
         "taskRunnerUltimate.groupIcons": {
           "type": "string",
@@ -903,10 +907,10 @@
           ],
           "default": "type",
           "enumDescriptions": [
-            "Each heading wears its ecosystem’s glyph, in that ecosystem’s colour.",
+            "Each heading wears its ecosystem’s glyph.",
             "Every heading wears the same stack glyph."
           ],
-          "markdownDescription": "What a package heading is drawn with. `type` is what tells a Node heading from a Rust one at a glance; `uniform` is the quieter column the tree used to have, for when the headings should stay out of the way of the rows under them.\n\nAn icon picked by hand on a row wins over both."
+          "markdownDescription": "What a package heading is drawn with. `type` is what tells a Node heading from a Rust one at a glance; `uniform` is the quieter column the tree used to have, for when the headings should stay out of the way of the rows under them.\n\nThe glyph only — a heading is coloured when you paint it, and otherwise wears the same colour as every other heading. An icon picked by hand on a row wins over both."
         },
         "taskRunnerUltimate.categories": {
           "type": "array",
@@ -1030,116 +1034,6 @@
           "light": "#767676",
           "highContrast": "#B0B0B0",
           "highContrastLight": "#5A5A5A"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.node",
-        "description": "Colour of the Node headings (package.json and deno.json(c)) and of the Node row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#E05A5A",
-          "light": "#CB3837",
-          "highContrast": "#FF8A8A",
-          "highContrastLight": "#A5231F"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.rust",
-        "description": "Colour of the Rust headings (Cargo.toml and Makefile.toml) and of the Rust row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#E8A33D",
-          "light": "#B7500A",
-          "highContrast": "#FFBE5C",
-          "highContrastLight": "#8A3B00"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.python",
-        "description": "Colour of the Python headings (pyproject.toml, Pipfile, tox.ini, noxfile) and of the Python row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#4B8BBE",
-          "light": "#2B6CA3",
-          "highContrast": "#79B8E8",
-          "highContrastLight": "#17456B"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.make",
-        "description": "Colour of the Make headings (Makefile and friends) and of the Make row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#C08A5E",
-          "light": "#8A5A2B",
-          "highContrast": "#DDA97A",
-          "highContrastLight": "#6B4218"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.just",
-        "description": "Colour of the just headings (justfile and friends) and of the just row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#E3C05C",
-          "light": "#9A7B10",
-          "highContrast": "#FFE08A",
-          "highContrastLight": "#6E5700"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.task",
-        "description": "Colour of the go-task headings (Taskfile.yml and friends) and of the go-task row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#4DB6AC",
-          "light": "#00796B",
-          "highContrast": "#7FD9CF",
-          "highContrastLight": "#00544A"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.go",
-        "description": "Colour of the Go headings (go.mod) and of the Go row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#5DC9E2",
-          "light": "#007D9C",
-          "highContrast": "#8EDFF0",
-          "highContrastLight": "#005A70"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.php",
-        "description": "Colour of the PHP headings (composer.json) and of the PHP row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#9B8CE0",
-          "light": "#5C5FA8",
-          "highContrast": "#BFB3FF",
-          "highContrastLight": "#3F4280"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.mise",
-        "description": "Colour of the mise headings (mise.toml and .mise.toml) and of the mise row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#E28FC0",
-          "light": "#A8437E",
-          "highContrast": "#FFB0D8",
-          "highContrastLight": "#7A2A59"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.docker",
-        "description": "Colour of the Docker headings (docker-compose.yml and friends) and of the Docker row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#3FA8E8",
-          "light": "#1A6FB5",
-          "highContrast": "#7FCBFF",
-          "highContrastLight": "#114F82"
-        }
-      },
-      {
-        "id": "taskRunnerUltimate.ecosystem.shell",
-        "description": "Colour of the Shell headings (scripts under scripts/, bin/ and the root) and of the Shell row in the Task & Script Explorer view.",
-        "defaults": {
-          "dark": "#6FC26F",
-          "light": "#2F7D32",
-          "highContrast": "#9BE39B",
-          "highContrastLight": "#1B5E20"
         }
       },
       {

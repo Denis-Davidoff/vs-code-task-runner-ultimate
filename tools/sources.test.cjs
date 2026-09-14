@@ -53,7 +53,7 @@ function harness({ settings = {}, present = [], found = [], root } = {}) {
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, composeOverride, collectShellScripts };
+    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts };
   `,
     context,
   );
@@ -199,10 +199,57 @@ test('parseCompose returns nothing at all for an empty command list', async () =
   assert.equal(await parseCompose(COMPOSE, 'docker-compose.yml', cwd), undefined);
 });
 
-test('composeOverride names the file compose would have merged', () => {
-  const { composeOverride } = harness();
-  assert.equal(composeOverride('docker-compose.yml'), 'docker-compose.override.yml');
-  assert.equal(composeOverride('compose.yaml'), 'compose.override.yaml');
+test('the override is matched by compose order, not by the base file extension', async () => {
+  // compose searches its own four spellings whatever the base file is called, so
+  // `compose.yaml` beside `compose.override.yml` is a pair it merges.
+  const { parseCompose } = harness({ present: ['/repo/compose.override.yml'] });
+  const parsed = await parseCompose(COMPOSE, 'compose.yaml', cwd);
+  assert.deepEqual(plain(parsed.tasks[0].argv), [
+    'docker',
+    'compose',
+    '-f',
+    'compose.yaml',
+    '-f',
+    'compose.override.yml',
+    'up',
+  ]);
+});
+
+test('a profile-named compose file gets no override merged into it', async () => {
+  // The merge is something compose does to the file it chose for itself, and
+  // `docker-compose.dev.yml` is never that file.
+  const { parseCompose } = harness({ present: ['/repo/docker-compose.override.yml'] });
+  const parsed = await parseCompose(COMPOSE, 'docker-compose.dev.yml', cwd);
+  assert.deepEqual(plain(parsed.tasks[0].argv), [
+    'docker',
+    'compose',
+    '-f',
+    'docker-compose.dev.yml',
+    'up',
+  ]);
+});
+
+test('a profile-named file is believed only once it looks like compose', async () => {
+  const { parseCompose } = harness();
+  // No `services:` and no `include:` — a YAML file that merely matched a name.
+  assert.equal(await parseCompose('jobs:\n  build:\n    runs-on: ubuntu\n', 'compose.ci.yml', cwd), undefined);
+  // The four default names are trusted on the name alone.
+  const parsed = await parseCompose('version: "3"\n', 'docker-compose.yml', cwd);
+  assert.deepEqual(plain(parsed.tasks.map((task) => task.name)), ['up', 'down', 'build', 'logs', 'ps']);
+});
+
+test('manifestKind recognises the profile-named compose files and only those', () => {
+  const { manifestKind } = harness();
+  const kind = (name) => manifestKind({ path: `/repo/${name}` });
+  for (const name of ['docker-compose.yml', 'compose.yaml', 'docker-compose.dev.yml', 'compose.prod.yaml']) {
+    assert.equal(kind(name), 'docker-compose', name);
+  }
+  // An override is read as part of the file beside it, never as a group.
+  assert.equal(kind('docker-compose.override.yml'), undefined);
+  assert.equal(kind('compose.override.yaml'), undefined);
+  // `compose` has to be followed by a dot, so this is not one.
+  assert.equal(kind('composer.yml'), undefined);
+  assert.equal(kind('deploy.staging.yml'), undefined);
 });
 
 // --- the shell scan ----------------------------------------------------------

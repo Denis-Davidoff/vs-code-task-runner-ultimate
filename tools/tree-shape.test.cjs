@@ -128,6 +128,25 @@ function script(manifest, name, kind) {
 }
 
 /**
+ * A shell row as `collectShellScripts` builds one: the group is the directory,
+ * and `file` is the script inside it.
+ */
+function shell(directory, name) {
+  const location = directory.replace(/^\/+/, '') || path.posix.basename(directory);
+  return {
+    key: `file://${directory}::${name}`,
+    name,
+    command: name,
+    manifest: uri(directory),
+    file: uri(`${directory}/${name}`),
+    kind: 'shell',
+    cwd: uri('/repo'),
+    location,
+    directory: location.includes('/') ? location.slice(0, location.lastIndexOf('/')) : '',
+  };
+}
+
+/**
  * The headings a set of roots names, top to bottom.
  *
  * The spread is load-bearing: everything the tree builds is constructed inside
@@ -247,7 +266,9 @@ test('an ecosystem row is its own kind of row, idle and running', () => {
   assert.equal(idle.contextValue, 'group:eco');
   assert.equal(idle.id, 'group:eco:node');
   assert.equal(idle.iconPath.id, 'package');
-  assert.equal(idle.iconPath.color.id, 'taskRunnerUltimate.ecosystem.node');
+  // The glyph says which ecosystem it is; the colour is the one every heading
+  // wears unless somebody painted this one.
+  assert.equal(idle.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
 
   // Something alive two levels down still puts the buttons on the parent.
   h.running.set(API.key, { task: { name: 'start' } });
@@ -259,7 +280,7 @@ test('a manifest heading wears its type icon, and the uniform one when told to',
   const typed = harness({ settings: { groupIcons: 'type' } });
   const typedRow = typed.treeItemFor(typed.buildTreeRoots([ENGINE])[0]);
   assert.equal(typedRow.iconPath.id, 'gear');
-  assert.equal(typedRow.iconPath.color.id, 'taskRunnerUltimate.ecosystem.rust');
+  assert.equal(typedRow.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
 
   const uniform = harness({ settings: { groupIcons: 'uniform' } });
   const uniformRow = uniform.treeItemFor(uniform.buildTreeRoots([ENGINE])[0]);
@@ -273,9 +294,86 @@ test('a colour picked by hand outranks the ecosystem colour', () => {
   assert.equal(row.iconPath.color.id, 'taskRunnerUltimate.palette.teal');
 });
 
-test('colorIcons off leaves the glyph but takes the ecosystem tint', () => {
-  const h = harness({ settings: { colorIcons: false } });
-  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
-  assert.equal(row.iconPath.id, 'gear');
-  assert.equal(row.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
+test('no heading is tinted by what kind of thing it is', () => {
+  // A colour nobody chose on every heading is the one job the paint is for, so
+  // the ecosystem decides the glyph and never the colour.
+  const h = harness({ settings: { grouping: 'ecosystem' } });
+  const roots = h.buildTreeRoots([WEB, API, ENGINE]);
+  for (const row of [h.treeItemFor(roots[0]), h.treeItemFor(roots[0].children[0])]) {
+    assert.equal(row.iconPath.color.id, 'taskRunnerUltimate.sourceTitleForeground');
+  }
+});
+
+// --- what a project takes in with it -----------------------------------------
+
+const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
+const ROOT = script('/repo/package.json', 'dev', 'npm');
+const SCRIPTS = shell('/repo/scripts', 'deploy.sh');
+const LOOSE = shell('/repo', 'release.sh');
+
+test('flat mode draws compose and script folders inside the project they serve', () => {
+  const { buildTreeRoots } = harness({ settings: { grouping: 'flat' } });
+  const roots = buildTreeRoots([ROOT, COMPOSE, SCRIPTS, LOOSE]);
+  assert.deepEqual(ids(roots), ['group:file:///repo/package.json']);
+
+  const inside = roots[0].children;
+  // The project's own tasks first, then what sits around it.
+  assert.deepEqual(
+    [...inside].map((node) => (node.kind === 'group' ? node.id : `script:${node.script.name}`)),
+    ['script:dev', 'group:file:///repo/docker-compose.yml', 'group:file:///repo/scripts', 'group:file:///repo'],
+  );
+  // A compose file is named by its file, and drops the path the heading above
+  // has already said.
+  assert.equal(inside[1].place, 'docker-compose.yml');
+  assert.equal(inside[1].folder, undefined);
+  // A script folder is named by where it sits relative to the project, and
+  // `shell` is what is left when that is the project's own folder.
+  assert.equal(inside[2].place, 'scripts');
+  assert.equal(inside[3].place, 'shell');
+});
+
+test('what a project takes in does not make its folder look crowded', () => {
+  const { buildTreeRoots } = harness({ settings: { grouping: 'flat' } });
+  // A compose file and a script folder sitting beside an unnamed package.json
+  // used to count as a second manifest in that folder, which renames every
+  // heading there after its file. Neither competes for the folder's name.
+  const unnamed = { ...ROOT, packageName: undefined };
+  const roots = buildTreeRoots([unnamed, COMPOSE, LOOSE]);
+  // Its folder, as an uncrowded heading is named — not `package.json`, and not
+  // the manifest path that a crowded one shows after the bullet.
+  assert.equal(roots[0].place, 'repo');
+  assert.equal(roots[0].folder, 'repo');
+  assert.notEqual(roots[0].detail, roots[0].folder);
+});
+
+test('a compose file with no project above it stays a heading of its own', () => {
+  const { buildTreeRoots } = harness({ settings: { grouping: 'flat' } });
+  // A Makefile is a task runner, not a statement that the folder is a project.
+  assert.deepEqual(ids(buildTreeRoots([TOOLS, COMPOSE])), [
+    'group:file:///repo/Makefile',
+    'group:file:///repo/docker-compose.yml',
+  ]);
+});
+
+test('a project takes in what sits in the folders below it, not beside it', () => {
+  const { buildTreeRoots } = harness({ settings: { grouping: 'flat' } });
+  const nested = script('/repo/apps/web/package.json', 'dev', 'npm');
+  const theirs = shell('/repo/apps/web/scripts', 'build.sh');
+  const roots = buildTreeRoots([ROOT, nested, theirs, SCRIPTS]);
+  assert.deepEqual(ids(roots), [
+    'group:file:///repo/package.json',
+    'group:file:///repo/apps/web/package.json',
+  ]);
+  // Each script folder went to the nearest project above it, not to the root.
+  assert.deepEqual(ids(roots[0].children.slice(1)), ['group:file:///repo/scripts']);
+  assert.deepEqual(ids(roots[1].children.slice(1)), ['group:file:///repo/apps/web/scripts']);
+});
+
+test('ecosystem mode files compose and shell by what they are, not by whom they serve', () => {
+  const { buildTreeRoots } = harness({ settings: { grouping: 'ecosystem' } });
+  const roots = buildTreeRoots([ROOT, COMPOSE, SCRIPTS]);
+  assert.deepEqual(ids(roots), ['group:eco:node', 'group:eco:docker', 'group:eco:shell']);
+  // The compose file itself is what the Docker row opens into.
+  assert.deepEqual(ids(roots[1].children), ['group:file:///repo/docker-compose.yml']);
+  assert.equal(roots[1].children[0].place, 'docker-compose.yml');
 });

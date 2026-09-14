@@ -145,7 +145,7 @@ monorepo.
 | **Go** | `go.mod` | the standard subcommands | `go test ./...`, … |
 | **PHP** | `composer.json` | `scripts` | `composer run-script <name>` |
 | **mise** | `mise.toml`, `.mise.toml` | `[tasks.*]` | `mise run <name>` |
-| **Docker** | `docker-compose.yml`, `compose.yml` and their `.yaml` spellings | `services:` — see [below](#docker-compose) | `docker compose -f <file> up <service>`, … |
+| **Docker** | `compose.yml`, `docker-compose.yml`, their `.yaml` spellings, and profile names like `docker-compose.dev.yml` | `services:` — see [below](#docker-compose) | `docker compose -f <file> up <service>`, … |
 | **Shell** | `scripts/**/*.sh`, `bin/**/*.sh`, `*.sh` | the files themselves — see [below](#shell-scripts) | `bash ./scripts/deploy.sh` |
 
 Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's files are never
@@ -222,11 +222,23 @@ which would leave the row idle with the containers still up and the ■ button w
 And `logs` is always followed (`logs -f`) for the same reason. If you want a detached `up`, that is
 a terminal command, not a row that lies about its own state.
 
+**Which files count.** The four names compose picks for itself — `compose.yaml`, `compose.yml`,
+`docker-compose.yaml`, `docker-compose.yml` — are compose files by name alone. Beyond those, the
+profile-named ones are found too: `docker-compose.dev.yml`, `compose.prod.yaml`,
+`docker-compose.ci.yml`, each a heading of its own. Nothing inside a YAML file says "I am compose",
+so a name matched that way is only believed once the file shows a top-level `services:` or
+`include:` block — which is what keeps a `deploy.staging.yml` out, and `composer.yml` is turned away
+on the name alone. An `*.override.*` file is never a heading: it is read as part of the file beside
+it.
+
 Every row passes `-f <file>`, because what the scan saw is not what compose would pick — it has its
-own precedence across four spellings. Passing `-f` turns off the automatic merge of
-`docker-compose.override.yml`, though, and that file is a live development workflow, so the matching
-override beside the manifest is looked for and appended as a second `-f`: the merge compose would
-have done, spelled out.
+own precedence across those four names. Passing `-f` turns off the automatic merge of the override
+file, though, and that file is a live development workflow, so the first `*.override.*` beside the
+manifest is appended as a second `-f`: the merge compose would have done, spelled out. Note that
+compose searches its four override spellings in its own order whatever the base file is called, so
+`compose.yaml` beside `compose.override.yml` is a pair — and that this only applies to the four
+default names. A `docker-compose.dev.yml` gets no override, because the merge is something compose
+does to the file it chose for itself.
 
 `taskRunnerUltimate.dockerCompose` chooses between `docker compose` (the default — the v1 binary has
 been end-of-life since July 2023) and `docker-compose`. There is no `auto`: the only honest way to
@@ -237,7 +249,8 @@ tell them apart is to run `docker compose version`, and a scan never starts a pr
 Every `.sh` under `scripts/`, under `bin/`, or in the root of a workspace folder becomes a row,
 grouped under **the directory it lives in** — twelve scripts across two folders are two headings,
 not twelve one-row headings. `taskRunnerUltimate.shellScripts` is the list of globs, relative to each
-workspace folder, so `*.sh` means the root level alone.
+workspace folder, so `*.sh` means the root level alone. Each of those headings is then drawn
+[inside the nearest project above it](#what-a-project-takes-in-with-it).
 
 The dimmed text is the first comment line in the file written for a person — the shebang, and the
 `# shellcheck`, `# vim:` and `# -*-` pragmas under it, are skipped:
@@ -260,8 +273,14 @@ what would break Remote SSH and Dev Containers. The convention is the signal ins
 `scripts/`, `bin/` or the root.
 
 At most 200 scripts are read per scan, budgeted apart from the manifests so a repository full of
-them cannot crowd out real tasks. This is the one source that ships enabled *and* changes an existing
-tree on upgrade; `shell` out of `taskRunnerUltimate.sources` is the way back.
+them cannot crowd out real tasks. Because that cap and those globs decide what is *seen* rather than
+what exists, a shell row is never grounds for forgetting a star, a rename or a colour — unlike a
+manifest, whose contents are read whole, a script missing from the list may only have been narrowed
+out. The cost is the one this extension always pays here: a script deleted for real keeps its marks,
+exactly as a package behind a closed workspace folder does.
+
+This is the one source that ships enabled *and* changes an existing tree on upgrade; `shell` out of
+`taskRunnerUltimate.sources` is the way back.
 
 ## Where the button appears
 
@@ -293,7 +312,8 @@ there is the activity bar view, plus the status bar entry and the keyboard short
 The activity bar icon opens a tree with the same content as the dropdown, in this order: the
 [starred tasks](#favorites) first, as loose rows with no heading over them, then **OTHER TASKS** —
 anything running that this extension did not start — then one group per manifest, in the order the
-scan found them in and [your drags](#reordering-rows) put them in. Nothing moves because something
+scan found them in and [your drags](#reordering-rows) put them in, each with its own compose files
+and script folders [inside it](#what-a-project-takes-in-with-it). Nothing moves because something
 started: neither the groups nor the rows inside them — a running task spins in the place it has
 always had, because a row that jumps when you start it is a row you have to find again to stop it. Set
 `taskRunnerUltimate.pinRunningTasks` to `true` if you would rather have the opposite: running tasks
@@ -302,11 +322,51 @@ a row runs it, clicking a running one goes to its terminal, and a double click s
 and hovering one reveals inline ☆ / ▶ / ⟳ / ■ buttons. The count of running tasks rides on the activity bar icon as a real VS Code
 badge.
 
-Each heading wears its ecosystem's own glyph and colour — a red package for Node, an orange gear for
-Rust, a green `terminal-bash` for shell — so a polyglot repository says which row is which without
-being read. `taskRunnerUltimate.groupIcons: "uniform"` puts the single stack glyph back on all of
-them, for when the headings should stay out of the way of the rows under them. An icon or colour
-[picked by hand](#painting-a-row) on a row always wins over both.
+Each heading wears its ecosystem's own glyph — a package for Node, a gear for Rust, `terminal-bash`
+for shell — so a polyglot repository says which row is which without being read.
+`taskRunnerUltimate.groupIcons: "uniform"` puts the single stack glyph back on all of them, for when
+the headings should stay out of the way of the rows under them.
+
+The glyph and nothing else: a heading is coloured when **you** [paint it](#painting-a-row), and
+otherwise wears the same colour as every other heading. A colour per ecosystem was tried and taken
+out — a colour nobody chose on every row is the one job the paint is for, and eleven tints down one
+column made the headings the loudest thing on screen.
+
+#### What a project takes in with it
+
+A `docker-compose.yml` and a `scripts/` folder describe what is *around* a project rather than
+something beside it — they reach across every folder under the project root — so they are drawn
+inside the project's own heading:
+
+```
+acme • (root)
+  ▶ dev
+  ▶ build
+  🖥 docker-compose.yml
+     ▶ up
+     ▶ up: web
+  💻 scripts
+     ▶ deploy.sh
+  💻 shell
+     ▶ release.sh
+```
+
+Each one looks for the nearest folder **at or above its own** that holds a project manifest —
+`package.json`, `deno.json`, `composer.json`, `Cargo.toml`, `pyproject.toml` or `go.mod` — and goes
+under that. In a monorepo `apps/web/scripts/*.sh` therefore lands in `apps/web`, not at the root.
+
+A `Makefile`, a `justfile`, a `Taskfile` or a `mise.toml` is a task runner rather than a statement
+that the folder *is* a project, so a folder holding only one of those hosts nothing and the compose
+file keeps a heading of its own — as it does anywhere with no project above it at all.
+
+A compose file is named by its file, since a folder can hold `docker-compose.yml` and
+`docker-compose.dev.yml` at once. A script folder is named by where it sits relative to the project —
+`scripts`, `bin`, `tools/ci` — and `shell` is what is left when that is the project's own folder.
+
+Nothing about this is stored: the relationship is the paths, worked out on every repaint. That is
+also why a drag cannot move one of these rows out of its project — the order would be rewritten and
+the next repaint would put the row straight back, so the drop is refused with a note in the status
+bar instead.
 
 #### Grouping by ecosystem
 
@@ -324,9 +384,16 @@ Rust (1)
   engine • crates/engine
     ▶ run
 Docker (1)
-  acme • docker-compose.yml
+  docker-compose.yml • (root)
     ▶ up
+Shell (1)
+  scripts
+    ▶ deploy.sh
 ```
+
+Here a compose file is filed under **Docker** and a script folder under **Shell**, rather than under
+the package they serve: the question this mode answers is what kind of thing a row is, so the
+nesting above is switched off and the files themselves are what each ecosystem row opens into.
 
 An ecosystem row is a row like any other in the ways that matter: fold it and the fold survives a
 reload, paint it, give it an icon, and stop or restart everything running anywhere under it. It is
@@ -844,8 +911,8 @@ Everything lives under `taskRunnerUltimate.*` and works in user settings as well
 | `openDropdownFromActivityBar` | `false` | Also opens the dropdown whenever the activity bar view is revealed. Off because the view already shows the same list as a tree. |
 | `colorIcons` | `true` | Tints task icons by category. Turn off for plain foreground-coloured icons. |
 | `pinRunningTasks` | `false` | Lifts running tasks to the top of their own group, in the tree and the dropdown. Off because a row that stays put is a row you stop where you started it. |
-| `grouping` | `flat` | `ecosystem` gathers the manifest headings under [a row per ecosystem](#grouping-by-ecosystem). `flat` is the default so that an upgrade does not restructure a sidebar nobody asked to have restructured. |
-| `groupIcons` | `type` | `type` gives each heading its ecosystem's glyph and colour; `uniform` gives every heading the same stack glyph. |
+| `grouping` | `flat` | `flat` keeps one row per manifest and folds compose files and script folders [inside the project they serve](#what-a-project-takes-in-with-it); `ecosystem` gathers the headings under [a row per ecosystem](#grouping-by-ecosystem) instead. |
+| `groupIcons` | `type` | `type` gives each heading its ecosystem's glyph; `uniform` gives every heading the same stack glyph. Neither colours anything. |
 | `categories` | `[]` | Extra category rules, checked *before* the built-in ones. |
 
 The ones worth knowing about in a real project are `sources`, `exclude` and `packageManager`. A

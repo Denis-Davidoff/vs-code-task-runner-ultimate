@@ -574,6 +574,17 @@ const MANIFEST_FILES = [
 ];
 
 /*
+ * Compose is the one kind that is not a fixed list of names — `docker-compose.dev.yml`
+ * and friends are matched by pattern; keep in step with COMPOSE_GLOBS in src/sources.ts.
+ */
+const COMPOSE_GLOBS = [
+  'compose.*.yml',
+  'compose.*.yaml',
+  'docker-compose.*.yml',
+  'docker-compose.*.yaml',
+];
+
+/*
  * Shell scripts have no file name to wake on, so the two conventional folders
  * are named instead. Deliberately narrow, and deliberately not `**\/*.sh`: that
  * one matches in very nearly every repository, and an extension that wakes up
@@ -583,6 +594,7 @@ const SHELL_FOLDERS = ['scripts/*.sh', 'bin/*.sh'];
 
 manifest.activationEvents = [
   ...MANIFEST_FILES.map((file) => `workspaceContains:**/${file}`),
+  ...COMPOSE_GLOBS.map((glob) => `workspaceContains:**/${glob}`),
   ...SHELL_FOLDERS.map((glob) => `workspaceContains:${glob}`),
   'onTaskType:taskRunnerUltimate',
   'onView:taskRunnerUltimate.tree',

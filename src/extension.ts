@@ -14,6 +14,7 @@ import {
   scriptKey,
   ScriptEntry,
   SHELL_GLOB,
+  SourceKind,
   SOURCE_GLOB,
   WATCH_GLOB,
 } from './sources';
@@ -1682,7 +1683,18 @@ async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
   }
   prunedScan = scripts;
 
-  const scanned = new Set([...scripts.map(groupRef), ...emptyManifests().map(manifestRef)]);
+  // The shell groups are left out on purpose, which is the same narrowness the
+  // rest of this rule already has. A manifest is a file that was read, so what
+  // it does not declare is gone; a shell group is a directory whose contents
+  // reached us through `shellScripts` and a 200-file cap, so a script missing
+  // from the list may only have been narrowed out or truncated away. Pruning on
+  // that evidence deletes stars and colours for files that are still on disk.
+  // The cost is the other way round and is the one this rule always pays: a
+  // script deleted for real keeps its marks, as a closed workspace folder does.
+  const scanned = new Set([
+    ...scripts.filter((script) => !script.file).map(groupRef),
+    ...emptyManifests().map(manifestRef),
+  ]);
   const live = new Set(scripts.map(scriptRef));
   const gone = (ref: string): boolean => {
     const group = groupOfRef(ref);
@@ -2057,10 +2069,18 @@ type TreeNode =
       directory?: vscode.Uri;
       /**
        * Which ecosystem the heading belongs to. On a manifest group it decides
-       * the glyph and the tint; on a parent row it is what the row *is*, and is
-       * what a drag reads to work out which block it is moving.
+       * the glyph; on a parent row it is what the row *is*, and is what a drag
+       * reads to work out which block it is moving.
        */
       ecosystem?: Ecosystem;
+      /** What kind of manifest the heading is, for the two rules that turn on it. */
+      source?: SourceKind;
+      /**
+       * The folder the heading occupies — the directory a manifest sits in, and
+       * for a shell group the directory it *is*. What `attachToHosts` matches
+       * projects and their surroundings on.
+       */
+      at?: string;
       /**
        * Whether the row is a heading the user put away — the ones under the pile,
        * and the pile itself. It is what swaps the eye on the row for the one that
@@ -2105,23 +2125,55 @@ const GROUP_ICON = 'layers';
  * `mise` keeps its own casing, which is the rule the rest of the tree already
  * applies to the names a project gives itself.
  *
- * The colours are ids of their own rather than the `palette.*` ten: the palette
- * is what a user paints *with*, and retheming one of those should not silently
- * retheme every Rust heading in the tree.
+ * The glyph and nothing else. A colour per ecosystem was tried and taken out:
+ * every heading in the tree then wore a colour nobody chose, which is the one
+ * job the paint is for — and a column of eleven tints turned the headings into
+ * the loudest thing on screen. A heading is tinted when somebody paints it, and
+ * otherwise wears the title colour like every other heading.
  */
-const ECOSYSTEMS: Record<Ecosystem, { label: string; icon: string; color: string }> = {
-  node: { label: 'Node', icon: 'package', color: 'taskRunnerUltimate.ecosystem.node' },
-  rust: { label: 'Rust', icon: 'gear', color: 'taskRunnerUltimate.ecosystem.rust' },
-  python: { label: 'Python', icon: 'snake', color: 'taskRunnerUltimate.ecosystem.python' },
-  make: { label: 'Make', icon: 'tools', color: 'taskRunnerUltimate.ecosystem.make' },
-  just: { label: 'Just', icon: 'list-ordered', color: 'taskRunnerUltimate.ecosystem.just' },
-  task: { label: 'Task', icon: 'tasklist', color: 'taskRunnerUltimate.ecosystem.task' },
-  go: { label: 'Go', icon: 'symbol-event', color: 'taskRunnerUltimate.ecosystem.go' },
-  php: { label: 'PHP', icon: 'globe', color: 'taskRunnerUltimate.ecosystem.php' },
-  mise: { label: 'mise', icon: 'versions', color: 'taskRunnerUltimate.ecosystem.mise' },
-  docker: { label: 'Docker', icon: 'vm', color: 'taskRunnerUltimate.ecosystem.docker' },
-  shell: { label: 'Shell', icon: 'terminal-bash', color: 'taskRunnerUltimate.ecosystem.shell' },
+const ECOSYSTEMS: Record<Ecosystem, { label: string; icon: string }> = {
+  node: { label: 'Node', icon: 'package' },
+  rust: { label: 'Rust', icon: 'gear' },
+  python: { label: 'Python', icon: 'snake' },
+  make: { label: 'Make', icon: 'tools' },
+  just: { label: 'Just', icon: 'list-ordered' },
+  task: { label: 'Task', icon: 'tasklist' },
+  go: { label: 'Go', icon: 'symbol-event' },
+  php: { label: 'PHP', icon: 'globe' },
+  mise: { label: 'mise', icon: 'versions' },
+  docker: { label: 'Docker', icon: 'vm' },
+  shell: { label: 'Shell', icon: 'terminal-bash' },
 };
+
+/**
+ * The manifests that make a folder a project, and so can take the compose files
+ * and script folders around them in under their own heading.
+ *
+ * The six that give a project a name of its own. A Makefile, a justfile, a
+ * Taskfile and a mise.toml are task runners rather than statements about what
+ * the folder *is*, so a folder holding only one of those is not a project a
+ * compose file could belong to, and the compose file stays a heading of its own.
+ */
+const HOST_KINDS: ReadonlySet<SourceKind> = new Set<SourceKind>([
+  'npm',
+  'deno',
+  'composer',
+  'cargo',
+  'pyproject',
+  'go',
+]);
+
+/**
+ * Whether a heading describes what is *around* a project rather than a project.
+ *
+ * These two are the reason the tree has a second level at all in `flat` mode: a
+ * compose file and a `scripts/` folder span a repository rather than sitting in
+ * it, and reading them as siblings of the packages they serve put a column of
+ * infrastructure between one project and the next.
+ */
+function attachable(kind: SourceKind | undefined): boolean {
+  return kind === 'docker-compose' || kind === 'shell';
+}
 
 /** The id an ecosystem's parent row is built with, and files its fold and colour under. */
 function ecosystemId(ecosystem: Ecosystem): string {
@@ -2400,16 +2452,23 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
         : undefined;
 
   if (block) {
-    // A whole ecosystem moved: it takes the place of the one it was dropped on,
-    // which is the rule every other drop in this tree follows.
-    if (moved.length === 0 || !where || where === block) {
+    // Every heading of this ecosystem, and not only the ones the parent row was
+    // drawing. A hidden package keeps its slot in the saved order and the run's
+    // rank is read off its first member, so leaving one behind would hold the
+    // whole block where it was and the drag would appear to do nothing.
+    const run = current.filter((ref) => ecosystems.get(ref) === block);
+    if (run.length === 0 || !where || where === block) {
       clearHint();
       return;
     }
-    const rest = current.filter((ref) => !moved.includes(ref));
-    const anchor = rest.find((ref) => ecosystems.get(ref) === where);
-    const at = anchor ? rest.indexOf(anchor) : rest.length;
-    await saveGroupOrder([...rest.slice(0, at), ...moved, ...rest.slice(at)]);
+    const rest = current.filter((ref) => !run.includes(ref));
+    // The index in `current` rather than in `rest`, which is what carries the
+    // direction: dropped on a run below, the removal has already shifted every
+    // position down by the size of this one, so the block lands after it. The
+    // same arithmetic a package drop does, for the same reason.
+    const anchor = current.find((ref) => ecosystems.get(ref) === where);
+    const at = anchor ? Math.min(current.indexOf(anchor), rest.length) : rest.length;
+    await saveGroupOrder([...rest.slice(0, at), ...run, ...rest.slice(at)]);
     clearHint();
     repaint();
     return;
@@ -2430,10 +2489,33 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
   // pull it straight back, so the drop would read as nothing having happened —
   // which is worse than a refusal, and a refusal is all there is: the API gives
   // an extension no way to grey out a target under the mouse.
-  const home = ecosystems.get(moved[0]);
-  if (nested && home && where && where !== home) {
+  // In `flat` mode the compose files and script folders are drawn inside the
+  // project they belong to, and that placement is read off the paths rather than
+  // stored — so a drop that would take one out of its project cannot be
+  // honoured: the order would be rewritten and the next repaint would put the
+  // row straight back. Said out loud for the same reason the ecosystem rule is.
+  if (!nested && anchor) {
+    const hosts = await groupHosts();
+    const inside = (ref: string) => hosts.get(ref) ?? '';
+    const from = new Set(moved.map(inside));
+    if (from.size > 1 || !from.has(inside(anchor))) {
+      hint(
+        '$(circle-slash) Not a drop target — this row is drawn inside its project, and moves among the rows there',
+      );
+      return;
+    }
+  }
+
+  // Every dragged heading, not only the first: one gesture can carry a
+  // multi-select spanning two runs, and the refs from the other one would be
+  // spliced into a run `groupedByEcosystem` pulls them straight back out of.
+  const homes = new Set(moved.map((ref) => ecosystems.get(ref)));
+  const [home] = homes;
+  if (nested && where && (homes.size > 1 || home !== where)) {
     hint(
-      `$(circle-slash) Not a drop target — a package moves inside ${ECOSYSTEMS[home].label}, or onto hidden`,
+      homes.size > 1
+        ? '$(circle-slash) Not a drop target — packages from two ecosystems do not move together'
+        : `$(circle-slash) Not a drop target — a package moves inside ${home ? ECOSYSTEMS[home].label : 'its own ecosystem'}, or onto hidden`,
     );
     return;
   }
@@ -2468,6 +2550,39 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
   );
   clearHint();
   repaint();
+}
+
+/**
+ * The project each compose file and script folder is drawn inside of, by ref —
+ * the same walk `attachToHosts` does, over the scan instead of over the rows.
+ *
+ * Over the scan because a drop has to reason about headings the tree is not
+ * drawing: one in the hidden pile keeps its slot in the order a drop rewrites.
+ */
+async function groupHosts(): Promise<Map<string, string>> {
+  const scripts = await savedOrder();
+  const hosts = new Map<string, string>();
+  const sample = new Map<string, ScriptEntry>();
+
+  for (const script of scripts) {
+    const ref = groupRef(script);
+    if (!sample.has(ref)) {
+      sample.set(ref, script);
+    }
+    const folder = manifestFolder(script);
+    if (HOST_KINDS.has(script.kind) && !hosts.has(folder)) {
+      hosts.set(folder, ref);
+    }
+  }
+
+  const attached = new Map<string, string>();
+  for (const [ref, script] of sample) {
+    const host = attachable(script.kind) ? hostOf(manifestFolder(script), hosts) : undefined;
+    if (host) {
+      attached.set(ref, host);
+    }
+  }
+  return attached;
 }
 
 /**
@@ -2721,7 +2836,10 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       // A folder with a second manifest in it — a Cargo.toml beside a Makefile —
       // has two headings that name the same folder, so there the path after the
       // arrow carries the file name that tells them apart.
-      const shared = crowded.has(manifestFolder(script));
+      // A compose file is always titled by its file name, crowded folder or
+      // not: a folder can hold `docker-compose.yml` and `docker-compose.dev.yml`
+      // at once, and the `name:` inside them is as often as not the same word.
+      const shared = crowded.has(manifestFolder(script)) || script.kind === 'docker-compose';
       group = {
         kind: 'group',
         id: `group:${key}`,
@@ -2738,6 +2856,8 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
         // folder rather than failing to open it as a document.
         directory: script.file ? script.manifest : undefined,
         ecosystem: ecosystemOf(script.kind),
+        source: script.kind,
+        at: manifestFolder(script),
         children: [],
       };
       byManifest.set(key, group);
@@ -2765,7 +2885,8 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   //
   // A single manifest gets no parent, mirroring the rule `buildItems` follows
   // for package separators: one heading over one heading says nothing.
-  const roots: TreeNode[] = hierarchical() && shown.length > 1 ? parentRows(shown) : [...shown];
+  const roots: TreeNode[] =
+    hierarchical() && shown.length > 1 ? parentRows(shown) : attachToHosts(shown);
 
   // Tasks that are not backed by a manifest have no group of their own.
   const foreign = foreignExecutions();
@@ -2817,6 +2938,83 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   }
 
   return roots;
+}
+
+/**
+ * The compose files and script folders folded in under the project each of them
+ * belongs to — the `flat` mode's own second level.
+ *
+ * A `docker-compose.yml` and a `scripts/` folder describe the thing around a
+ * project rather than a thing beside it: they reach across every folder under
+ * the project root, which is exactly why a heading of their own, level with the
+ * packages, read as infrastructure wedged between one package and the next. So
+ * each of them looks for the nearest folder at or above its own that holds a
+ * project manifest, and goes inside that project's heading.
+ *
+ * Nothing is stored. The relationship is the paths, so it is computed here every
+ * time and there is no state to go stale, prune or reset — which is also why a
+ * drag cannot move one of these out of its project: see `dropGroups`.
+ *
+ * In `ecosystem` mode this does not run at all. There the question the tree
+ * answers is "what kind of thing is this", and the answer for a compose file is
+ * Docker, not the package it happens to serve.
+ */
+function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] {
+  const hosts = new Map<string, TreeNode & { kind: 'group' }>();
+  for (const group of groups) {
+    if (group.at !== undefined && group.source && HOST_KINDS.has(group.source) && !hosts.has(group.at)) {
+      hosts.set(group.at, group);
+    }
+  }
+  if (hosts.size === 0) {
+    return [...groups];
+  }
+
+  const roots: TreeNode[] = [];
+  for (const group of groups) {
+    const host = attachable(group.source) ? hostOf(group.at, hosts) : undefined;
+    if (!host) {
+      roots.push(group);
+      continue;
+    }
+    host.children.push(insideHost(group, host));
+  }
+  return roots;
+}
+
+/** The nearest project at or above a folder, walking up as far as the paths go. */
+function hostOf<T>(at: string | undefined, hosts: ReadonlyMap<string, T>): T | undefined {
+  let folder = at;
+  while (folder !== undefined) {
+    const host = hosts.get(folder);
+    if (host) {
+      return host;
+    }
+    const parent = path.posix.dirname(folder);
+    // `dirname('/')` is `/`, which is where the walk runs out of workspace.
+    folder = parent === folder ? undefined : parent;
+  }
+  return undefined;
+}
+
+/**
+ * The same heading, said as something inside a project rather than beside one.
+ *
+ * The path shrinks to where it sits relative to that project — the heading above
+ * has already named everything the two have in common, and repeating it is the
+ * noise the tree avoids by not printing the workspace name on every row. A
+ * script folder is named by that relative path outright, since the folder is all
+ * the row is; `shell` is what is left when the folder is the project's own.
+ */
+function insideHost(
+  group: TreeNode & { kind: 'group' },
+  host: TreeNode & { kind: 'group' },
+): TreeNode & { kind: 'group' } {
+  const inside =
+    group.at && host.at && group.at.startsWith(`${host.at}/`) ? group.at.slice(host.at.length + 1) : '';
+  return group.source === 'shell'
+    ? { ...group, place: inside || 'shell', folder: undefined }
+    : { ...group, folder: inside || undefined };
 }
 
 /**
@@ -2942,20 +3140,16 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // in a column of headings that otherwise all look the same. OTHER TASKS takes
     // one too — it is a row on the same list, whatever it cannot be renamed to.
     //
-    // What the row's ecosystem wants it to look like, when it is a row that
-    // wears one: a parent row always does — it *is* the ecosystem — and a
-    // manifest row does while `groupIcons` says `type`. OTHER TASKS and the
-    // hidden pile carry no ecosystem and are left exactly as they were.
+    // The glyph the row's ecosystem wants, when it is a row that wears one: a
+    // parent row always does — it *is* the ecosystem — and a manifest row does
+    // while `groupIcons` says `type`. OTHER TASKS and the hidden pile carry no
+    // ecosystem and are left exactly as they were.
+    //
+    // The glyph only. The colour of a heading is either one somebody painted or
+    // the one every heading shares; see `ECOSYSTEMS` for why there is no third.
     const type =
       node.ecosystem && (node.ref === undefined || typeIcons()) ? ECOSYSTEMS[node.ecosystem] : undefined;
-    // The same order `iconFor` uses on a script row, for the same reason: what
-    // the user chose by hand outranks what the kind of thing implies, and
-    // `colorIcons` turns off the colour we picked and not the one they did.
-    const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
-    const tint =
-      nodeColor(node) ??
-      (type && colored ? type.color : undefined) ??
-      (node.id === HIDDEN_GROUP_ID ? HIDDEN_COLOR : TITLE_COLOR);
+    const tint = nodeColor(node) ?? (node.id === HIDDEN_GROUP_ID ? HIDDEN_COLOR : TITLE_COLOR);
     item.resourceUri = decorationUri(tint, node.detail ?? node.label);
     // An icon the user picked stands in for the stock one, in the tint the row
     // already wears — the icon says which row this is, the colour keeps saying
@@ -3165,6 +3359,16 @@ function runningIcon(): vscode.ThemeIcon {
 function crowdedFolders(scripts: ScriptEntry[]): Set<string> {
   const manifests = new Map<string, Set<string>>();
   for (const script of scripts) {
+    // Neither a compose file nor a script folder is ever competing with a
+    // manifest over what to call the folder: a shell group *is* a folder, and a
+    // compose heading is always named by its own file (see `buildTreeRoots`).
+    // Counting them would have a single `docker-compose.yml` beside a
+    // `package.json` report the folder as crowded and rename the project's
+    // heading after its file — which is what that rule exists to avoid, not
+    // cause.
+    if (attachable(script.kind)) {
+      continue;
+    }
     const folder = manifestFolder(script);
     const seen = manifests.get(folder) ?? new Set<string>();
     seen.add(script.manifest.toString());
@@ -4066,7 +4270,11 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
  */
 function executionFor(argv: string[], cwd: string): vscode.ShellExecution | vscode.ProcessExecution {
   if (argv.every(quotable)) {
-    return new vscode.ShellExecution(argv[0], argv.slice(1).map(shellArgument), { cwd });
+    // The program goes through the same quoting as everything after it. For
+    // every runner this is a bare word and nothing happens; for a shell row with
+    // `shellRunner` emptied the program *is* a path off disk, and a space in it
+    // — or worse — would otherwise reach the shell unquoted.
+    return new vscode.ShellExecution(shellArgument(argv[0]), argv.slice(1).map(shellArgument), { cwd });
   }
   return new vscode.ProcessExecution(argv[0], argv.slice(1), { cwd });
 }

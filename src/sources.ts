@@ -126,21 +126,73 @@ const MANIFEST_KINDS: Record<string, SourceKind> = {
 };
 
 /**
- * The override file compose merges on top of the one beside it, for each
- * spelling. Deliberately not in `MANIFEST_KINDS`: an override declares the same
- * services the base file does, so a group of its own would be the same rows
- * twice. `parseCompose` looks for the matching one and passes it as a second
- * `-f`; see there for why that is needed at all.
+ * The four names compose looks for when it is given no `-f`, in its own order of
+ * preference. A file with one of these names is a compose file because of its
+ * name — nothing else has to agree — and it is the only kind that gets the
+ * override merged in below.
  */
-function composeOverride(file: string): string | undefined {
-  const dot = file.lastIndexOf('.');
-  return dot > 0 ? `${file.slice(0, dot)}.override${file.slice(dot)}` : undefined;
-}
+const COMPOSE_DEFAULT_FILES: ReadonlyArray<string> = [
+  'compose.yaml',
+  'compose.yml',
+  'docker-compose.yaml',
+  'docker-compose.yml',
+];
 
-/** The kind of manifest a path is, by its file name alone. */
+/**
+ * The overrides compose merges on top of whichever of the four it picked, again
+ * in its own order — and note that the order is the *same list* whatever the
+ * base file was called: `compose.yaml` beside `compose.override.yml` is a pair
+ * compose merges, the extensions notwithstanding.
+ *
+ * None of them are manifests of their own. An override declares the services the
+ * base file already declares, so a group for it would be the same rows twice.
+ */
+const COMPOSE_OVERRIDE_FILES: ReadonlyArray<string> = [
+  'compose.override.yaml',
+  'compose.override.yml',
+  'docker-compose.override.yaml',
+  'docker-compose.override.yml',
+];
+
+/**
+ * Everything else that is a compose file: `docker-compose.dev.yml`,
+ * `compose.prod.yaml`, `docker-compose.ci.yml`. The name is a real convention
+ * and the only signal there is — nothing inside a YAML file says "I am compose"
+ * — so it is matched, and then `parseCompose` insists on seeing a `services:`
+ * or `include:` block before it will believe a name it was not sure about.
+ *
+ * The pattern is deliberately tight. `compose` has to be followed by a dot, so
+ * `composer.yml` — which the scan glob below does match — is turned away here.
+ */
+const COMPOSE_NAME = /^(?:docker-)?compose(?:\.[A-Za-z0-9_-]+)*\.ya?ml$/;
+const COMPOSE_OVERRIDE_NAME = /\.override\.ya?ml$/;
+
+/**
+ * The globs that find the profile-named files above. The four default names are
+ * already in `MANIFEST_KINDS`, so these only have to cover the ones carrying a
+ * middle segment — which is what keeps `composer.yml` out of the scan entirely
+ * rather than merely out of the list.
+ */
+const COMPOSE_GLOBS: ReadonlyArray<string> = [
+  'compose.*.yml',
+  'compose.*.yaml',
+  'docker-compose.*.yml',
+  'docker-compose.*.yaml',
+];
+
+/**
+ * The kind of manifest a path is, by its file name alone. The exact table first,
+ * then the one convention that cannot be spelled out as a list of names.
+ */
 function manifestKind(uri: vscode.Uri): SourceKind | undefined {
   const name = path.posix.basename(uri.path);
-  return Object.prototype.hasOwnProperty.call(MANIFEST_KINDS, name) ? MANIFEST_KINDS[name] : undefined;
+  if (Object.prototype.hasOwnProperty.call(MANIFEST_KINDS, name)) {
+    return MANIFEST_KINDS[name];
+  }
+  if (COMPOSE_NAME.test(name) && !COMPOSE_OVERRIDE_NAME.test(name)) {
+    return 'docker-compose';
+  }
+  return undefined;
 }
 
 /** The directory a manifest sits in, which is also the directory its tasks run in. */
@@ -156,7 +208,11 @@ function directoryOf(uri: vscode.Uri): vscode.Uri {
  */
 function manifestGlob(enabled: ReadonlySet<Ecosystem>): string | undefined {
   const names = Object.keys(MANIFEST_KINDS).filter((name) => enabled.has(ECOSYSTEM_OF[MANIFEST_KINDS[name]]));
-  return names.length > 0 ? `**/{${names.join(',')}}` : undefined;
+  // Compose is the one kind whose files are not a fixed list of names; see
+  // `COMPOSE_GLOBS`. What those globs over-match, `manifestKind` turns away.
+  const patterns = enabled.has('docker') ? COMPOSE_GLOBS : [];
+  const all = [...names, ...patterns];
+  return all.length > 0 ? `**/{${all.join(',')}}` : undefined;
 }
 
 export const DEFAULT_EXCLUDE =
@@ -235,12 +291,9 @@ export const WATCH_GLOB = `**/{${[
     // The compose override files, which are read as part of the manifest beside
     // them rather than being one: whether one exists decides whether the rows
     // carry a second `-f`, so it has to be watched like the manifest itself.
-    ...Object.keys(MANIFEST_KINDS)
-      .filter((name) => MANIFEST_KINDS[name] === 'docker-compose')
-      .flatMap((name) => {
-        const override = composeOverride(name);
-        return override ? [override] : [];
-      }),
+    // And the profile-named compose files, which no list of names can hold.
+    ...COMPOSE_OVERRIDE_FILES,
+    ...COMPOSE_GLOBS,
     ...DETECTION_FILES.map(([file]) => file),
     ...PYTHON_LOCKS.map(([file]) => file),
   ]),
@@ -1440,9 +1493,15 @@ function composeProgram(): string[] {
  * `-f <basename>` for the reason make, just and go-task all name their own file:
  * what the scan saw is not what the runner would pick, and compose has its own
  * precedence across four spellings. The catch is that passing `-f` turns off the
- * automatic merge of `docker-compose.override.yml`, which is a live development
- * workflow — so the matching override is looked for and appended as a second
- * `-f`, which is exactly what the merge would have done.
+ * automatic merge of the override file, which is a live development workflow —
+ * so it is looked for and appended as a second `-f`, which is exactly what the
+ * merge would have done.
+ *
+ * Only for the four default names, and this is the point of the distinction:
+ * the merge is something compose does to the file it chose for itself, and a
+ * `docker-compose.dev.yml` is never that file. Nor is the override matched by
+ * extension — compose searches its own four spellings in order whatever the base
+ * file is called, so `compose.yaml` beside `compose.override.yml` is a pair.
  *
  * `up` is the command that fans out: a bare row, plus one row per service when
  * the file declares more than one. Unlike cargo's `run` the bare row stays —
@@ -1466,20 +1525,29 @@ async function parseCompose(
     return undefined;
   }
 
-  const program = composeProgram();
-  const files = ['-f', file];
-  const override = composeOverride(file);
-  if (override && (await exists(vscode.Uri.joinPath(cwd, override)))) {
-    files.push('-f', override);
-  }
-
   const lines = text.split(/\r?\n/);
   const services = yamlBlockKeys(lines, 'services')
     .map((entry) => entry.name)
     .filter(Boolean);
+
+  // A name the scan was sure about needs nothing else; one it matched by
+  // convention has to show a compose file's own shape before it is believed. A
+  // YAML file says nothing about what it is, and `deploy.staging.yml` sitting
+  // beside a compose file is not the only way to be wrong about that.
+  const named = COMPOSE_DEFAULT_FILES.includes(file);
+  if (!named && services.length === 0 && !lines.some((line) => /^include:\s*(#.*)?$/.test(line))) {
+    return undefined;
+  }
+
+  const program = composeProgram();
+  const files = ['-f', file];
+  const override = named ? await composeOverride(cwd) : undefined;
+  if (override) {
+    files.push('-f', override);
+  }
   // The Compose Spec's own top-level `name:`, so the heading reads the project's
   // name rather than the folder it happens to sit in.
-  const named = /^name:\s*["']?([^"'#\s]+)/m.exec(text);
+  const project = /^name:\s*["']?([^"'#\s]+)/m.exec(text);
 
   const tasks: RawTask[] = [];
   const push = (name: string, args: string[]) => {
@@ -1497,7 +1565,17 @@ async function parseCompose(
     }
   }
 
-  return { tasks, packageName: named?.[1] };
+  return { tasks, packageName: project?.[1] };
+}
+
+/** The override file beside a compose manifest, in compose's own order of preference. */
+async function composeOverride(cwd: vscode.Uri): Promise<string | undefined> {
+  for (const name of COMPOSE_OVERRIDE_FILES) {
+    if (await exists(vscode.Uri.joinPath(cwd, name))) {
+      return name;
+    }
+  }
+  return undefined;
 }
 
 // --- shell scripts -----------------------------------------------------------
