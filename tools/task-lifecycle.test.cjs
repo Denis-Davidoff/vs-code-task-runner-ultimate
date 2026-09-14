@@ -26,16 +26,19 @@ function harness() {
   const vscode = { tasks, EventEmitter: class {}, window: {
     showWarningMessage: () => assert.fail('Unexpected stop timeout'),
   } };
+  const repaints = [];
   const context = vm.createContext({
-    exports: {}, setTimeout, clearTimeout, launches,
+    exports: {}, setTimeout, clearTimeout, launches, repaints,
     require: (name) => name === 'vscode' ? vscode : name === 'path' ? path : {},
   });
   vm.runInContext(compiled + `
-    onStateChanged = () => {};
+    onStateChanged = () => repaints.push(1);
     confirmScript = async () => true;
     startScript = async (script) => launches.push(script);
     keyForTask = (task) => task.definition.key;
-    exports.lifecycle = { running, executionOf, stopExecution, restartNode, markEnded };
+    exports.lifecycle = {
+      running, executionOf, stopExecution, stopNode, restartNode, markEnded,
+    };
   `, context);
   const api = context.exports.lifecycle;
   function execution() {
@@ -48,7 +51,7 @@ function harness() {
     };
     return run;
   }
-  return { ...api, tasks, launches, execution, listeners };
+  return { ...api, tasks, launches, execution, listeners, repaints };
 }
 
 test('restart discards an absent execution and starts the script', async () => {
@@ -104,4 +107,44 @@ test('a stale row is idle when deciding whether a click should start it', () => 
   h.running.set('dev', h.execution());
   assert.equal(h.executionOf({ kind: 'script', script: { key: 'dev' } }), undefined);
   assert.equal(h.executionOf({ kind: 'foreign', execution: h.execution() }), undefined);
+});
+
+test('stopping one of two runs of a task stops the one it was given', async () => {
+  const h = harness();
+  const first = h.execution();
+  const second = h.execution();
+  first.terminate = () => assert.fail('Must not stop the other run of the task');
+  h.tasks.taskExecutions = [first, second];
+  assert.equal(await h.stopExecution(second), true);
+  assert.deepEqual(h.tasks.taskExecutions, [first]);
+});
+
+test('a foreign row resolves to its own run, not another of the same task', () => {
+  const h = harness();
+  const first = h.execution();
+  const second = h.execution();
+  h.tasks.taskExecutions = [first, second];
+  assert.equal(h.executionOf({ kind: 'foreign', execution: second }), second);
+  assert.equal(h.executionOf({ kind: 'foreign', execution: first }), first);
+});
+
+test('a stale handle still resolves to the run the task system lists', () => {
+  const h = harness();
+  const current = h.execution();
+  h.tasks.taskExecutions = [current];
+  assert.equal(h.executionOf({ kind: 'foreign', execution: h.execution() }), current);
+});
+
+test('stopping a stale row repaints it instead of leaving it spinning', async () => {
+  const h = harness();
+  h.running.set('dev', h.execution());
+  await h.stopNode({ kind: 'script', script: { key: 'dev' } });
+  assert.equal(h.running.size, 0);
+  assert.ok(h.repaints.length > 0, 'the dropped row must ask for a repaint');
+});
+
+test('a stale foreign row repaints when its stop button finds nothing', async () => {
+  const h = harness();
+  await h.stopNode({ kind: 'foreign', execution: h.execution() });
+  assert.ok(h.repaints.length > 0, 'the vanished row must ask for a repaint');
 });

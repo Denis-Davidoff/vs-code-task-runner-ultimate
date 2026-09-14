@@ -422,6 +422,26 @@ function liveExecutions(): vscode.TaskExecution[] {
   return listed.filter((item) => ![...endedExecutions].some((ended) => sameExecution(item, ended)));
 }
 
+/**
+ * The handle the task system currently lists for a run, or nothing when the run
+ * is over.
+ *
+ * Identity comes first and the match by task only behind it, because the two
+ * answer different questions. A task can be running twice — `runOptions.instanceLimit`
+ * is what allows it — and `sameExecution` matches either copy, so a search that
+ * took the first match would hand back the run that was not asked for: stopping
+ * the second one would end the first and leave the second up. The looser match
+ * is still needed for the handle a caller has held since before a repaint, which
+ * the task system may have replaced with a fresh object for the same run.
+ */
+function liveExecution(execution: vscode.TaskExecution): vscode.TaskExecution | undefined {
+  const live = liveExecutions();
+  return (
+    live.find((item) => item === execution) ??
+    live.find((item) => sameExecution(item, execution))
+  );
+}
+
 /** Task executions that are running but are not backed by a package.json script. */
 function foreignExecutions(): vscode.TaskExecution[] {
   return liveExecutions().filter((exec) => !keyForTask(exec.task));
@@ -437,17 +457,25 @@ function foreignExecutions(): vscode.TaskExecution[] {
  * status bar, the spinner on the row, the stop button offered over it. Checking
  * it against the task system costs a pass over a handful of executions and takes
  * the whole class of leftovers out at once, rather than one event's worth.
+ *
+ * Says whether it dropped anything, because everything that draws the row reads
+ * this map: a row taken out here is a row still on screen with a spinner and a
+ * stop button on it, and the caller that reconciled outside a repaint is the one
+ * that has to ask for one.
  */
-function pruneRunning(): void {
+function pruneRunning(): boolean {
   const live = liveExecutions();
+  let dropped = false;
   for (const key of [...running.keys()]) {
     const alive = live.find((exec) => keyForTask(exec.task) === key);
     if (alive) {
       running.set(key, alive);
     } else {
       running.delete(key);
+      dropped = true;
     }
   }
+  return dropped;
 }
 
 /**
@@ -2829,14 +2857,30 @@ function packageLabel(script: ScriptEntry): string {
 
 // --- actions shared by the tree and the picker -------------------------------
 
+/**
+ * The run behind a row, as the task system has it now — not as the row was drawn.
+ *
+ * A row, a picker entry or an open confirmation can outlive the run it stands
+ * for, and a row left over that way is a spinner and a ■ over something that
+ * ended. Nothing else is going to clear it: the map is kept by events, and the
+ * event that would have cleared it is the one that never arrived. So the miss is
+ * repainted here rather than returned in silence, which is what left the ■ inert
+ * for as long as the row stayed up.
+ */
 function executionOf(node: TreeNode | undefined): vscode.TaskExecution | undefined {
-  pruneRunning();
-  if (node?.kind === 'script') {
-    return running.get(node.script.key);
+  const dropped = pruneRunning();
+  const execution =
+    node?.kind === 'script'
+      ? running.get(node.script.key)
+      : node?.kind === 'foreign'
+        ? liveExecution(node.execution)
+        : undefined;
+  // A foreign row is drawn from the listing rather than from the map, so its
+  // own miss is the only sign that it too is now stale.
+  if (dropped || (!execution && node?.kind === 'foreign')) {
+    onStateChanged();
   }
-  return node?.kind === 'foreign'
-    ? liveExecutions().find((execution) => sameExecution(execution, node.execution))
-    : undefined;
+  return execution;
 }
 
 async function runNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
@@ -3004,23 +3048,47 @@ async function activateNode(node: TreeNode | undefined, reveal: boolean): Promis
 }
 
 /**
- * The terminal of a running row, or the message saying why there is none.
+ * The terminal of a row, or the message saying why there is none.
  * Shared by the two ways of going to the output — the panel and the editor tab.
  */
 function terminalOf(node: TreeNode | undefined): vscode.Terminal | undefined {
-  const execution = executionOf(node);
-  if (!execution) {
+  const task = taskOf(node);
+  if (!task) {
     return undefined;
   }
 
-  const terminal = terminalFor(execution.task);
+  const terminal = terminalFor(task);
   if (!terminal) {
-    // The task is running but its terminal has been closed — killing a task
-    // terminal ends the task, so this is the window between the two, or a task
-    // whose owner runs it without one.
-    void vscode.window.showInformationMessage(`${execution.task.name} has no open terminal.`);
+    // Either the terminal has been closed — killing a task terminal ends the
+    // task, so this is the window between the two — or the task's owner runs it
+    // without one. Said out loud either way: a command that is offered and then
+    // does nothing at all is the worse of the two answers.
+    void vscode.window.showInformationMessage(`${task.name} has no open terminal.`);
   }
   return terminal;
+}
+
+/**
+ * The task a row stands for, running or not.
+ *
+ * The terminal outlives the run: a dedicated task panel stays open with the
+ * output still in it after the process is gone, which is exactly when the log is
+ * wanted — a task that has just failed is read after it ended, not during. So
+ * going to the output is answered from the task itself, which is all the name
+ * matching in `terminalFor` ever needed, and the live handle is preferred only
+ * because it carries the task the system is really running.
+ */
+function taskOf(node: TreeNode | undefined): vscode.Task | undefined {
+  const execution = executionOf(node);
+  if (execution) {
+    return execution.task;
+  }
+  if (node?.kind === 'foreign') {
+    return node.execution.task;
+  }
+  // Built rather than remembered: ours is a pure function of the script, and the
+  // name it gives the terminal is the same one the ended run was drawn with.
+  return node?.kind === 'script' ? buildTask(node.script) : undefined;
 }
 
 /**
@@ -3439,7 +3507,7 @@ async function stopExecution(execution: vscode.TaskExecution): Promise<boolean> 
   // A row or confirmation dialog can outlive its execution, especially after
   // reloading the extension host. Terminating that stale handle can open VS
   // Code's task picker. Use the current handle, or treat an absent run as stopped.
-  const live = liveExecutions().find((item) => sameExecution(item, execution));
+  const live = liveExecution(execution);
   if (!live) {
     forgetExecution(execution);
     onStateChanged();

@@ -1102,6 +1102,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "gen": "node tools/generate-contributions.js",
+    "test": "node --test tools/*.test.cjs",
     "package": "vsce package",
     "publish": "npx @vscode/vsce publish",
     "publish:ovsx": "ovsx publish",
