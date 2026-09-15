@@ -463,7 +463,7 @@
         {
           "command": "taskRunnerUltimate.stopItemMenu",
           "group": "0_actions@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:(running|up):|foreignTask$)/"
         },
         {
           "command": "taskRunnerUltimate.runGroup",

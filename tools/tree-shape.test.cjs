@@ -1091,6 +1091,35 @@ test('a run of ours outranks what Docker last said', () => {
   assert.equal(item.description.startsWith('up · '), false);
 });
 
+test('the menu offers every row its button does, run and stop alike', () => {
+  // The inline button and the right-click entry are one action in two places —
+  // `runItem`/`runItemMenu` both land in `runNode`, `stopItem`/`stopItemMenu` in
+  // `stopNode` — so a row either has the action or it does not. Drifting apart
+  // cost `script:up:` its stop: a compose service Docker reported as up could be
+  // stopped by a button that vanishes when the mouse leaves the row, and the
+  // menu offered Run instead, with the heading's stop taking the whole stack
+  // down as the only alternative.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const when = (command) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}`)
+      .map((entry) => entry.when);
+  assert.deepEqual(when('runItemMenu'), when('runItem'));
+  assert.deepEqual(when('stopItemMenu'), when('stopItem'));
+  // And the row this is about is in both halves of the stop pair.
+  const h = harness({ settings: { grouping: 'flat' } });
+  h.containers.set('file:///repo/docker-compose.yml', new Set(['web']));
+  const row = h.treeItemFor({
+    kind: 'script',
+    script: script('/repo/docker-compose.yml', 'up: web', 'docker-compose'),
+  });
+  assert.equal(row.contextValue.startsWith('script:up:'), true);
+  for (const clause of [...when('stopItem'), ...when('stopItemMenu')]) {
+    const [, pattern] = clause.match(/viewItem =~ \/(.+)\/$/);
+    assert.match(row.contextValue, new RegExp(pattern), clause);
+  }
+});
+
 // --- the two buttons a compose heading carries ---------------------------------
 
 /** A compose file as the tree sees one: the bare `up`, a service row, and `down`. */

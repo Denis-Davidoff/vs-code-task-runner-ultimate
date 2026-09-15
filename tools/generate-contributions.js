@@ -378,6 +378,11 @@ const COMPOSE_UP = '/^group:package:up$/';
 // An ecosystem parent holds groups rather than rows, but it still has things
 // running under it, so it gets the stop-all and restart-all buttons too.
 const PUT_AWAY = '(:(hidden|carried))?';
+// The rows a run starts and the rows a stop ends, each written once: the button
+// on the row and the entry in the right-click menu are one action in two places,
+// and a pair that drifted apart is a row whose menu denies what its button does.
+const RUNNABLE = '/^script:(idle|up):/';
+const STOPPABLE = '/^(script:(running|up):|foreignTask$)/';
 const RUNNING_PACKAGE = `/^group:(package${STACK}${PUT_AWAY}|eco):running$/`;
 const PACKAGE_ROW = `group:package${STACK}${PUT_AWAY}(:running)?`;
 const toolbarEntries = (when) => [
@@ -428,12 +433,12 @@ manifest.contributes.menus = {
     // ours behind them. Clicking it runs `up` — compose re-attaches, or starts
     // the services that are missing — so it keeps ▶ and the menu entry that
     // names that click.
-    { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^script:(idle|up):/` },
+    { command: 'taskRunnerUltimate.runItem', group: 'inline@1', when: `${inTree} && viewItem =~ ${RUNNABLE}` },
     { command: 'taskRunnerUltimate.restartItem', group: 'inline@1', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
     // `script:up:` is a compose row whose containers are up without anything of
     // ours running them — see `treeItemFor`. It gets a stop and nothing else:
     // there is no terminal of ours to show and no execution to restart.
-    { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ /^(script:(running|up):|foreignTask$)/` },
+    { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ ${STOPPABLE}` },
     { command: 'taskRunnerUltimate.restartGroup', group: 'inline@2', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
     { command: 'taskRunnerUltimate.stopGroup', group: 'inline@3', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
     // A compose file is run and stopped from its own heading, without opening
@@ -448,8 +453,18 @@ manifest.contributes.menus = {
     // discoverable without being tried: a click runs an idle row, a double click
     // stops a running one. `0_actions` sorts above `0_open`, so they head the
     // menu the way they lead the row.
-    { command: 'taskRunnerUltimate.runItemMenu', group: '0_actions@1', when: `${inTree} && viewItem =~ /^script:(idle|up):/` },
-    { command: 'taskRunnerUltimate.stopItemMenu', group: '0_actions@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
+    //
+    // Each of the two matches exactly the rows its inline twin does, because it
+    // is the same action twice: `runItemMenu` and `runItem` both land in
+    // `runNode`, `stopItemMenu` and `stopItem` both in `stopNode`. `script:up:`
+    // is the row that made the difference visible — a compose service Docker
+    // reports as up with no run of ours behind it. The ■ was on the row and
+    // `stopNode` knew what to do with it, but the menu offered Run and nothing
+    // else, so the only way to stop that one service was to hit a button that
+    // disappears the moment the row stops being hovered — or to take the whole
+    // stack down from the heading.
+    { command: 'taskRunnerUltimate.runItemMenu', group: '0_actions@1', when: `${inTree} && viewItem =~ ${RUNNABLE}` },
+    { command: 'taskRunnerUltimate.stopItemMenu', group: '0_actions@2', when: `${inTree} && viewItem =~ ${STOPPABLE}` },
     // The heading's own two, named where the inline glyphs only imply them.
     { command: 'taskRunnerUltimate.runGroup', group: '0_actions@1', when: `${inTree} && viewItem =~ ${COMPOSE}` },
     { command: 'taskRunnerUltimate.stopStack', group: '0_actions@2', when: `${inTree} && viewItem =~ ${COMPOSE_UP}` },
