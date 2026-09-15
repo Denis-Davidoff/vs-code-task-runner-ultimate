@@ -1,15 +1,21 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { composeState } from './containers';
 import { locateTask } from './locate';
 import {
+  ALL_ECOSYSTEMS,
   collectScripts,
   commandFor,
+  Ecosystem,
+  ecosystemOf,
   emptyManifests,
   launchArgv,
   plainArgument,
   resetSources,
   scriptKey,
   ScriptEntry,
+  SHELL_GLOB,
+  SourceKind,
   SOURCE_GLOB,
   WATCH_GLOB,
 } from './sources';
@@ -19,6 +25,14 @@ const TASK_TYPE = 'taskRunnerUltimate';
 const TASK_SOURCE = 'scripts';
 const CONTEXT_PICKER_OPEN = 'taskRunnerUltimate.pickerOpen';
 const CONTEXT_RUNNING_COUNT = 'taskRunnerUltimate.runningCount';
+/**
+ * Which way the tree is grouped, for the header button that switches it.
+ *
+ * A `when` clause cannot read a setting, only a context key, and the button has
+ * to show the mode it would put you in rather than the one you are already in —
+ * so the setting is mirrored here every time it changes.
+ */
+const CONTEXT_HIERARCHICAL = 'taskRunnerUltimate.hierarchical';
 
 interface CategoryRule {
   /** Tokens the script name (or, as a last resort, its command) is matched against. */
@@ -38,7 +52,22 @@ interface CategoryRule {
  */
 const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
   {
-    match: ['dev', 'run', 'start', 'serve', 'server', 'watch', 'preview', 'storybook', 'up', 'example'],
+    // Bringing a stack up, and taking it down. These two lead the list because
+    // `up` is also a `run` word below, and here it earns a glyph of its own: the
+    // pair is what a compose group is read by at a glance, so the one that
+    // starts everything is filled in and the one that stops it is hollow — the
+    // same solid-versus-outline pair the row's own ▶ and ■ buttons use.
+    match: ['up'],
+    icon: 'debug-start',
+    color: 'taskRunnerUltimate.category.run',
+  },
+  {
+    match: ['down', 'stop', 'kill', 'teardown', 'destroy'],
+    icon: 'debug-stop',
+    color: 'taskRunnerUltimate.category.stop',
+  },
+  {
+    match: ['dev', 'run', 'start', 'serve', 'server', 'watch', 'preview', 'storybook', 'example'],
     icon: 'play',
     color: 'taskRunnerUltimate.category.run',
   },
@@ -112,9 +141,33 @@ const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
 ];
 
 /** Settings a scan reads, so a change to one has to throw the cached list away. */
-const SCAN_SETTINGS = ['exclude', 'sources', 'cargoCommands', 'goCommands', 'pythonRunner'];
+const SCAN_SETTINGS = [
+  'exclude',
+  'sources',
+  'cargoCommands',
+  'goCommands',
+  'pythonRunner',
+  // Both are baked into a row's `argv` by the parser rather than resolved when
+  // it launches, so a change to either has to be read again off disk.
+  'dockerCompose',
+  'dockerComposeCommands',
+  'shellScripts',
+  // Both runner settings, for the same reason: `collectShellScripts` puts the
+  // words in front of the path into `argv` at scan time, so a row launched after
+  // one of them changed would otherwise keep running the previous command until
+  // something else happened to invalidate the scan.
+  'shellRunner',
+  'shellRunners',
+];
 /** Settings that only change how the list is drawn — no rescan, just a repaint. */
-const DISPLAY_SETTINGS = ['packageManager', 'categories', 'colorIcons', 'pinRunningTasks'];
+const DISPLAY_SETTINGS = [
+  'packageManager',
+  'categories',
+  'colorIcons',
+  'pinRunningTasks',
+  'grouping',
+  'groupIcons',
+];
 
 /**
  * The heading the two views wear until the `title` setting says otherwise. The
@@ -187,6 +240,19 @@ function repaint(): void {
   activePicker?.refresh();
 }
 
+/**
+ * The ecosystems `sources` leaves switched on. Read here as well as in the scan
+ * because one watcher has to answer for a setting it cannot be rebuilt from.
+ */
+function enabledSources(): string[] {
+  const configured = vscode.workspace
+    .getConfiguration('taskRunnerUltimate')
+    .get<unknown>('sources');
+  return Array.isArray(configured)
+    ? configured.filter((item): item is string => typeof item === 'string')
+    : [...ALL_ECOSYSTEMS];
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   storage = context.workspaceState;
   // The settings entry in the menu filters the settings editor by this id, and
@@ -229,6 +295,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.openScript', (node?: TreeNode) => openManifest(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.openManifest', (node?: TreeNode) => openManifest(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.showTerminal', (node?: TreeNode) => showTerminal(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.addToTerminal', (node?: TreeNode) =>
+      addToTerminal(node),
+    ),
     vscode.commands.registerCommand('taskRunnerUltimate.openTerminalEditor', (node?: TreeNode) =>
       openTerminalEditor(node),
     ),
@@ -254,6 +323,8 @@ export function activate(context: vscode.ExtensionContext): void {
     // runs. They act on the group's running rows and nothing else — an idle
     // script is not started by restarting its neighbours.
     vscode.commands.registerCommand('taskRunnerUltimate.stopGroup', (node?: TreeNode) => stopGroup(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.runGroup', (node?: TreeNode) => runGroup(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.stopStack', (node?: TreeNode) => stopStack(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
     // One command per colour: a submenu entry is a command, and there is no way
     // to hand it an argument from contributes.menus. The list is the palette's,
@@ -269,6 +340,13 @@ export function activate(context: vscode.ExtensionContext): void {
     // One command for every icon, unlike the colours: an icon picker is a list
     // of thirty, which is a quick pick's size and three columns past a submenu's.
     vscode.commands.registerCommand('taskRunnerUltimate.pickIcon', (node?: TreeNode) => pickIcon(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.checkContainers', () => checkContainers(true)),
+    // Two commands for one button: each names the mode it puts the tree in, and
+    // the `when` clauses show whichever of them is the one you do not have. A
+    // single toggle would have to be titled after the state it is leaving, which
+    // is the one thing a button in a header cannot show.
+    vscode.commands.registerCommand('taskRunnerUltimate.groupByEcosystem', () => setGrouping('ecosystem')),
+    vscode.commands.registerCommand('taskRunnerUltimate.groupFlat', () => setGrouping('flat')),
     vscode.commands.registerCommand('taskRunnerUltimate.menu', showMenu),
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
@@ -296,6 +374,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.tasks.onDidEndTask(({ execution }) => {
       forgetExecution(execution);
       onStateChanged();
+      // A compose task of ours has just changed what is running, and this is the
+      // one moment the answer is known to be stale without anyone asking. Only
+      // for the file it touched, and only once it has ended.
+      void recheckAfter(execution.task);
     }),
   );
 
@@ -316,9 +398,24 @@ export function activate(context: vscode.ExtensionContext): void {
   sourceWatcher.onDidCreate(() => invalidateSoon());
   sourceWatcher.onDidDelete(() => invalidateSoon());
 
+  // The shell rows are files rather than entries in a file, so the same
+  // create-and-delete-only trick serves them — see `SHELL_GLOB` for why the
+  // pattern is fixed rather than built from `shellScripts`. The handler, not the
+  // watcher, is what `sources` switches off: a watcher is built once and this
+  // one has to stay right after the setting changes.
+  const shellWatcher = vscode.workspace.createFileSystemWatcher(SHELL_GLOB, false, true, false);
+  const onShellChange = () => {
+    if (enabledSources().includes('shell')) {
+      invalidateSoon();
+    }
+  };
+  shellWatcher.onDidCreate(onShellChange);
+  shellWatcher.onDidDelete(onShellChange);
+
   context.subscriptions.push(
     watcher,
     sourceWatcher,
+    shellWatcher,
     // A rescan waiting on its timer must not outlive the extension.
     { dispose: cancelInvalidate },
     vscode.workspace.onDidChangeWorkspaceFolders(() => invalidate()),
@@ -331,6 +428,9 @@ export function activate(context: vscode.ExtensionContext): void {
       } else if (DISPLAY_SETTINGS.some((key) => event.affectsConfiguration(`taskRunnerUltimate.${key}`))) {
         repaint();
       }
+      if (event.affectsConfiguration('taskRunnerUltimate.grouping')) {
+        syncGrouping();
+      }
       if (event.affectsConfiguration('taskRunnerUltimate.showInStatusBar')) {
         syncStatusBar(context);
       }
@@ -342,6 +442,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   clearStaleBadges();
   syncStatusBar(context);
+  // Before the first draw: a header with no button on it until something changes
+  // reads as a header whose button is missing.
+  syncGrouping();
   onStateChanged();
 }
 
@@ -853,12 +956,28 @@ async function editTitle(node: TreeNode | undefined): Promise<void> {
  * anything else.
  */
 async function openManifest(node: TreeNode | undefined): Promise<void> {
+  // A heading that stands for a folder rather than a file — the shell groups —
+  // has nothing to open as a document, so the folder is revealed instead.
+  // Leaving it without a manifest would make the menu entry a silent no-op.
+  if (node?.kind === 'group' && node.directory) {
+    await vscode.commands.executeCommand('revealInExplorer', node.directory);
+    return;
+  }
+
   // OTHER TASKS and HIDDEN are groups of ours rather than files, and carry no
   // manifest — the `when` clauses keep them out of the menu, and this keeps them
   // out of the command.
   const source: { file: vscode.Uri; where: string; task?: ScriptEntry } | undefined =
     node?.kind === 'script'
-      ? { file: node.script.manifest, where: node.script.location, task: node.script }
+      ? {
+          // A shell row's manifest is the directory it is grouped under, so the
+          // file it opens is the script itself.
+          file: node.script.file ?? node.script.manifest,
+          where: node.script.file
+            ? vscode.workspace.asRelativePath(node.script.file)
+            : node.script.location,
+          task: node.script,
+        }
       : node?.kind === 'group' && node.manifest
         ? { file: node.manifest, where: node.detail ?? node.manifest.fsPath }
         : undefined;
@@ -1050,10 +1169,13 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
       { id: 'zap', name: 'Zap' },
       { id: 'flame', name: 'Flame' },
       { id: 'play-circle', name: 'Play' },
+      { id: 'debug-start', name: 'Start' },
       { id: 'stop-circle', name: 'Stop' },
+      { id: 'debug-stop', name: 'Stop (Square)' },
       { id: 'record', name: 'Record' },
       { id: 'check', name: 'Check' },
       { id: 'checklist', name: 'Checklist' },
+      { id: 'tasklist', name: 'Task List' },
       { id: 'sync', name: 'Sync' },
       { id: 'refresh', name: 'Refresh' },
       { id: 'save', name: 'Save' },
@@ -1099,6 +1221,7 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
       { id: 'law', name: 'Law' },
       { id: 'jersey', name: 'Jersey' },
       { id: 'ruby', name: 'Ruby' },
+      { id: 'snake', name: 'Snake' },
       { id: 'mortar-board', name: 'Mortar Board' },
       { id: 'telescope', name: 'Telescope' },
       { id: 'compass', name: 'Compass' },
@@ -1121,6 +1244,9 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
       { id: 'wrench', name: 'Wrench' },
       { id: 'gear', name: 'Gear' },
       { id: 'terminal', name: 'Terminal' },
+      { id: 'terminal-bash', name: 'Terminal Bash' },
+      { id: 'terminal-powershell', name: 'Terminal PowerShell' },
+      { id: 'terminal-cmd', name: 'Terminal Command Prompt' },
       { id: 'code', name: 'Code' },
       { id: 'debug', name: 'Debug' },
       { id: 'extensions', name: 'Extensions' },
@@ -1374,6 +1500,111 @@ function orderedGroups(scripts: ScriptEntry[]): ScriptEntry[] {
 }
 
 /**
+ * Whether the manifest groups sit under one parent row per ecosystem, rather
+ * than all at the root.
+ *
+ * `flat` is the default: it is what the tree has always drawn, and an upgrade
+ * that restructures a sidebar nobody asked to have restructured is an upgrade
+ * that reads as a bug.
+ */
+function hierarchical(): boolean {
+  return (
+    vscode.workspace.getConfiguration('taskRunnerUltimate').get<string>('grouping', 'flat') ===
+    'ecosystem'
+  );
+}
+
+/**
+ * The scan with each ecosystem's groups gathered into one run, in the order the
+ * ecosystems first appear. A near-twin of `orderedGroups` above, and applied
+ * right after it, so a drag still decides the order inside a run.
+ *
+ * This is a pass over the flat list and not something the tree does while it
+ * builds its rows, which is the load-bearing part. `groupScopes()` — what every
+ * drop splices positions into — reads this same list, so bucketing here is what
+ * keeps the order a drag computes against and the order on screen the same
+ * thing. Were the tree to bucket on its own, a stored order of `node, rust,
+ * node` would draw as two blocks while the drop arithmetic still saw three, and
+ * the dropdown would list a third order again.
+ *
+ * A run's rank is where its first member sits, so no second store is needed.
+ * One would have to be reset, pruned and documented on its own, and could
+ * contradict `groupOrder` with nothing to reconcile the two.
+ */
+function groupedByEcosystem(scripts: ScriptEntry[]): ScriptEntry[] {
+  if (!hierarchical()) {
+    return scripts;
+  }
+  const rank = new Map<Ecosystem, number>();
+  const blocks = [...groupSlots(scripts).values()].map((indices, position) => {
+    // Every row in a block comes from one manifest, so one row settles its kind.
+    const ecosystem = ecosystemOf(scripts[indices[0]].kind);
+    if (!rank.has(ecosystem)) {
+      rank.set(ecosystem, rank.size);
+    }
+    return { indices, position, rank: rank.get(ecosystem) ?? 0 };
+  });
+  blocks.sort((a, b) => a.rank - b.rank || a.position - b.position);
+  return blocks.flatMap((block) => block.indices.map((slot) => scripts[slot]));
+}
+
+/**
+ * The scan with each compose file and script folder moved to sit directly after
+ * the project it belongs to, in `flat` mode.
+ *
+ * The twin of `groupedByEcosystem`, and here for the same load-bearing reason.
+ * The tree re-parents these rows by their paths, which changes what is drawn but
+ * not the flat list underneath — so the dropdown listed them in scan order, the
+ * drag arithmetic computed against a third order, and the two surfaces the
+ * README calls "the tree flattened" disagreed out of the box. Moving the blocks
+ * here makes every reader of `savedOrder` agree, and `attachToHosts` is then
+ * only folding a list that is already in the right order.
+ *
+ * Returns the input untouched in `ecosystem` mode, where nothing is attached.
+ */
+function orderedByHost(scripts: ScriptEntry[]): ScriptEntry[] {
+  if (hierarchical()) {
+    return scripts;
+  }
+  const blocks = [...groupSlots(scripts).entries()].map(([ref, indices]) => ({
+    ref,
+    indices,
+    // Every row in a block comes from one manifest, so one row settles its kind.
+    script: scripts[indices[0]],
+  }));
+
+  // A put-away project hosts exactly what it hosted before, since that is where
+  // the tree still draws these blocks — inside it, in the pile. Filing them
+  // anywhere else here would have the dropdown list them somewhere the tree
+  // never put them, which is the one thing this pass exists to prevent.
+  const hosts = attachedHosts(
+    blocks.map((block) => ({
+      ref: block.ref,
+      at: manifestFolder(block.script),
+      kind: block.script.kind,
+    })),
+  );
+
+  const attached = new Map<string, Array<(typeof blocks)[number]>>();
+  const roots: Array<(typeof blocks)[number]> = [];
+  for (const block of blocks) {
+    const host = hosts.get(block.ref);
+    if (host === undefined) {
+      roots.push(block);
+      continue;
+    }
+    attached.set(host, [...(attached.get(host) ?? []), block]);
+  }
+  if (attached.size === 0) {
+    return scripts;
+  }
+
+  return roots
+    .flatMap((block) => [block, ...(attached.get(block.ref) ?? [])])
+    .flatMap((block) => block.indices.map((slot) => scripts[slot]));
+}
+
+/**
  * The refs of every group the scan found, top to bottom, in the saved order —
  * hidden ones included. A move reads and rewrites this list whole, so a heading
  * parked in HIDDEN keeps the slot it will come back to.
@@ -1516,7 +1747,10 @@ async function savedOrder(): Promise<ScriptEntry[]> {
   // go through, and it is the only place that holds a fresh list and the stores
   // that annotate it at the same time.
   await pruneStaleRefs(scripts);
-  return orderedGroups(orderedScripts(scripts));
+  // The two grouping passes are exclusive by mode, and each is the last word on
+  // where a block sits: one gathers ecosystems, the other tucks a project's
+  // surroundings in behind it.
+  return orderedByHost(groupedByEcosystem(orderedGroups(orderedScripts(scripts))));
 }
 
 // --- pruning what the manifests no longer declare -----------------------------
@@ -1563,7 +1797,18 @@ async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
   }
   prunedScan = scripts;
 
-  const scanned = new Set([...scripts.map(groupRef), ...emptyManifests().map(manifestRef)]);
+  // The shell groups are left out on purpose, which is the same narrowness the
+  // rest of this rule already has. A manifest is a file that was read, so what
+  // it does not declare is gone; a shell group is a directory whose contents
+  // reached us through `shellScripts` and a 200-file cap, so a script missing
+  // from the list may only have been narrowed out or truncated away. Pruning on
+  // that evidence deletes stars and colours for files that are still on disk.
+  // The cost is the other way round and is the one this rule always pays: a
+  // script deleted for real keeps its marks, as a closed workspace folder does.
+  const scanned = new Set([
+    ...scripts.filter((script) => !script.file).map(groupRef),
+    ...emptyManifests().map(manifestRef),
+  ]);
   const live = new Set(scripts.map(scriptRef));
   const gone = (ref: string): boolean => {
     const group = groupOfRef(ref);
@@ -1684,6 +1929,61 @@ function openSettings(): void {
     'workbench.action.openSettings',
     extensionId ? `@ext:${extensionId}` : 'taskRunnerUltimate',
   );
+}
+
+/**
+ * Puts `grouping` into one of its two modes.
+ *
+ * Written globally by default: a click in a menu should not put a
+ * `.vscode/settings.json` into the user's `git status`. But `grouping` is an
+ * ordinary window-scoped setting, so a repository may already pin it — and a
+ * global write is then shadowed by that value, which left the button switching
+ * nothing, saying nothing, every time, forever. So the write goes where the
+ * value that wins already lives, and only falls back to the global one when
+ * nothing else holds it.
+ *
+ * A folder-scoped value is the case this cannot aim at: targeting one needs a
+ * resource, and this setting is about the view rather than about any one folder.
+ * That is what the check afterwards is for — it costs one read and turns the
+ * silent version of this failure into a sentence naming the setting.
+ *
+ * No repaint follows the write, because `update` resolves after the
+ * configuration event has fired and `grouping` is on `DISPLAY_SETTINGS` — the
+ * redraw is already on its way, and `syncGrouping` rides on the same event so
+ * the header button turns over with the tree rather than after it.
+ */
+async function setGrouping(mode: 'flat' | 'ecosystem'): Promise<void> {
+  const settings = vscode.workspace.getConfiguration('taskRunnerUltimate');
+  const held = settings.inspect<string>('grouping');
+  const target =
+    held?.workspaceValue !== undefined
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+  await settings.update('grouping', mode, target);
+  if (hierarchical() === (mode === 'ecosystem')) {
+    return;
+  }
+  // Something with the last word is still holding the old value — a folder
+  // setting, or a policy. Saying so beats a button that looks broken.
+  void vscode.window.showWarningMessage(
+    `Grouping is pinned to "${hierarchical() ? 'ecosystem' : 'flat'}" by a setting this view cannot write. Change taskRunnerUltimate.grouping where it is set.`,
+  );
+}
+
+/** The ☰ menu's half of the same switch, which names one thing and toggles it. */
+async function toggleGrouping(): Promise<void> {
+  await setGrouping(hierarchical() ? 'flat' : 'ecosystem');
+}
+
+/**
+ * Mirrors `grouping` into the context key the header button is drawn from.
+ *
+ * Called once on the way in and again on every configuration change, which
+ * covers the button being pressed, the setting being edited by hand, and a
+ * workspace being opened with a different mode saved in it.
+ */
+function syncGrouping(): void {
+  void vscode.commands.executeCommand('setContext', CONTEXT_HIERARCHICAL, hierarchical());
 }
 
 /**
@@ -1825,6 +2125,20 @@ async function showMenu(): Promise<void> {
       description: 'every option this extension has',
       run: async () => openSettings(),
     },
+    {
+      label: '$(archive) Check containers',
+      description: 'ask Docker what is up',
+      detail: 'Marks the compose rows whose containers are running, including a stack started outside this window.',
+      run: () => checkContainers(true),
+    },
+    {
+      label: '$(list-tree) Group by ecosystem',
+      // The same idiom the resets below use for a state: what it is now, on the
+      // right, where the eye is already going for the count.
+      description: hierarchical() ? 'on' : 'off',
+      detail: 'One row per ecosystem — Node, Rust, Docker — with the packages inside it.',
+      run: toggleGrouping,
+    },
     { label: 'Reset', kind: vscode.QuickPickItemKind.Separator },
     resetItem(resetStyles),
     ...stores.map(resetItem),
@@ -1908,15 +2222,54 @@ type TreeNode =
        */
       manifest?: vscode.Uri;
       /**
+       * The directory a heading stands for, when it stands for one rather than
+       * for a file — the shell groups, which are a folder of scripts and no one
+       * manifest. It is what Open Manifest reveals instead of trying to open a
+       * directory as a document.
+       */
+      directory?: vscode.Uri;
+      /**
+       * Which ecosystem the heading belongs to. On a manifest group it decides
+       * the glyph; on a parent row it is what the row *is*, and is what a drag
+       * reads to work out which block it is moving.
+       */
+      ecosystem?: Ecosystem;
+      /** What kind of manifest the heading is, for the two rules that turn on it. */
+      source?: SourceKind;
+      /**
+       * The folder the heading occupies — the directory a manifest sits in, and
+       * for a shell group the directory it *is*. What `attachToHosts` matches
+       * projects and their surroundings on.
+       */
+      at?: string;
+      /**
        * Whether the row is a heading the user put away — the ones under the pile,
        * and the pile itself. It is what swaps the eye on the row for the one that
        * brings it back. The grey belongs to the pile's own row and is decided by
        * its id, not by this: see `HIDDEN_COLOR`.
        */
       hidden?: boolean;
+      /**
+       * Whether the row is in the pile only because the project it is drawn
+       * inside of is. A compose file and a script folder travel with their
+       * project — see `buildTreeRoots` — but neither was put away in its own
+       * right, so neither eye belongs on them: there is nothing to bring back on
+       * its own, and nothing left to put away.
+       */
+      carried?: boolean;
       children: TreeNode[];
     }
-  | { kind: 'script'; script: ScriptEntry; inFavorites?: boolean }
+  | {
+      kind: 'script';
+      script: ScriptEntry;
+      inFavorites?: boolean;
+      /**
+       * The folder a row came from, for the rows a `shell` heading has gathered
+       * out of several — see `attachToHosts`. One heading over `scripts/` and
+       * `bin/` would otherwise draw two `build.sh` rows that read identically.
+       */
+      origin?: string;
+    }
   | { kind: 'foreign'; execution: vscode.TaskExecution };
 
 const treeChanged = new vscode.EventEmitter<void>();
@@ -1925,12 +2278,136 @@ let treeView: vscode.TreeView<TreeNode> | undefined;
 let explorerTreeView: vscode.TreeView<TreeNode> | undefined;
 
 /**
- * One icon for every package row: a stack, for the pile of tasks the row opens
- * into. It used to name the runner instead — npm, cargo, make — but a column of
- * different glyphs made the headings compete with the rows under them, and the
- * runner is already spelled out by the manifest each heading names.
+ * The fallback icon for a package row: a stack, for the pile of tasks the row
+ * opens into.
+ *
+ * It used to name the runner instead — npm, cargo, make — and that was taken out
+ * once because a column of different glyphs made the headings compete with the
+ * rows under them. `groupIcons` is where that judgement now lives: `type` puts
+ * the ecosystem's glyph back on every heading in its own colour, which is what
+ * tells a Node row from a Rust one in a polyglot repository, and `uniform` is
+ * this icon on all of them, the old look one setting away.
  */
 const GROUP_ICON = 'layers';
+
+/**
+ * What each ecosystem is called, what it is drawn as, and the colour that glyph
+ * is tinted.
+ *
+ * Codicons wherever one exists, and nothing else: an icon given as a `Uri` — a
+ * brand logo of our own — cannot resolve a `ThemeColor`, so six tinted codicons
+ * beside a handful of fixed-colour SVGs would read as a bug rather than a set.
+ * Where no codicon is brand-shaped (nothing is, for npm, Rust, Go, PHP, Deno or
+ * Docker) the nearest honest glyph is used: Rust's own mark *is* a gear, and a
+ * shell script is `terminal-bash`. Docker gets the crate — the font carries no
+ * whale, no cube and no container, and of what it does carry a box is what the
+ * industry draws a container as. `package`, the other box, is npm's.
+ *
+ * `mise` keeps its own casing, which is the rule the rest of the tree already
+ * applies to the names a project gives itself.
+ *
+ * The glyph and nothing else. A colour per ecosystem was tried and taken out:
+ * every heading in the tree then wore a colour nobody chose, which is the one
+ * job the paint is for — and a column of eleven tints turned the headings into
+ * the loudest thing on screen. A heading is tinted when somebody paints it, and
+ * otherwise wears the title colour like every other heading.
+ */
+const ECOSYSTEMS: Record<Ecosystem, { label: string; icon: string }> = {
+  node: { label: 'Node', icon: 'package' },
+  rust: { label: 'Rust', icon: 'gear' },
+  python: { label: 'Python', icon: 'snake' },
+  make: { label: 'Make', icon: 'tools' },
+  just: { label: 'Just', icon: 'list-ordered' },
+  task: { label: 'Task', icon: 'tasklist' },
+  go: { label: 'Go', icon: 'symbol-event' },
+  php: { label: 'PHP', icon: 'globe' },
+  mise: { label: 'mise', icon: 'versions' },
+  docker: { label: 'Docker', icon: 'archive' },
+  shell: { label: 'Shell', icon: 'terminal-bash' },
+};
+
+/**
+ * The glyph a shell row wears when no category has claimed it: the terminal its
+ * file is actually read by.
+ *
+ * A `play` triangle on `entrypoint.sh` said only "this is a task", which every
+ * row in the tree already is. The extension is the one thing a script file says
+ * about itself for certain, and the codicon font carries the three shells that
+ * matter — so a `.sh` reads as bash, a `.ps1` as PowerShell and a `.bat` as the
+ * command prompt, at a glance and down a column.
+ *
+ * `.zsh` and `.ksh` take the plain terminal: the font has no glyph of their own,
+ * and wearing bash's would name the wrong shell.
+ */
+const SHELL_ICONS: Readonly<Record<string, string>> = {
+  sh: 'terminal-bash',
+  bash: 'terminal-bash',
+  zsh: 'terminal',
+  ksh: 'terminal',
+  ps1: 'terminal-powershell',
+  bat: 'terminal-cmd',
+  cmd: 'terminal-cmd',
+};
+
+/** The terminal a shell row is read by, for the rows that are shell scripts. */
+function shellIcon(script: ScriptEntry): string | undefined {
+  if (script.kind !== 'shell') {
+    return undefined;
+  }
+  const name = path.posix.basename((script.file ?? script.manifest).path).toLowerCase();
+  const dot = name.lastIndexOf('.');
+  // An extension nobody has a glyph for is still a script run in a terminal.
+  return (dot > 0 ? SHELL_ICONS[name.slice(dot + 1)] : undefined) ?? 'terminal';
+}
+
+/**
+ * The manifests that make a folder a project, and so can take the compose files
+ * and script folders around them in under their own heading.
+ *
+ * The six that give a project a name of its own. A Makefile, a justfile, a
+ * Taskfile and a mise.toml are task runners rather than statements about what
+ * the folder *is*, so a folder holding only one of those is not a project a
+ * compose file could belong to, and the compose file stays a heading of its own.
+ */
+const HOST_KINDS: ReadonlySet<SourceKind> = new Set<SourceKind>([
+  'npm',
+  'deno',
+  'composer',
+  'cargo',
+  'pyproject',
+  'go',
+]);
+
+/**
+ * Whether a heading describes what is *around* a project rather than a project.
+ *
+ * These two are the reason the tree has a second level at all in `flat` mode: a
+ * compose file and a `scripts/` folder span a repository rather than sitting in
+ * it, and reading them as siblings of the packages they serve put a column of
+ * infrastructure between one project and the next.
+ */
+function attachable(kind: SourceKind | undefined): boolean {
+  return kind === 'docker-compose' || kind === 'shell';
+}
+
+/** The id an ecosystem's parent row is built with, and files its fold and colour under. */
+function ecosystemId(ecosystem: Ecosystem): string {
+  return `group:eco:${ecosystem}`;
+}
+
+/**
+ * Whether a manifest heading wears the icon its own file has in the user's file
+ * icon theme, or the one stack glyph every heading used to wear.
+ *
+ * Parent rows are not covered either way: an ecosystem row names no file, so it
+ * keeps the codicon `ECOSYSTEMS` gives it in both modes.
+ */
+function typeIcons(): boolean {
+  return (
+    vscode.workspace.getConfiguration('taskRunnerUltimate').get<string>('groupIcons', 'type') ===
+    'type'
+  );
+}
 
 /** Private URI scheme for group rows, so decorations cannot hit real files. */
 const DECORATION_SCHEME = 'taskrunnerultimate';
@@ -2032,6 +2509,29 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     // The two never mix in one gesture — the row the drag started on decides which
     // it is, and rows of the other kind travelling with it are left where they are.
     if (source[0]?.kind === 'group') {
+      // An ecosystem parent moves the whole run under it. The payload keeps
+      // `GROUPS_SCOPE`, so `handleDrop` dispatches exactly as it did; the extra
+      // `block` is what tells the two gestures apart once it gets there.
+      const parent = source[0];
+      if (parent.ecosystem && !parent.ref) {
+        const refs = parent.children.flatMap((child) =>
+          child.kind === 'group' && child.ref ? [child.ref] : [],
+        );
+        if (refs.length === 0) {
+          return;
+        }
+        const payload = new vscode.DataTransferItem(
+          JSON.stringify({ scope: GROUPS_SCOPE, refs, block: parent.ecosystem }),
+        );
+        for (const mime of DRAG_MIMES) {
+          transfer.set(mime, payload);
+        }
+        hint(
+          `$(move) Moving ${ECOSYSTEMS[parent.ecosystem].label} — drop on another ecosystem to reorder`,
+        );
+        return;
+      }
+
       const groups = source.flatMap((node) => (node.kind === 'group' && node.ref ? [node] : []));
       const first = groups[0];
       if (!first) {
@@ -2043,10 +2543,17 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
         transfer.set(mime, payload);
       }
       const what = refs.length > 1 ? `${refs.length} packages` : `"${groupHeading(first)}"`;
+      const inside =
+        hierarchical() && first.ecosystem ? ` inside ${ECOSYSTEMS[first.ecosystem].label}` : '';
       hint(
         first.hidden
           ? `$(move) Moving ${what} — drop on any package outside hidden to bring it back`
-          : `$(move) Moving ${what} — drop on another package to reorder, or on hidden to put it away`,
+          : first.carried
+            ? // In the pile because its project is, and the only place it goes is
+              // among the rows it shares that project with. Saying so beats the
+              // line below, which offers a way out and a pile it is already in.
+              `$(move) Moving ${what} — drop on another row in the same package to reorder`
+            : `$(move) Moving ${what} — drop on another package${inside} to reorder, or on hidden to put it away`,
       );
       return;
     }
@@ -2080,7 +2587,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
       return;
     }
 
-    let payload: { scope?: unknown; refs?: unknown };
+    let payload: { scope?: unknown; refs?: unknown; block?: unknown };
     try {
       payload = JSON.parse(raw) as typeof payload;
     } catch {
@@ -2088,13 +2595,16 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     }
     const scope = typeof payload.scope === 'string' ? payload.scope : undefined;
     const dragged = Array.isArray(payload.refs) ? payload.refs.filter((ref): ref is string => typeof ref === 'string') : [];
+    // Present only when an ecosystem row was the thing dragged, and checked
+    // against the table rather than trusted: it arrives as JSON off a clipboard.
+    const block = ALL_ECOSYSTEMS.find((name) => name === payload.block);
     if (!scope || dragged.length === 0) {
       clearHint();
       return;
     }
 
     if (scope === GROUPS_SCOPE) {
-      await dropGroups(dragged, target);
+      await dropGroups(dragged, target, block);
       return;
     }
 
@@ -2127,7 +2637,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     // land in front of it, on the row below they land behind it, which is what
     // a highlighted row reads as when the tree draws no gap to aim at. Dropping
     // on the group heading has no row to take, so it means the end of the list.
-    const at = anchor ? Math.min(current.indexOf(anchor), rest.length) : rest.length;
+    const at = anchor ? dropIndex(current, rest, moved, anchor) : rest.length;
     await saveOrder(scope, [...rest.slice(0, at), ...moved, ...rest.slice(at)]);
     clearHint();
     repaint();
@@ -2143,33 +2653,132 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
  * A task row is a legal target as well: it names the heading it sits under, and
  * aiming at a package by one of its tasks is what a half-open tree offers.
  */
-async function dropGroups(dragged: string[], target: TreeNode): Promise<void> {
+async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem): Promise<void> {
   if (target.kind === 'group' && target.id === HIDDEN_GROUP_ID) {
     await setGroupsHidden(dragged, true);
     return;
   }
 
   const buried = new Set(hiddenRefs());
-  const anchor = anchorGroup(target);
-  if (!anchor) {
-    hint('$(circle-slash) Not a drop target — a package moves between packages, or onto hidden');
-    return;
-  }
-  if (buried.has(anchor)) {
-    await setGroupsHidden(dragged, true);
+  const nested = hierarchical();
+  const hosts = nested ? new Map<string, string>() : await groupHosts();
+  // Whether a heading is in the pile — put there by hand, or drawn inside a
+  // project that was. Only the first has a ref in the store, and a drop aimed at
+  // either of them means the same thing to the hand that made it.
+  const pile = (ref: string | undefined): boolean =>
+    ref !== undefined && (buried.has(ref) || buried.has(hosts.get(ref) ?? ''));
+  const ecosystems = nested ? await groupEcosystems() : new Map<string, Ecosystem>();
+  const current = await groupScopes();
+  const moved = dragged.filter((ref) => current.includes(ref));
+  // Where the drop landed, as an ecosystem: a heading carries its own, a parent
+  // row is one outright, and a task row names the heading it sits under.
+  const where =
+    target.kind === 'group'
+      ? target.ecosystem
+      : target.kind === 'script' && !target.inFavorites
+        ? ecosystems.get(groupRef(target.script))
+        : undefined;
+
+  if (block) {
+    // Every heading of this ecosystem, and not only the ones the parent row was
+    // drawing. A hidden package keeps its slot in the saved order and the run's
+    // rank is read off its first member, so leaving one behind would hold the
+    // whole block where it was and the drag would appear to do nothing.
+    const run = current.filter((ref) => ecosystems.get(ref) === block);
+    if (run.length === 0 || !where || where === block) {
+      clearHint();
+      return;
+    }
+    const rest = current.filter((ref) => !run.includes(ref));
+    // The first heading of the run that was dropped on: a block takes that run's
+    // place, the way a package takes another package's.
+    const anchor = current.find((ref) => ecosystems.get(ref) === where);
+    const at = anchor ? dropIndex(current, rest, run, anchor) : rest.length;
+    await saveGroupOrder([...rest.slice(0, at), ...run, ...rest.slice(at)]);
+    clearHint();
+    repaint();
     return;
   }
 
-  const current = await groupScopes();
-  const moved = dragged.filter((ref) => current.includes(ref));
-  // Dropped on itself, or on a heading travelling with it: nothing to work out.
-  if (moved.length === 0 || moved.includes(anchor)) {
+  const anchor = anchorGroup(target);
+  if (pile(anchor)) {
+    await setGroupsHidden(dragged, true);
+    return;
+  }
+  if (moved.length === 0) {
     clearHint();
     return;
   }
+
+  // In `ecosystem` mode a heading cannot leave the run it belongs to. Allowing
+  // it would splice the ref into the flat order and `groupedByEcosystem` would
+  // pull it straight back, so the drop would read as nothing having happened —
+  // which is worse than a refusal, and a refusal is all there is: the API gives
+  // an extension no way to grey out a target under the mouse.
+  // In `flat` mode the compose files and script folders are drawn inside the
+  // project they belong to, and that placement is read off the paths rather than
+  // stored — so a drop that would take one out of its project cannot be
+  // honoured: the order would be rewritten and the next repaint would put the
+  // row straight back. Said out loud for the same reason the ecosystem rule is.
+  // A heading on its way out of the pile is not drawn inside anything yet, so
+  // the rule about staying inside a project has nothing to say about it — and
+  // saying it anyway refused the one gesture that brings such a heading back.
+  // Per row and not per gesture: one heading on its way out of the pile used to
+  // lift the rule off every other heading travelling with it, and a multi-select
+  // spanning the pile and the list could then splice a compose file out of its
+  // project — an order the next repaint undoes, which is the "nothing happened"
+  // this refusal exists to avoid.
+  // By ref in the store and not by `pile`: a heading that only travelled with
+  // its project cannot come back on its own, so the exemption is not its to
+  // take. The rule below is what tells it so, instead of a drop that writes an
+  // order and changes nothing on screen.
+  const settling = moved.filter((ref) => !buried.has(ref));
+  if (!nested && anchor && settling.length > 0) {
+    const inside = (ref: string) => hosts.get(ref) ?? '';
+    const from = new Set(settling.map(inside));
+    if (from.size > 1 || !from.has(inside(anchor))) {
+      hint(
+        '$(circle-slash) Not a drop target — this row is drawn inside its project, and moves among the rows there',
+      );
+      return;
+    }
+  }
+
+  // Every dragged heading, not only the first: one gesture can carry a
+  // multi-select spanning two runs, and the refs from the other one would be
+  // spliced into a run `groupedByEcosystem` pulls them straight back out of.
+  const homes = new Set(moved.map((ref) => ecosystems.get(ref)));
+  const [home] = homes;
+  if (nested && where && (homes.size > 1 || home !== where)) {
+    hint(
+      homes.size > 1
+        ? '$(circle-slash) Not a drop target — packages from two ecosystems do not move together'
+        : `$(circle-slash) Not a drop target — a package moves inside ${home ? ECOSYSTEMS[home].label : 'its own ecosystem'}, or onto hidden`,
+    );
+    return;
+  }
+
   const rest = current.filter((ref) => !moved.includes(ref));
-  // The same rule a task drop follows: the dragged rows take the target's place.
-  const at = Math.min(current.indexOf(anchor), rest.length);
+  let at: number;
+  if (anchor) {
+    // Dropped on itself, or on a heading travelling with it: nothing to work out.
+    if (moved.includes(anchor)) {
+      clearHint();
+      return;
+    }
+    // The same rule a task drop follows: the dragged rows take the target's place.
+    at = dropIndex(current, rest, moved, anchor);
+  } else if (nested && where && where === home) {
+    // Dropped on the ecosystem's own row, which has no slot of its own to take:
+    // the end of its run, the way a task dropped on its heading means the end of
+    // the list.
+    const last = rest.filter((ref) => ecosystems.get(ref) === where).pop();
+    at = last ? rest.indexOf(last) + 1 : rest.length;
+  } else {
+    hint('$(circle-slash) Not a drop target — a package moves between packages, or onto hidden');
+    return;
+  }
+
   await saveGroupOrder([...rest.slice(0, at), ...moved, ...rest.slice(at)]);
   // Landing outside HIDDEN is what brings a put-away heading back, and it comes
   // back where it was dropped rather than where it was hidden from.
@@ -2179,6 +2788,68 @@ async function dropGroups(dragged: string[], target: TreeNode): Promise<void> {
   );
   clearHint();
   repaint();
+}
+
+/**
+ * The project each compose file and script folder is drawn inside of, by ref —
+ * `attachedHosts` read off the scan instead of off the rows.
+ *
+ * Over the scan because a drop has to reason about headings the tree is not
+ * drawing: one in the hidden pile keeps its slot in the order a drop rewrites,
+ * and one inside a put-away project is still drawn inside it.
+ */
+async function groupHosts(): Promise<Map<string, string>> {
+  // One row settles a heading's kind and its folder, so the first of each is all
+  // the walk needs.
+  const sample = new Map<string, ScriptEntry>();
+  for (const script of await savedOrder()) {
+    const ref = groupRef(script);
+    if (!sample.has(ref)) {
+      sample.set(ref, script);
+    }
+  }
+  return attachedHosts(
+    [...sample].map(([ref, script]) => ({ ref, at: manifestFolder(script), kind: script.kind })),
+  );
+}
+
+/**
+ * The ecosystem each heading in the saved order belongs to. Read off the scan
+ * rather than off the tree, because a drop has to place a heading the tree may
+ * not be drawing — one inside the hidden pile keeps its slot in this order.
+ */
+async function groupEcosystems(): Promise<Map<string, Ecosystem>> {
+  const map = new Map<string, Ecosystem>();
+  for (const script of await savedOrder()) {
+    map.set(groupRef(script), ecosystemOf(script.kind));
+  }
+  return map;
+}
+
+/**
+ * Where a set of dragged refs lands when it is dropped on `anchor`.
+ *
+ * The rule every drop in this tree follows: the dragged rows take the target's
+ * place — dropped on a row above they land in front of it, on a row below they
+ * land behind it.
+ *
+ * The arithmetic has to be done against the list the moved rows have already
+ * been taken out of, plus one when any of them came from above the anchor.
+ * Reading the index straight out of `current` overshoots by however many of them
+ * sat in front of it: invisible while that is one row, and wrong the moment it
+ * is two — which for a whole ecosystem block is the ordinary case, not the
+ * exception.
+ */
+function dropIndex(
+  current: ReadonlyArray<string>,
+  rest: ReadonlyArray<string>,
+  moved: ReadonlyArray<string>,
+  anchor: string,
+): number {
+  const target = current.indexOf(anchor);
+  const above = moved.some((ref) => current.indexOf(ref) < target);
+  const landing = rest.indexOf(anchor);
+  return landing < 0 ? rest.length : Math.min(landing + (above ? 1 : 0), rest.length);
 }
 
 /** The heading a drop lands on: the row itself, or the one a task row sits under. */
@@ -2276,13 +2947,22 @@ function collapseRef(node: TreeNode): string | undefined {
 
 /**
  * Whether a group is drawn open the first time it is seen. Everything is, bar
- * HIDDEN: it is the one group whose point is to be out of the way, and the store
- * holds its exception the other way round — a ref present there means the user
- * opened it, not that they shut it. One store, one meaning per group, and the
- * default each group wants.
+ * two — and for those the store holds the exception the other way round: a ref
+ * present there means the user opened it, not that they shut it. One store, one
+ * meaning per group, and the default each group wants.
+ *
+ * HIDDEN is the one whose whole point is to be out of the way. A compose file is
+ * the other: it is seven rows for one file where a package.json is seven rows
+ * for seven scripts, most of them — `build`, `logs`, `ps` — the ones you go
+ * looking for rather than press, and in `flat` mode they sit inside a project
+ * heading that has its own tasks to show first. Shut, it is one line saying
+ * which stack is here, which is what a heading is for.
  */
 function startsOpen(node: TreeNode): boolean {
-  return !(node.kind === 'group' && node.id === HIDDEN_GROUP_ID);
+  if (node.kind !== 'group') {
+    return true;
+  }
+  return node.id !== HIDDEN_GROUP_ID && node.source !== 'docker-compose';
 }
 
 function isCollapsed(node: TreeNode): boolean {
@@ -2411,26 +3091,70 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const groups: Array<TreeNode & { kind: 'group' }> = [];
   const byManifest = new Map<string, (typeof groups)[number]>();
   const crowded = crowdedFolders(scripts);
+  const colliding = collidingHeadings(scripts, crowded);
 
   for (const script of scripts) {
     const key = script.manifest.toString();
     let group = byManifest.get(key);
     if (!group) {
       // A folder with a second manifest in it — a Cargo.toml beside a Makefile —
-      // has two headings that name the same folder, so there the path after the
-      // arrow carries the file name that tells them apart.
-      const shared = crowded.has(manifestFolder(script));
+      // has two headings that would otherwise name the same folder, so there the
+      // file name is what the heading leads with instead.
+      //
+      // A compose file always does, crowded folder or not: a folder can hold
+      // `docker-compose.yml` and `docker-compose.dev.yml` at once, and the
+      // `name:` inside them is as often as not the same word.
+      const shared = crowded.has(manifestFolder(script)) || script.kind === 'docker-compose';
       group = {
         kind: 'group',
         id: `group:${key}`,
         label: manifestTitle(script),
         detail: packagePath(script),
-        folder: shared ? packagePath(script) : packageFolder(script),
-        place: packageHeading(script, shared),
+        // The directory, and never the file — with one exception, which is the
+        // one thing the bullet is there for.
+        //
+        // Once the heading leads with a file name, repeating it after the bullet
+        // said nothing twice — `compose.yaml • compose.yaml`. What the eye wants
+        // there is where the file lives, and the full path keeps its place in
+        // the tooltip, which is what `detail` above is for.
+        //
+        // The exception is two headings in one folder that lead with the *same*
+        // text, which is what a napi-rs, neon, wasm-pack or maturin package is:
+        // a Cargo.toml beside a package.json, both declaring the same name.
+        // Neither row says anything the other does not, and the manifest path is
+        // the only thing left that differs — `mylib • crates/mylib/Cargo.toml`
+        // beside `mylib • crates/mylib/package.json`. A heading that already
+        // differs is left alone: `engine • svc` beside `Makefile • svc` is two
+        // rows nobody can confuse, and a path on both would be noise.
+        //
+        // A script folder takes neither half. It is drawn as its own path,
+        // whole, with nothing in front of the bullet: `scripts • apps/web` put
+        // the one word all of these rows share where the eye looks first and the
+        // half that tells them apart behind it, so a **Shell** parent held a
+        // column of `scripts`, `scripts`, `scripts` to be read by their tails.
+        // The path is the name here — which is what the dropdown has called
+        // these rows all along.
+        //
+        // `ecosystem` mode is where that row is drawn; in `flat` mode a
+        // project's script folders are one `shell` row by the time the tree has
+        // them, and that row is named rather than pathed. See `attachToHosts`.
+        folder: script.file
+          ? undefined
+          : colliding.has(headingKey(script, shared))
+            ? packagePath(script)
+            : packageFolder(script),
+        place: script.file ? packagePath(script) : packageHeading(script, shared),
         icon: GROUP_ICON,
         scope: groupRef(script),
         ref: groupRef(script),
         manifest: script.manifest,
+        // A shell group's manifest *is* a directory — see `collectShellScripts`
+        // — so the row carries it as one as well, and Open Manifest reveals the
+        // folder rather than failing to open it as a document.
+        directory: script.file ? script.manifest : undefined,
+        ecosystem: ecosystemOf(script.kind),
+        source: script.kind,
+        at: manifestFolder(script),
         children: [],
       };
       byManifest.set(key, group);
@@ -2443,14 +3167,47 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   // A heading the user put away leaves the list it was in and goes to the pile at
   // the bottom, taking its tasks with it. It keeps its slot in the saved order all
   // the while, so the eye that brings it back puts it back where it was.
+  //
+  // It takes what is drawn inside it along. In `flat` mode a compose file and a
+  // script folder are rows inside a project rather than beside one, and putting
+  // the project away is putting that folder away: the rows go with it, nested as
+  // they were. Left behind they surfaced at the root, level with the packages —
+  // out of the folder the eye had just put away, and in the one place this mode
+  // never draws them.
   const buried = new Set(hiddenRefs());
-  const shown = groups.filter((group) => !(group.ref && buried.has(group.ref)));
-  const away = groups.filter((group) => group.ref && buried.has(group.ref));
+  const hosts = hierarchical()
+    ? new Map<string, string>()
+    : attachedHosts(
+        groups.flatMap((group) =>
+          group.ref !== undefined && group.at !== undefined && group.source !== undefined
+            ? [{ ref: group.ref, at: group.at, kind: group.source }]
+            : [],
+        ),
+      );
+  const inPile = (group: (typeof groups)[number]): boolean =>
+    group.ref !== undefined && (buried.has(group.ref) || buried.has(hosts.get(group.ref) ?? ''));
+  const shown = groups.filter((group) => !inPile(group));
+  const away = groups.filter((group) => inPile(group));
 
   // The saved order, whole: what is running inside a group is no reason to move
   // the group, here or in the picker. Inside one nothing moves either, unless
   // `pinRunningTasks` lifts the rows.
-  const roots: TreeNode[] = [...shown];
+  //
+  // In `ecosystem` mode the same list is drawn one level down, under a parent
+  // row per ecosystem. `savedOrder` has already gathered each ecosystem's groups
+  // into one run, so this only has to fold the runs it is handed — which is why
+  // the tree and the dropdown cannot disagree about the order.
+  //
+  // A single manifest gets no parent, mirroring the rule `buildItems` follows
+  // for package separators: one heading over one heading says nothing.
+  const roots: TreeNode[] = hierarchical()
+    ? // A single manifest under a parent row of its own says nothing, so the one
+      // group stands at the root by itself. `attachToHosts` is the other mode's
+      // second level and has nothing to do here either way.
+      shown.length > 1
+      ? parentRows(shown)
+      : [...shown]
+    : attachToHosts(shown);
 
   // Tasks that are not backed by a manifest have no group of their own.
   const foreign = foreignExecutions();
@@ -2485,17 +3242,311 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   // point is to be out of the way has not moved out of the way if it opens
   // itself. It is a drop target too — dragging a heading onto it puts it away,
   // and dragging one back out onto any other heading brings it back.
+  //
+  // Its children stay manifest groups even in `ecosystem` mode. A pile of
+  // put-away packages routinely spans ecosystems, so parenting it would mostly
+  // produce parent rows holding one child each — and `shown` and `away` are
+  // split above, so a parent's count never includes anything hidden.
+  //
+  // They are nested by the same walk the list above uses, though, so a project
+  // in the pile is still the folder it was on the way in: opening the pile shows
+  // what was put away, not its contents tipped out beside it. `ecosystem` mode
+  // nests nothing anywhere, so there the pile is the flat list it always was.
   if (away.length > 0) {
+    const pile = hierarchical() ? away : attachToHosts(away, HIDDEN_GROUP_ID);
     roots.push({
       kind: 'group',
       id: HIDDEN_GROUP_ID,
-      label: `hidden (${away.length})`,
+      // What the fold opens onto, and not how many refs the store holds: a row
+      // travelling with its project is behind that project rather than beside
+      // it, and counting it here promised more rows than the pile has.
+      label: `hidden (${pile.length})`,
       icon: 'eye-closed',
       hidden: true,
-      children: away.map((group) => ({ ...group, hidden: true })),
+      children: pile.map(function putAway(node: TreeNode): TreeNode {
+        // The eye that brings a heading back belongs on the ones the user put
+        // here, and on nothing else: a row that only travelled with its project
+        // comes back when the project does, and a button that cannot do that is
+        // worse than no button at all.
+        return node.kind !== 'group'
+          ? node
+          : {
+              ...node,
+              ...(node.ref !== undefined && buried.has(node.ref)
+                ? { hidden: true }
+                : { carried: true }),
+              children: node.children.map(putAway),
+            };
+      }),
     });
   }
 
+  return roots;
+}
+
+/**
+ * The compose files and script folders folded in under the project each of them
+ * belongs to — the `flat` mode's own second level.
+ *
+ * A `docker-compose.yml` and a `scripts/` folder describe the thing around a
+ * project rather than a thing beside it: they reach across every folder under
+ * the project root, which is exactly why a heading of their own, level with the
+ * packages, read as infrastructure wedged between one package and the next. So
+ * each of them looks for the nearest folder at or above its own that holds a
+ * project manifest, and goes inside that project's heading.
+ *
+ * Nothing is stored. The relationship is the paths, so it is computed here every
+ * time and there is no state to go stale, prune or reset — which is also why a
+ * drag cannot move one of these out of its project: see `dropGroups`.
+ *
+ * In `ecosystem` mode this does not run at all. There the question the tree
+ * answers is "what kind of thing is this", and the answer for a compose file is
+ * Docker, not the package it happens to serve.
+ *
+ * It runs twice: once over the headings on the list, once over the ones in the
+ * pile. `rootKey` is what keeps the two `shell` buckets apart — one row per
+ * place, since a tree cannot hold two rows under one id, and the bucket with no
+ * project above it is the only one both calls could name the same way.
+ */
+function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>, rootKey = ''): TreeNode[] {
+  const hosts = new Map<string, TreeNode & { kind: 'group' }>();
+  for (const group of groups) {
+    if (group.at !== undefined && group.source && HOST_KINDS.has(group.source) && !hosts.has(group.at)) {
+      hosts.set(group.at, group);
+    }
+  }
+
+  const roots: TreeNode[] = [];
+  // The script folders of one project, gathered by the project they landed in —
+  // the ones with no project above them share the bucket keyed by nothing. The
+  // row goes in where the first of them would have gone, and is filled below
+  // once it is known how many folders it stands for.
+  type Group = TreeNode & { kind: 'group' };
+  const folders = new Map<string, { row: Group; host?: Group; members: Group[] }>();
+
+  for (const group of groups) {
+    const host = attachable(group.source) ? hostOf(group.at, hosts) : undefined;
+    if (group.source === 'shell') {
+      const key = host?.id ?? rootKey;
+      let folder = folders.get(key);
+      if (!folder) {
+        folder = { row: shellFolder(key), host, members: [] };
+        folders.set(key, folder);
+        (host ? host.children : roots).push(folder.row);
+      }
+      folder.members.push(group);
+      continue;
+    }
+    if (!host) {
+      roots.push(group);
+      continue;
+    }
+    host.children.push(insideHost(group, host));
+  }
+
+  for (const { row, host, members } of folders.values()) {
+    const [only] = members;
+    if (members.length === 1 && only) {
+      // One folder on disk behind the row, so the row is that folder: it keeps
+      // the ref, the path and the drag scope it had, and everything those carry
+      // — rename, hide, Open Folder, a colour, an icon, a saved fold. `shell` is
+      // only what it is called.
+      Object.assign(row, {
+        label: only.label,
+        detail: only.detail,
+        ref: only.ref,
+        scope: only.scope,
+        manifest: only.manifest,
+        directory: only.directory,
+        at: only.at,
+      });
+      row.children.push(...only.children);
+    } else {
+      // Several folders in one row, so each row says which it came from — `bin`
+      // and `scripts` both hold a `build.sh` often enough. A script in the
+      // project's own folder has no path to name and says nothing.
+      for (const member of members) {
+        // The folder's own name, which for a script folder is what `label`
+        // holds: `place` is the whole path on these rows, and a dimmed column
+        // repeating the path of a row that is right there says nothing.
+        const origin = host ? insideOf(member, host) : member.label;
+        row.children.push(
+          ...member.children.map((child) =>
+            child.kind === 'script' && origin ? { ...child, origin } : child,
+          ),
+        );
+      }
+    }
+    // How many scripts are behind the fold — in the label, since the decoration
+    // that tints a row tints a description with it. Every other heading is named
+    // by a file or a package and counts nothing; this one is named after what it
+    // holds, and how much of it is the rest of that sentence. The name it
+    // restores to on a rename is untouched — that is `label`, and this is the
+    // half of the heading the row shows.
+    //
+    // Brackets rather than the parentheses an ecosystem row uses, and nothing at
+    // all for a single script: `shell [1]` is a number that can only ever be one
+    // thing, counted where there was nothing to count.
+    const held = row.children.length;
+    row.place = held > 1 ? `shell [${held}]` : 'shell';
+  }
+  return roots;
+}
+
+/**
+ * The `shell` heading a project's script folders are drawn as, in `flat` mode.
+ *
+ * One row and not one per folder: `scripts/`, `bin/` and `tools/ci` under one
+ * project are three headings to fold, paint and scroll past, all of them saying
+ * the same thing — that there are shell scripts here. What is worth telling
+ * apart is a script from a task, and that is the row, not the heading.
+ *
+ * It is built the way an ecosystem parent row is — no `ref`, no `scope`, no
+ * `manifest` — so rename and hide stay off a row that names nothing on disk,
+ * while fold, colour, icon and stop-all follow from `node.id` exactly as they do
+ * there. A bucket holding a single folder is that folder again by the time it is
+ * drawn: see `attachToHosts`.
+ *
+ * `ecosystem` mode files the same folders under **Shell** instead, which is the
+ * same idea one level up, so this does not run there.
+ */
+function shellFolder(key: string): TreeNode & { kind: 'group' } {
+  return {
+    kind: 'group',
+    id: `group:shell:${key}`,
+    label: 'shell',
+    place: 'shell',
+    // The stack every heading falls back to under `groupIcons: 'uniform'`; the
+    // terminal it wears otherwise is `ECOSYSTEMS.shell` — see `treeItemFor`.
+    icon: GROUP_ICON,
+    ecosystem: 'shell',
+    source: 'shell',
+    children: [],
+  };
+}
+
+/** The nearest project at or above a folder, walking up as far as the paths go. */
+function hostOf<T>(at: string | undefined, hosts: ReadonlyMap<string, T>): T | undefined {
+  let folder = at;
+  while (folder !== undefined) {
+    const host = hosts.get(folder);
+    if (host) {
+      return host;
+    }
+    const parent = path.posix.dirname(folder);
+    // `dirname('/')` is `/`, which is where the walk runs out of workspace.
+    folder = parent === folder ? undefined : parent;
+  }
+  return undefined;
+}
+
+/**
+ * The project each compose file and script folder belongs to, by ref — the one
+ * walk `orderedByHost`, `buildTreeRoots` and `groupHosts` all read, so the saved
+ * order, the tree and the drop arithmetic cannot disagree about what is drawn
+ * inside what.
+ *
+ * Hiding has nothing to do with it. A project that is put away still hosts what
+ * sits under it, which is what takes its compose files and script folders into
+ * the pile along with it. Left out, they came back to the root the moment their
+ * project went away — level with the packages, which is the one place `flat`
+ * mode never draws them, and out of the folder the eye had just put away whole.
+ */
+function attachedHosts(
+  entries: ReadonlyArray<{ ref: string; at: string; kind: SourceKind }>,
+): Map<string, string> {
+  const hosts = new Map<string, string>();
+  for (const entry of entries) {
+    if (HOST_KINDS.has(entry.kind) && !hosts.has(entry.at)) {
+      hosts.set(entry.at, entry.ref);
+    }
+  }
+
+  const attached = new Map<string, string>();
+  for (const entry of entries) {
+    const host = attachable(entry.kind) ? hostOf(entry.at, hosts) : undefined;
+    if (host !== undefined && host !== entry.ref) {
+      attached.set(entry.ref, host);
+    }
+  }
+  return attached;
+}
+
+/**
+ * The same heading, said as something inside a project rather than beside one.
+ *
+ * The path shrinks to where it sits relative to that project — the heading above
+ * has already named everything the two have in common, and repeating it is the
+ * noise the tree avoids by not printing the workspace name on every row.
+ *
+ * The compose files are what reaches this: a project's script folders are one
+ * `shell` row by the time they are drawn, and that row is named rather than
+ * pathed. `insideOf` is the half of this they do use.
+ */
+function insideHost(
+  group: TreeNode & { kind: 'group' },
+  host: TreeNode & { kind: 'group' },
+): TreeNode & { kind: 'group' } {
+  const inside = insideOf(group, host);
+  return { ...group, folder: inside || undefined };
+}
+
+/**
+ * Where a heading sits relative to the project it is drawn inside — empty when
+ * that is the project's own folder, which is a path with nothing left to say
+ * rather than a missing one.
+ */
+function insideOf(group: TreeNode & { kind: 'group' }, host: TreeNode & { kind: 'group' }): string {
+  return group.at && host.at && group.at.startsWith(`${host.at}/`) ? group.at.slice(host.at.length + 1) : '';
+}
+
+/**
+ * One row per ecosystem, each holding the manifest groups that belong to it, in
+ * the order they were handed over.
+ *
+ * The row is built with no `ref`, no `scope` and no `manifest`, which is a
+ * choice and not an omission: that is the shape OTHER TASKS and the hidden pile
+ * already have, and the whole set of affordances follows from it with no code of
+ * its own. Fold, colour and icon work through the `node.id` fallbacks
+ * `collapseRef`, `colorRef` and `storedIcon` already take. Rename, Hide and Open
+ * Manifest stay off — there is no name on disk for a rename to restore, no file
+ * to open, and hiding a whole ecosystem is what `sources` does properly.
+ *
+ * The count rides in the label rather than in a description, because the
+ * decoration that tints a row tints its description with it.
+ */
+function parentRows(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] {
+  const parents = new Map<Ecosystem, TreeNode & { kind: 'group' }>();
+  const roots: TreeNode[] = [];
+
+  for (const group of groups) {
+    const ecosystem = group.ecosystem;
+    // Nothing reaches here without one; a group built without a kind to read
+    // stays at the root rather than being filed under a guess.
+    if (!ecosystem) {
+      roots.push(group);
+      continue;
+    }
+    let parent = parents.get(ecosystem);
+    if (!parent) {
+      const type = ECOSYSTEMS[ecosystem];
+      parent = {
+        kind: 'group',
+        id: ecosystemId(ecosystem),
+        label: type.label,
+        icon: type.icon,
+        ecosystem,
+        children: [],
+      };
+      parents.set(ecosystem, parent);
+      roots.push(parent);
+    }
+    parent.children.push(group);
+  }
+
+  for (const parent of parents.values()) {
+    parent.label = `${parent.label} (${parent.children.length})`;
+  }
   return roots;
 }
 
@@ -2547,7 +3598,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // The path is spelled as it is on disk, for the same reason as the folder
     // above: it is a path, and a path that has been re-cased is one you cannot
     // paste into a terminal.
-    const heading = node.folder ? `${title} • ${node.folder}` : title;
+    //
+    // And no bullet at all when the path would only repeat the name: a manifest
+    // alone in `tools/` is `tools`, not `tools • tools`, and a compose file in
+    // the root of a single-folder workspace has no path left to show.
+    const heading = node.folder && node.folder !== title ? `${title} • ${node.folder}` : title;
     // Open unless the user has folded this one shut before: a tree you have never
     // touched shows everything it found, and one you have shows it as you left it.
     const item = new vscode.TreeItem(
@@ -2571,14 +3626,63 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // on the label and on the icon alike: the point of painting one is to find it
     // in a column of headings that otherwise all look the same. OTHER TASKS takes
     // one too — it is a row on the same list, whatever it cannot be renamed to.
+    //
+    // The ecosystem's own glyph belongs to the parent rows, which stand for an
+    // ecosystem and have no file of their own to show. OTHER TASKS and the
+    // hidden pile carry no ecosystem and are left exactly as they were.
+    //
+    // The glyph only. The colour of a heading is either one somebody painted or
+    // the one every heading shares; see `ECOSYSTEMS` for why there is no third.
+    const type = node.ecosystem && node.ref === undefined ? ECOSYSTEMS[node.ecosystem] : undefined;
     const tint = nodeColor(node) ?? (node.id === HIDDEN_GROUP_ID ? HIDDEN_COLOR : TITLE_COLOR);
+    // The path this points at ends in the manifest's own file name — `detail` is
+    // the manifest path — which is what lets the file icon theme below find an
+    // icon for it while the scheme stays ours. Both halves matter: the scheme
+    // keeps our colour off the real file in the Explorer, and the file name is
+    // the only thing an icon theme matches on.
     item.resourceUri = decorationUri(tint, node.detail ?? node.label);
-    // An icon the user picked stands in for the stock one, in the tint the row
-    // already wears — the icon says which row this is, the colour keeps saying
-    // what it says on every heading.
-    const glyph = storedIcon(node.ref ?? node.id) ?? node.icon;
-    if (glyph) {
-      item.iconPath = new vscode.ThemeIcon(glyph, new vscode.ThemeColor(tint));
+
+    // A heading that names something on disk wears that thing's own icon, taken
+    // from whichever file icon theme the user runs — the real npm, Rust and
+    // Docker marks, which no codicon font carries. The decoration above colours
+    // the label and leaves the icon alone, so a painted heading keeps both: its
+    // colour on the text and its logo beside it.
+    //
+    // An icon picked by hand still stands in for it, and `groupIcons: 'uniform'`
+    // still puts the one stack glyph on every heading.
+    const picked = storedIcon(node.ref ?? node.id);
+    // Whether anything under this heading is running, which the icon and the
+    // buttons both read. One walk for the two of them.
+    const alive = runningScriptsOf(node).length > 0;
+    // A folder of shell scripts is the one heading with no file behind it, and a
+    // theme can only match on a file name — it used to borrow the theme's folder
+    // icon, which said "folder" where the rows inside it say bash, PowerShell and
+    // cmd. So it wears the terminal the Shell ecosystem row wears, and follows
+    // `groupIcons` like every other heading: `uniform` puts the stack back on it.
+    const stock = node.source === 'shell' && typeIcons() ? ECOSYSTEMS.shell.icon : node.icon;
+    if (alive && node.source === 'docker-compose') {
+      // A compose file is the one heading that *is* the thing being run — the
+      // stack, which is why ▶ and ■ sit on the row — so it spins while any part
+      // of it runs, the way a task row does. Any part: one `up: web` of six
+      // services is the stack being up as far as this row is concerned, and the
+      // row is folded shut most of the time, which is exactly when a heading
+      // that cannot say it is busy is a heading you have to open to find out.
+      //
+      // Only compose. Every other heading is a file or a folder that *holds*
+      // tasks rather than being one, and a spinner on all of them would be a
+      // column of them in a monorepo where one `dev` is running.
+      //
+      // The spinner wins over an icon picked by hand for the same reason it does
+      // on a row: "this one is busy" is the answer to a different question, and
+      // it is the answer for as long as it is the one worth finding.
+      item.iconPath = runningIcon();
+    } else if (!picked && node.ref !== undefined && node.source !== 'shell' && typeIcons()) {
+      item.iconPath = vscode.ThemeIcon.File;
+    } else {
+      const glyph = picked ?? type?.icon ?? stock;
+      if (glyph) {
+        item.iconPath = new vscode.ThemeIcon(glyph, new vscode.ThemeColor(tint));
+      }
     }
     item.id = node.id;
     // Only a heading that names something on disk can be renamed back to it, so
@@ -2587,8 +3691,28 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // one button in two states, and only one of them can be on a row at a time.
     // `:running` marks a heading with something alive under it, which is what
     // puts the stop-all and restart-all buttons on the row and nowhere else.
-    const alive = node.children.some((child) => child.kind === 'script' && running.has(child.script.key));
-    const state = node.hidden ? 'group:package:hidden' : 'group:package';
+    //
+    // An ecosystem parent is the third shape: it has no ref, so it is neither
+    // renameable nor hideable, but it does hold running rows and so keeps the
+    // stop-all and restart-all buttons.
+    if (node.ecosystem && !node.ref) {
+      item.contextValue = alive ? 'group:eco:running' : 'group:eco';
+      return item;
+    }
+    // A compose heading says whether its stack is up, which is what puts ▶ and ■
+    // on the heading itself: the file *is* the stack, and bringing it up or
+    // taking it down is the one thing anybody asks of a compose file. `up` is
+    // what Docker last answered — see `containers` — and `down` is everything
+    // else, "nobody has asked" included. A heading with no `up` row to press
+    // carries neither, and reads exactly as it did before.
+    const stack = composeUpNode(node);
+    const stacked = stack ? (containersUp(stack.script) ? ':up' : ':down') : '';
+    // Three states and not two. `:carried` is a heading the pile holds only
+    // because the project it is drawn inside of is put away: it is in there, so
+    // Hide has nothing left to do, and it was never put there on its own, so
+    // Show has nothing to bring back — see `carried` on the node.
+    const put = node.carried ? ':carried' : node.hidden ? ':hidden' : '';
+    const state = `group:package${stacked}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
@@ -2603,13 +3727,22 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   }
 
   const isRunning = running.has(node.script.key);
+  // Reported by Docker rather than by the task system, and only worth saying
+  // when nothing of ours is running — there the spinner is the better answer.
+  const up = !isRunning && containersUp(node.script);
   const item = new vscode.TreeItem(displayName(node.script));
   // A starred script is on screen twice, at the top of the list and in its own
   // group. Without ids of its own the tree cannot tell the two rows apart, and
   // the selection would jump between them. Built from the absolute `key` rather than
   // the storage ref, which trades uniqueness for portability.
   item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
-  item.description = scriptDescription(node.script, node.inFavorites);
+  item.description = [
+    up ? 'up' : undefined,
+    node.origin,
+    scriptDescription(node.script, node.inFavorites),
+  ]
+    .filter(Boolean)
+    .join(' · ');
   // The confirmation has nothing on the row itself — a badge for a state you set
   // once and then want to forget about would cost a column of every row to say
   // nothing about most of them — so the tooltip is where it is readable without
@@ -2620,7 +3753,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     ...(needsConfirmation(node.script) ? ['Asks before it starts or stops.'] : []),
   ].join('\n');
   const tint = nodeColor(node);
-  item.iconPath = iconFor(node.script, isRunning, tint);
+  item.iconPath = iconFor(node.script, isRunning, tint, up);
   // A painted task carries the same decoration trick the headings do, which is
   // the only way a tree label takes a colour at all. The description goes with it
   // — the decoration lands on the whole resource label and `.label-description`
@@ -2630,15 +3763,24 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (tint) {
     item.resourceUri = decorationUri(tint, scriptRef(node.script));
   }
-  // Four independent axes in one value, matched a piece at a time by the
+  // Five independent axes in one value, matched a piece at a time by the
   // `when` clauses in contributes.menus. Each pair is spelled so that neither
   // half is a substring of the other at a `:` boundary — `:fav:` cannot be found
-  // inside `:nofav:` — which is what lets one axis be matched without the three
+  // inside `:nofav:` — which is what lets one axis be matched without the four
   // around it having to be written out.
+  // `up` rides on the first axis rather than taking one of its own: the last
+  // axis is matched with a `$` anchor, and a segment appended after it would
+  // stop every one of those clauses matching at all. An axis added later goes in
+  // front of that last one instead, where the `.+` of `/^script:.+:confirm$/`
+  // swallows it — which is where `shell` went.
   item.contextValue = [
     'script',
-    isRunning ? 'running' : 'idle',
+    isRunning ? 'running' : up ? 'up' : 'idle',
     isFavorite(node.script) ? 'fav' : 'nofav',
+    // What kind of file the row runs, which is what puts Add to Terminal on the
+    // shell rows and nowhere else. It goes here rather than after `confirm`
+    // because that one is matched with a `$` anchor — see below.
+    node.script.kind === 'shell' ? 'shell' : 'task',
     needsConfirmation(node.script) ? 'confirm' : 'noconfirm',
   ].join(':');
   item.command = {
@@ -2674,6 +3816,207 @@ function scriptDescription(script: ScriptEntry, inFavorites = false): string {
 /** Namespace a script belongs to: its package's name, or where the manifest lives. */
 function packageOrigin(script: ScriptEntry): string {
   return customGroupTitle(script) ?? script.packageName ?? packagePath(script);
+}
+
+// --- containers --------------------------------------------------------------
+
+/**
+ * What Docker last said about each compose file, by manifest URI: the services
+ * it reported up.
+ *
+ * Asked for rather than watched. A background poll would mean a process per
+ * compose file on a timer, which is a cost every workspace would pay for a
+ * question most of them never ask — so this is filled by the Check Containers
+ * command and refreshed after a compose task of ours ends, and is empty until
+ * then. An empty map is not "nothing is running"; it is "nobody has asked".
+ */
+const containers = new Map<string, Set<string>>();
+
+/** The service an `up` row stands for, or nothing for the row that means all of them. */
+function composeService(script: ScriptEntry): string | undefined {
+  const at = script.name.indexOf(': ');
+  return script.name.slice(0, at < 0 ? undefined : at) === 'up' && at > 0
+    ? script.name.slice(at + 2)
+    : undefined;
+}
+
+/** Whether a row is one of the two that stand for containers being up. */
+function isComposeUp(script: ScriptEntry): boolean {
+  return script.kind === 'docker-compose' && (script.name === 'up' || script.name.startsWith('up: '));
+}
+
+/**
+ * Whether Docker last reported containers up for this row — the whole file for a
+ * bare `up`, one service for an `up: <service>`.
+ */
+function containersUp(script: ScriptEntry): boolean {
+  if (!isComposeUp(script)) {
+    return false;
+  }
+  const reported = containers.get(script.manifest.toString());
+  if (!reported) {
+    return false;
+  }
+  const service = composeService(script);
+  return service ? reported.has(service) : reported.size > 0;
+}
+
+/**
+ * The words in front of the subcommand on an `up` row — the program, the `-f`s,
+ * and nothing else. Read back off a row rather than rebuilt, so the override
+ * file and the `dockerCompose` spelling the parser settled on are the ones the
+ * probe uses too.
+ *
+ * Only an `up` row, and that is a property of the arithmetic rather than a
+ * policy: `up` is one word and `up: <service>` is two, so the prefix is a fixed
+ * distance from the end. `logs -f` is two words for one subcommand and `ps` is
+ * one, so no other row can be measured this way — which is why every caller
+ * looks up an `up` row of the file it cares about instead of using the row in
+ * front of it.
+ */
+function composePrefix(script: ScriptEntry): string[] | undefined {
+  const argv = script.argv;
+  const service = composeService(script);
+  const at = argv ? argv.length - (service ? 2 : 1) : -1;
+  return argv && at > 0 && argv[at] === 'up' ? argv.slice(0, at) : undefined;
+}
+
+/**
+ * The command that stops what an `up` row started, built from that row's own
+ * argv so it names the same files.
+ *
+ * `stop` and not `down`: the button is a stop, and `down` would also delete the
+ * containers and their networks, which is a different thing than the one the
+ * square promises.
+ */
+function composeStopArgv(script: ScriptEntry): string[] | undefined {
+  const prefix = composePrefix(script);
+  const service = composeService(script);
+  return prefix ? [...prefix, 'stop', ...(service ? [service] : [])] : undefined;
+}
+
+/**
+ * Asks Docker about every compose file in the scan and repaints.
+ *
+ * A file that cannot be asked about keeps whatever it last said rather than
+ * being marked stopped: "the daemon is down" is not "your stack is down", and
+ * the second is a thing a row must not claim on the strength of a failed call.
+ */
+async function checkContainers(announce: boolean): Promise<void> {
+  const scripts = await collectScripts();
+  // One probe per compose file, not per row: all the `up` rows of a file share a
+  // prefix and would ask the same question.
+  const files = new Map<string, ScriptEntry>();
+  for (const script of scripts) {
+    if (isComposeUp(script) && !files.has(script.manifest.toString())) {
+      files.set(script.manifest.toString(), script);
+    }
+  }
+
+  if (files.size === 0) {
+    if (announce) {
+      void vscode.window.showInformationMessage('No compose files in this workspace to check.');
+    }
+    return;
+  }
+
+  // A question about a monorepo is still one question: the files are asked in
+  // small batches rather than all at once, so a repository of per-service
+  // compose files does not put dozens of docker CLI processes up together.
+  const BATCH = 4;
+  let asked = 0;
+  // Rebuilt rather than written into: an entry for a compose file the scan no
+  // longer has cannot describe anything on screen, and it was still being added
+  // to the total below — a deleted file's old services reported as up.
+  const fresh = new Map<string, Set<string>>();
+  const queue = [...files];
+  while (queue.length > 0) {
+    await Promise.all(
+      queue.splice(0, BATCH).map(async ([key, script]) => {
+        const prefix = composePrefix(script);
+        const state = prefix ? await composeState(prefix, script.cwd.fsPath) : undefined;
+        if (state) {
+          asked++;
+          fresh.set(key, state.running);
+        } else {
+          // Docker could not answer for this one, so its last answer stands —
+          // "I could not ask" is not "your stack is down".
+          const previous = containers.get(key);
+          if (previous) {
+            fresh.set(key, previous);
+          }
+        }
+      }),
+    );
+  }
+  containers.clear();
+  for (const [key, services] of fresh) {
+    containers.set(key, services);
+  }
+
+  repaint();
+  if (!announce) {
+    return;
+  }
+  if (asked === 0) {
+    void vscode.window.showWarningMessage(
+      'Could not ask Docker about any compose file. Is Docker running, and is ' +
+        '"taskRunnerUltimate.dockerCompose" the command this machine has?',
+    );
+    return;
+  }
+  const up = [...containers.values()].reduce((count, services) => count + services.size, 0);
+  vscode.window.setStatusBarMessage(
+    up > 0
+      ? `Task & Script Explorer: ${up} ${up === 1 ? 'service' : 'services'} up`
+      : 'Task & Script Explorer: nothing running',
+    3000,
+  );
+}
+
+/**
+ * Asks again about the compose file a finished task belongs to, if it was one.
+ *
+ * Keyed on the manifest the task names rather than on the row it came from, and
+ * that is the whole point: `down` changes what is running as surely as `up`
+ * does, and so does the `stop` the ■ button builds — which is not a row of the
+ * scan at all. Reading the row back and asking it for a probe prefix left both
+ * of those unrefreshed, so the feature could not clear the mark its own button
+ * had just made wrong.
+ *
+ * Deliberately not a general "something ended, re-probe everything": that would
+ * turn every npm script in the workspace into a Docker call. And nothing for a
+ * file nobody has asked about — an absent entry means the question has not been
+ * put, and answering it unprompted is the background poll this avoids.
+ */
+async function recheckAfter(task: vscode.Task): Promise<void> {
+  const definition = task.definition as { type?: string; manifest?: string };
+  const manifest = definition.type === TASK_TYPE ? definition.manifest : undefined;
+  if (manifest && containers.has(manifest)) {
+    await refreshContainers(manifest);
+  }
+}
+
+/**
+ * Asks again about one compose file, after something of ours touched it.
+ *
+ * The probe's words come from one of the file's own `up` rows, wherever the
+ * question came from: those are the rows whose argv ends in a subcommand of
+ * known length, so they are the only ones a prefix can be read back off.
+ */
+async function refreshContainers(manifest: string): Promise<void> {
+  const script = (await collectScripts()).find(
+    (entry) => entry.manifest.toString() === manifest && isComposeUp(entry),
+  );
+  const prefix = script ? composePrefix(script) : undefined;
+  if (!script || !prefix) {
+    return;
+  }
+  const state = await composeState(prefix, script.cwd.fsPath);
+  if (state) {
+    containers.set(manifest, state.running);
+    repaint();
+  }
 }
 
 // --- script categories -------------------------------------------------------
@@ -2738,18 +4081,35 @@ function userCategories(): CategoryRule[] {
  * row is answering "this one is busy", and that answer is the same green on
  * every row for as long as it is the one worth finding.
  */
-function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string): vscode.ThemeIcon {
+function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string, up = false): vscode.ThemeIcon {
   if (isRunning) {
     return runningIcon();
   }
   const category = categoryFor(script);
-  const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
-  const color = tint ?? (category && colored ? category.color : undefined);
   // An icon the user picked wins over the category's for the same reason the
   // colour does: the category guessed, this one was asked for by name. The
   // spinner still wins over both — a running row is answering a different
   // question.
-  const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? 'play';
+  //
+  // The shell glyph sits under the category rather than over it: `deploy.sh` is
+  // a deployment before it is a shell script, and the rules that read the name
+  // say the more useful of the two things. What it replaces is the `play`
+  // triangle every unmatched row used to wear — see `SHELL_ICONS`.
+  const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? shellIcon(script) ?? 'play';
+  const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
+  // Containers of this row's are up, but nothing of ours is running: the row
+  // keeps its own glyph and takes the running colour, which says "this is alive"
+  // without the spinner claiming a process of ours to stop. A colour the user
+  // painted still wins, as it does over a category.
+  //
+  // And `colorIcons` still has the last word, for the reason `runningIcon` gives
+  // for the spinner it stands in for: the setting promises every icon in the
+  // default foreground, and a row that opted out of colour did not opt out of it
+  // only while idle.
+  if (up && !tint) {
+    return new vscode.ThemeIcon(glyph, colored ? new vscode.ThemeColor(RUNNING_COLOR) : undefined);
+  }
+  const color = tint ?? (category && colored ? category.color : undefined);
   return new vscode.ThemeIcon(glyph, color ? new vscode.ThemeColor(color) : undefined);
 }
 
@@ -2773,6 +4133,16 @@ function runningIcon(): vscode.ThemeIcon {
 function crowdedFolders(scripts: ScriptEntry[]): Set<string> {
   const manifests = new Map<string, Set<string>>();
   for (const script of scripts) {
+    // Neither a compose file nor a script folder is ever competing with a
+    // manifest over what to call the folder: a shell group *is* a folder, and a
+    // compose heading is always named by its own file (see `buildTreeRoots`).
+    // Counting them would have a single `docker-compose.yml` beside a
+    // `package.json` report the folder as crowded and rename the project's
+    // heading after its file — which is what that rule exists to avoid, not
+    // cause.
+    if (attachable(script.kind)) {
+      continue;
+    }
     const folder = manifestFolder(script);
     const seen = manifests.get(folder) ?? new Set<string>();
     seen.add(script.manifest.toString());
@@ -2781,9 +4151,55 @@ function crowdedFolders(scripts: ScriptEntry[]): Set<string> {
   return new Set([...manifests].filter(([, seen]) => seen.size > 1).map(([folder]) => folder));
 }
 
-/** Absolute path of the folder a manifest sits in. */
+/**
+ * What a heading leads with, and where it lives, as one key — the two halves a
+ * second heading has to match for the rows to be indistinguishable.
+ */
+function headingKey(script: ScriptEntry, shared: boolean): string {
+  return `${manifestFolder(script)}::${packageHeading(script, shared)}`;
+}
+
+/**
+ * The headings that another manifest in the same folder would draw identically.
+ *
+ * Two manifests in one folder are ordinary — a Cargo.toml beside a Makefile —
+ * and they usually say different things: one leads with a package name, the
+ * other with a file name. What is not ordinary, and is exactly what the bundler
+ * toolchains produce, is both leading with the *same* name. Only those rows pay
+ * the longer bullet; see `buildTreeRoots`.
+ */
+function collidingHeadings(scripts: ScriptEntry[], crowded: ReadonlySet<string>): Set<string> {
+  const seen = new Map<string, Set<string>>();
+  for (const script of scripts) {
+    // A compose file and a script folder are left out for the same reason
+    // `crowdedFolders` leaves them out: neither is competing with a manifest
+    // over what to call the folder. A compose heading is its own file name, and
+    // no folder holds that name twice; a script folder is drawn as `shell`
+    // whatever its own path says. Counted here, a `scripts/` in a project root
+    // would collide with the unnamed package.json above it and put a path on a
+    // heading nothing else is competing with.
+    if (attachable(script.kind)) {
+      continue;
+    }
+    const shared = crowded.has(manifestFolder(script));
+    const key = headingKey(script, shared);
+    const manifests = seen.get(key) ?? new Set<string>();
+    manifests.add(script.manifest.toString());
+    seen.set(key, manifests);
+  }
+  return new Set([...seen].filter(([, manifests]) => manifests.size > 1).map(([key]) => key));
+}
+
+/**
+ * Absolute path of the folder a row's file sits in.
+ *
+ * For a shell row that is the group's own directory rather than the one above
+ * it: the group *is* a folder — see `collectShellScripts` — and reading its
+ * parent would have `scripts/` share a folder with every manifest in the
+ * repository root and report all of them as crowded.
+ */
 function manifestFolder(script: ScriptEntry): string {
-  return path.posix.dirname(script.manifest.path);
+  return path.posix.dirname((script.file ?? script.manifest).path);
 }
 
 /**
@@ -2804,10 +4220,19 @@ function manifestFolder(script: ScriptEntry): string {
  * the file name is the only half that tells the two groups apart.
  */
 function packageHeading(script: ScriptEntry, shared: boolean): string {
-  if (script.packageName) {
+  // Except for compose, which is named by its file whatever it calls itself. A
+  // project root holding `docker-compose.yml` and `docker-compose.dev.yml` very
+  // often has the same `name:` in both, and inside a project heading there is no
+  // path left to tell two rows apart — so the `name:` would leave the two of
+  // them identical. It survives in the tooltip, which is built from `label`.
+  if (script.packageName && script.kind !== 'docker-compose') {
     return script.packageName;
   }
-  const folder = path.posix.basename(script.directory);
+  // A shell group's "manifest" is the folder itself, so the name it goes by is
+  // that folder and not the one above it — `location` is the group's own path
+  // where `directory` is its parent, which for `tools/ci` is the difference
+  // between reading `ci` and reading `tools`.
+  const folder = path.posix.basename(script.file ? script.location : script.directory);
   return shared || !folder ? path.posix.basename(script.manifest.path) : folder;
 }
 
@@ -2821,7 +4246,12 @@ function packageHeading(script: ScriptEntry, shared: boolean): string {
  * nothing about which is which.
  */
 function manifestTitle(script: ScriptEntry): string {
-  return script.packageName ?? path.posix.basename(script.manifest.path);
+  // A compose file is its file name everywhere, not only on the tree row: this
+  // is what the dropdown's separator and the rename dialog's prompt read, and
+  // two of a project's compose files very often share one `name:`.
+  return script.kind === 'docker-compose' || !script.packageName
+    ? path.posix.basename(script.manifest.path)
+    : script.packageName;
 }
 
 /** Highlighted part of a group row: the user's title for it, else the manifest's. */
@@ -2892,6 +4322,12 @@ async function runNode(node: TreeNode | undefined, reveal: boolean): Promise<voi
 async function stopNode(node: TreeNode | undefined): Promise<void> {
   const execution = executionOf(node);
   if (!execution) {
+    // Nothing of ours is running, but Docker said this row's containers are —
+    // somebody brought the stack up outside this window. The square still means
+    // stop, so it runs the compose command that does it.
+    if (node?.kind === 'script' && containersUp(node.script)) {
+      await stopContainers(node.script);
+    }
     return;
   }
   if (node?.kind === 'script' && !(await confirmScript(node.script, 'stop'))) {
@@ -2931,6 +4367,33 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
 }
 
 /**
+ * Takes down containers this window did not start, by running compose's own
+ * `stop` for them and asking again once it has finished.
+ *
+ * A task like any other, so it gets a terminal, a row in the task list and the
+ * same stop button everything else has while it runs — which matters, because
+ * stopping a large stack is not instant and a button that looked like it did
+ * nothing would be pressed again.
+ */
+async function stopContainers(script: ScriptEntry): Promise<void> {
+  const argv = composeStopArgv(script);
+  if (!argv) {
+    return;
+  }
+  if (!(await confirmScript(script, 'stop'))) {
+    return;
+  }
+  const service = composeService(script);
+  // The row keeps its own name and key, so the task system, `running` and the
+  // tree all agree this work belongs to the row the square was pressed on: it
+  // spins while its stop runs, and stops spinning when the stop ends. Only the
+  // terminal's title says what is actually being run.
+  await vscode.tasks.executeTask(
+    buildTask({ ...script, command: argv.join(' '), argv }, true, service ? `stop: ${service}` : 'stop'),
+  );
+}
+
+/**
  * Stops everything the task system currently runs, ours and foreign alike, and
  * reports whether every one of them went.
  */
@@ -2966,9 +4429,57 @@ function runningScriptsOf(node: TreeNode | undefined): ScriptEntry[] {
   if (node?.kind !== 'group') {
     return [];
   }
-  return node.children.flatMap((child) =>
-    child.kind === 'script' && running.has(child.script.key) ? [child.script] : [],
+  return node.children.flatMap((child) => {
+    // An ecosystem parent and the hidden pile hold groups rather than rows, so
+    // "everything running under this row" has to go the whole way down.
+    if (child.kind === 'group') {
+      return runningScriptsOf(child);
+    }
+    return child.kind === 'script' && running.has(child.script.key) ? [child.script] : [];
+  });
+}
+
+/**
+ * The bare `up` row of a compose heading — the whole file, no service named.
+ *
+ * It is what the ▶ and ■ on the heading act on, and the row Docker's answer is
+ * read off. Nothing else is: a heading of a manifest has no single row that
+ * stands for the file, and a compose file has exactly one — which is why these
+ * two buttons are on the compose headings and nowhere else.
+ *
+ * Absent when `composeCommands` has been narrowed to a list without `up`. The
+ * buttons go with it: there is then no such thing as bringing this file up.
+ */
+function composeUpNode(node: TreeNode | undefined): (TreeNode & { kind: 'script' }) | undefined {
+  if (node?.kind !== 'group' || node.source !== 'docker-compose') {
+    return undefined;
+  }
+  return node.children.find(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name === 'up',
   );
+}
+
+/**
+ * ▶ on a compose heading: the file's own `up`, exactly as pressing ▶ on the row
+ * inside it would — the confirmation included.
+ */
+async function runGroup(node: TreeNode | undefined): Promise<void> {
+  await runNode(composeUpNode(node), false);
+}
+
+/**
+ * ■ on a compose heading whose containers Docker reported up while nothing of
+ * ours is running them — somebody brought the stack up outside this window, or
+ * in a session before this one. The square means stop either way, so it runs the
+ * compose command that stops it; when a task of ours *is* running, the square on
+ * the row is `stopGroup` instead and this one is not drawn.
+ */
+async function stopStack(node: TreeNode | undefined): Promise<void> {
+  const up = composeUpNode(node);
+  if (up) {
+    await stopContainers(up.script);
+  }
 }
 
 /** Stops everything running in one package group; the rest of the tree keeps going. */
@@ -3100,6 +4611,114 @@ function taskOf(node: TreeNode | undefined): vscode.Task | undefined {
  */
 async function showTerminal(node: TreeNode | undefined): Promise<void> {
   terminalOf(node)?.show();
+}
+
+/**
+ * A new terminal with the row's command line typed into it and *not* run.
+ *
+ * The one thing ▶ cannot do: a script that takes arguments — a `deploy.sh` that
+ * wants an environment, a `setup.ps1` that wants a flag — has nowhere to say
+ * them, since the tree runs what the file is and nothing more. Rather than
+ * invent a prompt for arguments and a place to remember them, this hands over
+ * the same command the row would have run, in a real terminal, with the cursor
+ * sitting at the end of it: type the rest and press Enter, or edit the line, or
+ * throw it away.
+ *
+ * `sendText(…, false)` is what leaves it unrun — the text goes to the terminal's
+ * input as if it had been typed. The terminal is a new one every time, and not
+ * one being reused: the line is going to be edited, and a terminal already
+ * running something has no free prompt to edit it at.
+ *
+ * The cwd is the task's own, so the relative path in the line is the path the
+ * shell resolves — the workspace folder root for a shell row, which is where
+ * `./scripts/deploy.sh` means what it says.
+ */
+async function addToTerminal(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'script') {
+    return;
+  }
+  const terminal = vscode.window.createTerminal({
+    name: displayName(node.script),
+    cwd: node.script.cwd,
+  });
+  terminal.show();
+  terminal.sendText(terminalLine(node.script), false);
+}
+
+/**
+ * The row's command line as a *shell* should receive it, every argument literal.
+ *
+ * Deliberately not `commandFor`, which is the line the tooltip and the picker
+ * show and is quoted for the eye alone: it wraps anything unusual in double
+ * quotes, and a double-quoted string is where every shell that matters still
+ * performs substitution. A script checked out as `$(id).sh` would then be typed
+ * as `bash "./scripts/$(id).sh"`, and the Enter the user presses would run `id`
+ * and then a path that is not the row they clicked. Nothing here is executed for
+ * them, which is the point of the feature — and it is exactly why the line has
+ * to be one they can press Enter on safely.
+ *
+ * Plain arguments — word characters and the punctuation paths and task names are
+ * built from — are left bare, which is nearly every line this ever produces:
+ * `bash ./scripts/deploy.sh` reads as itself, and quoting it would only be noise
+ * in a line written to be edited by hand.
+ */
+function terminalLine(script: ScriptEntry): string {
+  const quoting = terminalQuoting();
+  const argv = launchArgv(script);
+  const line = argv.map((value) => (plainArgument(value) ? value : quoteFor(quoting, value))).join(' ');
+  // PowerShell reads a quoted string at the start of a line as a value, not as
+  // something to run: `'./scripts/build all.bat'` prints the path and stops. The
+  // call operator is what turns it back into a command, and it is needed exactly
+  // when the first word had to be quoted — a `.bat` or `.cmd` row, whose runner
+  // is empty by design, is the path itself and so the word in question.
+  return quoting === 'powershell' && argv[0] !== undefined && !plainArgument(argv[0])
+    ? `& ${line}`
+    : line;
+}
+
+/**
+ * Which family of shell the new terminal opens in, as far as the workbench will
+ * say: `env.shell` is the path of the profile it starts, and its file name is
+ * the only thing in it that names a shell.
+ *
+ * Git Bash on Windows is why the name is read before the platform: it is a POSIX
+ * shell on a machine whose default is not, and quoting it as PowerShell would
+ * leave `$(…)` live. When there is no name to read, the platform decides, which
+ * is the workbench's own default either way.
+ */
+function terminalQuoting(): 'posix' | 'powershell' | 'cmd' {
+  const name = (vscode.env.shell ?? '')
+    .toLowerCase()
+    .split(/[\\/]/)
+    .pop();
+  if (name) {
+    if (name.startsWith('pwsh') || name.startsWith('powershell')) {
+      return 'powershell';
+    }
+    return name.startsWith('cmd') ? 'cmd' : 'posix';
+  }
+  return process.platform === 'win32' ? 'powershell' : 'posix';
+}
+
+/**
+ * One argument, quoted so the shell reads it as text and nothing else.
+ *
+ * Single quotes in both shells that substitute: they are the only quoting in
+ * `sh` and in PowerShell that leaves `$`, backticks and `$(…)` inert, and each
+ * has its own way of writing a quote inside one — `'\''` for the first, doubled
+ * for the second.
+ *
+ * `cmd.exe` has no substitution to protect against, so double quotes are enough
+ * there. `%VAR%` still expands inside them and cannot be escaped in a line typed
+ * at a prompt, which is a name that reads oddly rather than a name that runs:
+ * cmd expands it to a value, never to a command.
+ */
+function quoteFor(quoting: 'posix' | 'powershell' | 'cmd', value: string): string {
+  if (quoting === 'cmd') {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  const escaped = quoting === 'powershell' ? value.replace(/'/g, "''") : value.replace(/'/g, "'\\''");
+  return `'${escaped}'`;
 }
 
 /**
@@ -3372,8 +4991,11 @@ function buildItems(saved: ScriptEntry[]): Item[] {
     }
   }
 
-  // One block per package, keeping the order the scan produced.
-  const blocks = new Map<string, { label: string; items: Item[] }>();
+  // One block per package, keeping the order the scan produced — which in
+  // `ecosystem` mode is already gathered into one run per ecosystem, since
+  // `savedOrder` did the gathering. That is what keeps this list and the tree in
+  // the same order without either of them knowing about the other.
+  const blocks = new Map<string, { label: string; ecosystem: Ecosystem; items: Item[] }>();
   for (const script of scripts) {
     if (starred.has(script.key)) {
       continue;
@@ -3381,7 +5003,7 @@ function buildItems(saved: ScriptEntry[]): Item[] {
     const key = script.manifest.toString();
     let block = blocks.get(key);
     if (!block) {
-      block = { label: packageLabel(script), items: [] };
+      block = { label: packageLabel(script), ecosystem: ecosystemOf(script.kind), items: [] };
       blocks.set(key, block);
     }
     block.items.push(scriptItem(script, false));
@@ -3392,10 +5014,17 @@ function buildItems(saved: ScriptEntry[]): Item[] {
   // single-package workspace, where on their own they would be pure noise.
   const headings = multiPackage || items.length > 0;
 
+  const nested = hierarchical();
+  let previous: Ecosystem | undefined;
   for (const block of blocks.values()) {
     if (headings) {
-      items.push(separator(block.label));
+      // The ecosystem names the head of its run and nothing after it. Repeating
+      // it on every separator would be the same noise the tree avoids by not
+      // printing the workspace name down the whole column of headings.
+      const opens = nested && block.ecosystem !== previous;
+      items.push(separator(opens ? `${ECOSYSTEMS[block.ecosystem].label} · ${block.label}` : block.label));
     }
+    previous = block.ecosystem;
     items.push(...block.items);
   }
 
@@ -3601,7 +5230,7 @@ function scopeKey(task: vscode.Task): string {
   return typeof task.scope === 'object' ? task.scope.uri.toString() : String(task.scope ?? '');
 }
 
-function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
+function buildTask(script: ScriptEntry, reveal = true, verb?: string): vscode.Task {
   const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
   // A directory can hold a package.json, a Makefile and a justfile, each with a
   // `test`, so what disambiguates the terminal's name is the manifest and not
@@ -3609,10 +5238,17 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
   // always package.json and would only be noise.
   const where = script.kind === 'npm' || script.kind === 'deno' ? script.directory : script.location;
   const argv = launchArgv(script);
+  // The definition names the row and the title names the work, which are the
+  // same word for every task but one: the ■ on a row whose containers somebody
+  // else brought up runs `stop` *for that row*, and filing it under a `stop`
+  // nothing declares gave the task system a key no row carried — counted on the
+  // badge, shown nowhere, and dropped again by `pruneRunning` the moment it
+  // looked for the row that key named.
+  const shown = verb ?? script.name;
   const task = new vscode.Task(
     { type: TASK_TYPE, script: script.name, manifest: script.manifest.toString() },
     folder ?? vscode.TaskScope.Workspace,
-    where ? `${script.name} (${where})` : script.name,
+    where ? `${shown} (${where})` : shown,
     TASK_SOURCE,
     executionFor(argv, script.cwd.fsPath),
   );
@@ -3648,7 +5284,11 @@ function buildTask(script: ScriptEntry, reveal = true): vscode.Task {
  */
 function executionFor(argv: string[], cwd: string): vscode.ShellExecution | vscode.ProcessExecution {
   if (argv.every(quotable)) {
-    return new vscode.ShellExecution(argv[0], argv.slice(1).map(shellArgument), { cwd });
+    // The program goes through the same quoting as everything after it. For
+    // every runner this is a bare word and nothing happens; for a shell row with
+    // `shellRunner` emptied the program *is* a path off disk, and a space in it
+    // — or worse — would otherwise reach the shell unquoted.
+    return new vscode.ShellExecution(shellArgument(argv[0]), argv.slice(1).map(shellArgument), { cwd });
   }
   return new vscode.ProcessExecution(argv[0], argv.slice(1), { cwd });
 }

@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Task and script explorer with one list in your monorepo: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.7.3",
+  "version": "0.7.5",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -84,6 +84,17 @@
     "workspaceContains:**/go.mod",
     "workspaceContains:**/mise.toml",
     "workspaceContains:**/.mise.toml",
+    "workspaceContains:**/docker-compose.yml",
+    "workspaceContains:**/docker-compose.yaml",
+    "workspaceContains:**/compose.yml",
+    "workspaceContains:**/compose.yaml",
+    "workspaceContains:**/compose.*.yml",
+    "workspaceContains:**/compose.*.yaml",
+    "workspaceContains:**/docker-compose.*.yml",
+    "workspaceContains:**/docker-compose.*.yaml",
+    "workspaceContains:**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
+    "workspaceContains:**/bin/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
+    "workspaceContains:*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
     "onTaskType:taskRunnerUltimate",
     "onView:taskRunnerUltimate.tree",
     "onView:taskRunnerUltimate.explorer"
@@ -190,6 +201,18 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "taskRunnerUltimate.runGroup",
+        "title": "Compose Up",
+        "category": "Task & Script Explorer",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskRunnerUltimate.stopStack",
+        "title": "Stop Containers",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "taskRunnerUltimate.restartGroup",
         "title": "Restart All in Package",
         "category": "Task & Script Explorer",
@@ -224,6 +247,12 @@
         "title": "Open Terminal in Editor Area",
         "category": "Task & Script Explorer",
         "icon": "$(open-preview)"
+      },
+      {
+        "command": "taskRunnerUltimate.addToTerminal",
+        "title": "Add to Terminal",
+        "category": "Task & Script Explorer",
+        "icon": "$(terminal)"
       },
       {
         "command": "taskRunnerUltimate.setColor.red",
@@ -287,10 +316,28 @@
         "icon": "$(symbol-misc)"
       },
       {
+        "command": "taskRunnerUltimate.checkContainers",
+        "title": "Check Containers",
+        "category": "Task & Script Explorer",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "taskRunnerUltimate.groupByEcosystem",
+        "title": "Group by Ecosystem",
+        "category": "Task & Script Explorer",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "taskRunnerUltimate.groupFlat",
+        "title": "Show as a Flat List",
+        "category": "Task & Script Explorer",
+        "icon": "$(list-flat)"
+      },
+      {
         "command": "taskRunnerUltimate.menu",
         "title": "Menu",
         "category": "Task & Script Explorer",
-        "icon": "$(menu)"
+        "icon": "$(kebab-vertical)"
       },
       {
         "command": "taskRunnerUltimate.stopAll",
@@ -347,8 +394,18 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/"
         },
         {
-          "command": "taskRunnerUltimate.menu",
+          "command": "taskRunnerUltimate.groupByEcosystem",
           "group": "navigation@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && !taskRunnerUltimate.hierarchical"
+        },
+        {
+          "command": "taskRunnerUltimate.groupFlat",
+          "group": "navigation@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && taskRunnerUltimate.hierarchical"
+        },
+        {
+          "command": "taskRunnerUltimate.menu",
+          "group": "navigation@5",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/"
         }
       ],
@@ -366,7 +423,7 @@
         {
           "command": "taskRunnerUltimate.runItem",
           "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:idle:/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:(idle|up):/"
         },
         {
           "command": "taskRunnerUltimate.restartItem",
@@ -376,27 +433,47 @@
         {
           "command": "taskRunnerUltimate.stopItem",
           "group": "inline@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:(running|up):|foreignTask$)/"
         },
         {
           "command": "taskRunnerUltimate.restartGroup",
           "group": "inline@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?:running$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:(up|down))?(:(hidden|carried))?|eco):running$/"
         },
         {
           "command": "taskRunnerUltimate.stopGroup",
           "group": "inline@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?:running$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:(up|down))?(:(hidden|carried))?|eco):running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.runGroup",
+          "group": "inline@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:(up|down)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopStack",
+          "group": "inline@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:up$/"
         },
         {
           "command": "taskRunnerUltimate.runItemMenu",
           "group": "0_actions@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:idle:/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:(idle|up):/"
         },
         {
           "command": "taskRunnerUltimate.stopItemMenu",
           "group": "0_actions@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:(running|up):|foreignTask$)/"
+        },
+        {
+          "command": "taskRunnerUltimate.runGroup",
+          "group": "0_actions@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:(up|down)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopStack",
+          "group": "0_actions@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:up$/"
         },
         {
           "command": "taskRunnerUltimate.openScript",
@@ -406,7 +483,7 @@
         {
           "command": "taskRunnerUltimate.openManifest",
           "group": "0_open@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
@@ -417,6 +494,11 @@
           "command": "taskRunnerUltimate.openTerminalEditor",
           "group": "0_open@3",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script:running:|foreignTask$)/"
+        },
+        {
+          "command": "taskRunnerUltimate.addToTerminal",
+          "group": "0_open@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:shell:/"
         },
         {
           "command": "taskRunnerUltimate.addFavorite",
@@ -446,7 +528,7 @@
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:hidden)?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
           "submenu": "taskRunnerUltimate.color",
@@ -461,17 +543,17 @@
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?:hidden(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.hideGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:hidden(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?:hidden(:running)?$/"
         }
       ],
       "taskRunnerUltimate.color": [
@@ -586,6 +668,14 @@
           "when": "false"
         },
         {
+          "command": "taskRunnerUltimate.runGroup",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.stopStack",
+          "when": "false"
+        },
+        {
           "command": "taskRunnerUltimate.openScript",
           "when": "false"
         },
@@ -599,6 +689,10 @@
         },
         {
           "command": "taskRunnerUltimate.openTerminalEditor",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.addToTerminal",
           "when": "false"
         },
         {
@@ -730,7 +824,9 @@
             "task",
             "go",
             "php",
-            "mise"
+            "mise",
+            "docker",
+            "shell"
           ],
           "uniqueItems": true,
           "items": {
@@ -744,7 +840,9 @@
               "task",
               "go",
               "php",
-              "mise"
+              "mise",
+              "docker",
+              "shell"
             ],
             "enumDescriptions": [
               "package.json (scripts) and deno.json(c) (tasks).",
@@ -755,7 +853,9 @@
               "Taskfile.yml and friends (go-task).",
               "go.mod — the standard go subcommands.",
               "composer.json (scripts).",
-              "mise.toml and .mise.toml ([tasks])."
+              "mise.toml and .mise.toml ([tasks]).",
+              "docker-compose.yml, compose.yml and their .yaml spellings — the compose subcommands.",
+              "Shell scripts (.sh, .bash, .zsh, .ksh, .ps1, .bat, .cmd) under scripts/, bin/ and the workspace root."
             ]
           },
           "markdownDescription": "Which kinds of manifest are scanned. Remove an entry to stop reading that ecosystem entirely — the files are then never opened, which is also the fastest way to quieten a repository that carries a `Makefile` nobody runs."
@@ -814,6 +914,67 @@
           ],
           "markdownDescription": "How `[project.scripts]` entry points are entered. Tasks that name their own runner — `[tool.pdm.scripts]`, `[tool.poetry.scripts]` and the rest — ignore this."
         },
+        "taskRunnerUltimate.dockerCompose": {
+          "type": "string",
+          "enum": [
+            "docker compose",
+            "docker-compose"
+          ],
+          "default": "docker compose",
+          "scope": "machine",
+          "enumDescriptions": [
+            "The v2 plugin, which is what a current Docker installs.",
+            "The standalone v1 binary, end-of-life since July 2023."
+          ],
+          "markdownDescription": "How compose is invoked. Spelled as the command and split on whitespace, so what is written here is what reaches the terminal.\n\nThere is no `auto`: the only honest way to tell the two apart is to run `docker compose version`, and a scan never starts a process.\n\nMachine-scoped, as `#taskRunnerUltimate.shellRunner#` and `#taskRunnerUltimate.shellRunners#` are: the value is run as a program rather than typed into a task terminal, so a repository’s own `.vscode/settings.json` cannot choose it for you."
+        },
+        "taskRunnerUltimate.dockerComposeCommands": {
+          "type": "array",
+          "default": [
+            "up",
+            "down",
+            "build",
+            "logs",
+            "ps"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Compose subcommands listed for every compose file, since a compose file declares services rather than tasks. Known names (`up`, `down`, `build`, `logs`, `ps`, `start`, `stop`, `restart`, `pull`, `config`) get their usual flags — `logs` is followed, so the row keeps running — and anything else runs as `docker compose <name>`.\n\n`up` is special: it lists a bare row for the whole file plus one `up: <service>` row per service, whenever the file declares more than one.\n\nNothing here is ever run detached. A `-d` row would exit the moment it started, leaving the containers up and Stop with nothing to stop.\n\nEvery row passes `-f <file>`. For the four names compose picks by itself — `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml` — a second `-f` is added for the first of compose’s own four override names beside it (`compose.override.yaml`, `compose.override.yml`, `docker-compose.override.yaml`, `docker-compose.override.yml`), which is the merge compose would have done. A profile-named file such as `docker-compose.dev.yml` gets none: that merge is something compose does to the file it chose for itself. No file with `.override.` in its name is ever a heading of its own.\n\nProfile-named compose files (`docker-compose.dev.yml`, `compose.prod.yaml`) are found too, and each is a heading of its own. One of those is only believed once it shows a `services:` or `include:` block, since nothing inside a YAML file otherwise says that it is compose."
+        },
+        "taskRunnerUltimate.shellScripts": {
+          "type": "array",
+          "default": [
+            "**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
+            "**/bin/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
+            "*.{sh,bash,zsh,ksh,ps1,bat,cmd}"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Where shell scripts are looked for, as globs matched against each file’s path **relative to its workspace folder**. Every script found becomes a row, and in `flat` grouping the ones a project holds are drawn together under a single `shell` heading.\n\nThe leading `**/` is what carries the first two past the root: without it a `scripts` folder would have to sit at the very top, and `apps/web/scripts/deploy.sh` would never be found. The third pattern keeps no prefix on purpose, so loose scripts are listed where a project root is rather than in every directory.\n\nSeven extensions: the Bourne family (`.sh`, `.bash`, `.zsh`, `.ksh`) and the three Windows writes its scripts in (`.ps1`, `.bat`, `.cmd`). Which one a file carries decides the words it is run through — see `#taskRunnerUltimate.shellRunners#` — and the terminal glyph its row wears. A `{a,b}` group works in a pattern of your own too.\n\nThe executable bit is deliberately not consulted: it is invisible to VS Code’s own file API, and reading it would mean giving up Remote SSH and Dev Containers. The convention — a script under `scripts`, under `bin`, or in the root — is the signal instead.\n\nAt most 200 scripts are read, budgeted apart from the manifests. Narrow these patterns if a repository has more."
+        },
+        "taskRunnerUltimate.shellRunner": {
+          "type": "string",
+          "default": "bash",
+          "scope": "machine",
+          "markdownDescription": "What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through, from the workspace folder root: `bash ./scripts/deploy.sh`. Leave empty to run the path on its own, which then needs both the executable bit and a shebang.\n\nOn Windows this wants Git Bash or WSL on the `PATH`. The Windows extensions are started by `#taskRunnerUltimate.shellRunners#` instead.\n\nMachine-scoped, like `#taskRunnerUltimate.dockerCompose#`: this value is run as a program rather than typed into a task terminal, so a repository’s own `.vscode/settings.json` cannot choose it for you."
+        },
+        "taskRunnerUltimate.shellRunners": {
+          "type": "object",
+          "scope": "machine",
+          "default": {
+            "ps1": "powershell -NoProfile -File",
+            "bat": "",
+            "cmd": ""
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "What each extension is run through, keyed by extension — the map that covers what `#taskRunnerUltimate.shellRunner#` does not. An extension that appears here is started with these words in front of the path; one that does not falls back to `shellRunner`.\n\n`powershell` and not `pwsh`: Windows PowerShell 5.1 ships with the OS, where PowerShell 7 is an install away. On 7, set `pwsh -NoProfile -File`. If an execution policy blocks the script, `powershell -NoProfile -ExecutionPolicy Bypass -File` is the usual answer — deliberately not the default.\n\n`.bat` and `.cmd` are run as themselves, with no runner at all: they are programs to Windows already, and the PowerShell a task starts in takes the `./path/to/x.bat` this builds. With `cmd.exe` as the terminal profile, set `cmd /c` for both.\n\nMachine-scoped, like `#taskRunnerUltimate.dockerCompose#`: this value is run as a program rather than typed into a task terminal, so a repository’s own `.vscode/settings.json` cannot choose it for you."
+        },
         "taskRunnerUltimate.colorIcons": {
           "type": "boolean",
           "default": true,
@@ -824,10 +985,36 @@
           "default": false,
           "description": "Show running tasks first inside the group they belong to, in the tree and in the dropdown alike. Off by default: a row that stays put is a row you stop where you started it."
         },
+        "taskRunnerUltimate.grouping": {
+          "type": "string",
+          "enum": [
+            "flat",
+            "ecosystem"
+          ],
+          "default": "flat",
+          "enumDescriptions": [
+            "One row per manifest, with compose files and script folders inside the project they serve.",
+            "One row per ecosystem, with that ecosystem’s manifests inside it."
+          ],
+          "markdownDescription": "How the package headings are arranged, in the tree and in the dropdown alike.\n\n`flat` keeps one row per manifest and folds each compose file and script folder in under the nearest project above it, so the infrastructure of a package sits inside that package.\n\n`ecosystem` gathers the manifests of each language or runner under a row of their own — there a compose file is filed under Docker rather than under the package it serves, because that is the question that mode answers.\n\nAlso in the view's header, as a button that names the mode it puts you in, and on the ☰ menu as **Group by ecosystem**."
+        },
+        "taskRunnerUltimate.groupIcons": {
+          "type": "string",
+          "enum": [
+            "type",
+            "uniform"
+          ],
+          "default": "type",
+          "enumDescriptions": [
+            "Each heading wears the icon its own file has in your file icon theme.",
+            "Every heading wears the same stack glyph."
+          ],
+          "markdownDescription": "What a package heading is drawn with. `type` asks your **file icon theme** for the icon that manifest has in the Explorer — the real npm, Rust and Docker marks, which no icon font carries; a folder of shell scripts has no file for a theme to match on, so it wears a terminal. `uniform` is the quieter column the tree used to have, for when the headings should stay out of the way of the rows under them.\n\nThe colour is separate either way: a heading is tinted when you paint it, and the tint lands on the text and leaves the icon its own colours. An icon picked by hand on a row wins over both.\n\nEcosystem rows are not covered — they name no file, so they keep their own glyph in both modes. Nor is a `shell` heading that stands for several folders, which is the same kind of row."
+        },
         "taskRunnerUltimate.categories": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `taskRunnerUltimate.category.*` or any built-in such as `charts.green`.",
+          "markdownDescription": "Extra category rules, checked **before** the built-in ones (run, stop, test, quality, build, release, data, clean), so a single entry can override a built-in. Each rule matches the script name token by token, then the command it runs.\n\n```json\n[{ \"match\": [\"bench\", \"perf\"], \"icon\": \"dashboard\", \"color\": \"charts.purple\" }]\n```\n\n`icon` is a codicon id, `color` a theme colour id — either one of `taskRunnerUltimate.category.*` or any built-in such as `charts.green`.",
           "items": {
             "type": "object",
             "required": [
@@ -946,6 +1133,16 @@
           "light": "#767676",
           "highContrast": "#B0B0B0",
           "highContrastLight": "#5A5A5A"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.category.stop",
+        "description": "Icon colour in the Task & Script Explorer view: Taking something down — `down`, `stop`, `kill`.",
+        "defaults": {
+          "dark": "#F14C4C",
+          "light": "#C9291F",
+          "highContrast": "#FF8A8A",
+          "highContrastLight": "#8E0000"
         }
       },
       {

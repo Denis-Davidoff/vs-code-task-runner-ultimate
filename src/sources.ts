@@ -21,11 +21,33 @@ export type SourceKind =
   | 'just'
   | 'taskfile'
   | 'go'
-  | 'mise';
+  | 'mise'
+  | 'docker-compose'
+  | 'shell';
 
 /** What the `sources` setting switches on and off: a language or a task runner, not a file. */
-export type Ecosystem = 'node' | 'php' | 'rust' | 'python' | 'make' | 'just' | 'task' | 'go' | 'mise';
+export type Ecosystem =
+  | 'node'
+  | 'php'
+  | 'rust'
+  | 'python'
+  | 'make'
+  | 'just'
+  | 'task'
+  | 'go'
+  | 'mise'
+  | 'docker'
+  | 'shell';
 
+/**
+ * Every ecosystem, in the order the settings schema lists them. The `sources`
+ * default array in package.json is written out by hand to match this one, so an
+ * entry added here is added there too — and in the same place, since
+ * `enumDescriptions` is matched to `enum` by position.
+ *
+ * Not the order the tree draws them in: that one is decided per workspace, by
+ * where each ecosystem's first package sits. See `groupedByEcosystem`.
+ */
 export const ALL_ECOSYSTEMS: ReadonlyArray<Ecosystem> = [
   'node',
   'rust',
@@ -36,6 +58,8 @@ export const ALL_ECOSYSTEMS: ReadonlyArray<Ecosystem> = [
   'go',
   'php',
   'mise',
+  'docker',
+  'shell',
 ];
 
 const ECOSYSTEM_OF: Record<SourceKind, Ecosystem> = {
@@ -53,7 +77,18 @@ const ECOSYSTEM_OF: Record<SourceKind, Ecosystem> = {
   taskfile: 'task',
   go: 'go',
   mise: 'mise',
+  'docker-compose': 'docker',
+  shell: 'shell',
 };
+
+/**
+ * The ecosystem a kind belongs to. The record above stays private — it is a
+ * total map the compiler checks against `SourceKind`, and a caller that could
+ * index it could also index it with something that is not a kind.
+ */
+export function ecosystemOf(kind: SourceKind): Ecosystem {
+  return ECOSYSTEM_OF[kind];
+}
 
 /**
  * File name -> what it holds. Matching on the whole name rather than an
@@ -87,12 +122,99 @@ const MANIFEST_KINDS: Record<string, SourceKind> = {
   'go.mod': 'go',
   'mise.toml': 'mise',
   '.mise.toml': 'mise',
+  'docker-compose.yml': 'docker-compose',
+  'docker-compose.yaml': 'docker-compose',
+  'compose.yml': 'docker-compose',
+  'compose.yaml': 'docker-compose',
 };
 
-/** The kind of manifest a path is, by its file name alone. */
+/**
+ * The four names compose looks for when it is given no `-f`, in its own order of
+ * preference. A file with one of these names is a compose file because of its
+ * name — nothing else has to agree — and it is the only kind that gets the
+ * override merged in below.
+ */
+const COMPOSE_DEFAULT_FILES: ReadonlyArray<string> = [
+  'compose.yaml',
+  'compose.yml',
+  'docker-compose.yaml',
+  'docker-compose.yml',
+];
+
+/**
+ * The overrides compose merges on top of whichever of the four it picked, again
+ * in its own order — and note that the order is the *same list* whatever the
+ * base file was called: `compose.yaml` beside `compose.override.yml` is a pair
+ * compose merges, the extensions notwithstanding.
+ *
+ * None of them are manifests of their own. An override declares the services the
+ * base file already declares, so a group for it would be the same rows twice.
+ */
+const COMPOSE_OVERRIDE_FILES: ReadonlyArray<string> = [
+  'compose.override.yaml',
+  'compose.override.yml',
+  'docker-compose.override.yaml',
+  'docker-compose.override.yml',
+];
+
+/**
+ * Everything else that is a compose file: `docker-compose.dev.yml`,
+ * `compose.prod.yaml`, `docker-compose.ci.yml`. The name is a real convention
+ * and the only signal there is — nothing inside a YAML file says "I am compose"
+ * — so it is matched, and then `parseCompose` insists on seeing a `services:`
+ * or `include:` block before it will believe a name it was not sure about.
+ *
+ * The pattern is deliberately tight: `compose` has to be followed by a dot. That
+ * is defence in depth rather than the only defence — the scan glob below is
+ * already narrow enough that `composer.yml` never reaches this test.
+ */
+const COMPOSE_NAME = /^(?:docker-)?compose(?:\.[A-Za-z0-9_-]+)*\.ya?ml$/;
+
+/**
+ * Any name with `.override.` in it, and not only compose's own four.
+ *
+ * `compose.dev.override.yml` is an override by every convention there is, and
+ * running one on its own — which is what a heading of its own would offer — asks
+ * compose to bring up a fragment with no image and no build. Compose merges only
+ * the four it names, so only those are appended as a second `-f`; the rest are
+ * simply not rows, which is what this extension's own documentation has always
+ * promised about a file with `.override.` in its name.
+ *
+ * The token and nothing around it. Spelling out the tail instead — the
+ * extension, with room for one segment before it — let a name carrying two
+ * through: `compose.dev.override.local.ci.yml` matched no tail this test knew
+ * and became a heading, which is the one thing the promise above rules out. What
+ * it is tested against is a file name (see `manifestKind`), already known to
+ * look like compose, so there is nothing else in it for `.override.` to be.
+ */
+const COMPOSE_OVERRIDE_NAME = /\.override\./;
+
+/**
+ * The globs that find the profile-named files above. The four default names are
+ * already in `MANIFEST_KINDS`, so these only have to cover the ones carrying a
+ * middle segment — which is what keeps `composer.yml` out of the scan entirely
+ * rather than merely out of the list.
+ */
+const COMPOSE_GLOBS: ReadonlyArray<string> = [
+  'compose.*.yml',
+  'compose.*.yaml',
+  'docker-compose.*.yml',
+  'docker-compose.*.yaml',
+];
+
+/**
+ * The kind of manifest a path is, by its file name alone. The exact table first,
+ * then the one convention that cannot be spelled out as a list of names.
+ */
 function manifestKind(uri: vscode.Uri): SourceKind | undefined {
   const name = path.posix.basename(uri.path);
-  return Object.prototype.hasOwnProperty.call(MANIFEST_KINDS, name) ? MANIFEST_KINDS[name] : undefined;
+  if (Object.prototype.hasOwnProperty.call(MANIFEST_KINDS, name)) {
+    return MANIFEST_KINDS[name];
+  }
+  if (COMPOSE_NAME.test(name) && !COMPOSE_OVERRIDE_NAME.test(name)) {
+    return 'docker-compose';
+  }
+  return undefined;
 }
 
 /** The directory a manifest sits in, which is also the directory its tasks run in. */
@@ -108,7 +230,11 @@ function directoryOf(uri: vscode.Uri): vscode.Uri {
  */
 function manifestGlob(enabled: ReadonlySet<Ecosystem>): string | undefined {
   const names = Object.keys(MANIFEST_KINDS).filter((name) => enabled.has(ECOSYSTEM_OF[MANIFEST_KINDS[name]]));
-  return names.length > 0 ? `**/{${names.join(',')}}` : undefined;
+  // Compose is the one kind whose files are not a fixed list of names; see
+  // `COMPOSE_GLOBS`. What those globs over-match, `manifestKind` turns away.
+  const patterns = enabled.has('docker') ? COMPOSE_GLOBS : [];
+  const all = [...names, ...patterns];
+  return all.length > 0 ? `**/{${all.join(',')}}` : undefined;
 }
 
 export const DEFAULT_EXCLUDE =
@@ -184,6 +310,12 @@ const PYTHON_LOCKS: ReadonlyArray<[string, PythonRunner]> = [
 export const WATCH_GLOB = `**/{${[
   ...new Set([
     ...Object.keys(MANIFEST_KINDS),
+    // The compose override files, which are read as part of the manifest beside
+    // them rather than being one: whether one exists decides whether the rows
+    // carry a second `-f`, so it has to be watched like the manifest itself.
+    // And the profile-named compose files, which no list of names can hold.
+    ...COMPOSE_OVERRIDE_FILES,
+    ...COMPOSE_GLOBS,
     ...DETECTION_FILES.map(([file]) => file),
     ...PYTHON_LOCKS.map(([file]) => file),
   ]),
@@ -210,6 +342,40 @@ export const WATCH_GLOB = `**/{${[
 export const SOURCE_GLOB =
   '**/{src/main.rs,src/bin/*,src/bin/*/main.rs,examples/*,examples/*/main.rs,main.go}';
 
+/**
+ * The extensions a shell row can be written with: the Bourne family, and the
+ * three Windows writes its scripts in.
+ *
+ * Which of them a file carries decides two things — the words it is run through
+ * (`shellRunners`) and the glyph its row wears — and nothing else: a `.ps1` is a
+ * row exactly as a `.sh` is.
+ *
+ * `.psm1` is not here and is not an oversight: a PowerShell *module* is a library
+ * to import, not a script to run, and a row that starts one would do nothing at
+ * all.
+ */
+export const SHELL_EXTENSIONS: ReadonlyArray<string> = [
+  'sh',
+  'bash',
+  'zsh',
+  'ksh',
+  'ps1',
+  'bat',
+  'cmd',
+];
+
+/**
+ * What the shell watcher listens to. Every shell script in the workspace, and not
+ * the `shellScripts` patterns the scan actually uses: the watchers are built once
+ * in `activate` and never rebuilt, so a glob compiled from a setting would go
+ * stale the moment that setting changed. Over-hearing costs a debounced rescan
+ * that finds nothing; under-hearing costs a row that never appears.
+ *
+ * Creation and deletion only, as `SOURCE_GLOB` is. The file being there is the
+ * row; the comment line inside it is dimmed text a Refresh picks up.
+ */
+export const SHELL_GLOB = `**/*.{${SHELL_EXTENSIONS.join(',')}}`;
+
 export interface ScriptEntry {
   /** Stable identity of a task: its manifest plus the task name. */
   key: string;
@@ -217,8 +383,19 @@ export interface ScriptEntry {
   name: string;
   /** What the task does, shown as dimmed text: the raw command, or its description. */
   command: string;
-  /** The file the task came from. */
+  /**
+   * The file the task came from — for the shell rows, the directory the group
+   * stands for, since there the group is a folder of scripts and no one file
+   * declares them. Its identity, its heading and its storage ref are all read
+   * off this, so it is a URI either way and `file` carries the real one.
+   */
   manifest: vscode.Uri;
+  /**
+   * The file this row opens, when that is not the manifest itself. Only the
+   * shell rows set it: their `manifest` is the directory they are grouped by,
+   * and the script is what "go to definition" has to reach.
+   */
+  file?: vscode.Uri;
   /** What kind of file that is, which is what decides the parser and the runner. */
   kind: SourceKind;
   /**
@@ -267,6 +444,14 @@ interface NodeHints {
  * silently truncating the list.
  */
 const MAX_MANIFESTS = 2000;
+/**
+ * Ceiling on shell scripts read in one scan, budgeted apart from the manifests
+ * above. A repository that keeps three hundred `.sh` files around must not spend
+ * the manifest budget on them — the truncation warning tells the user to trim
+ * `sources`, and for a shell overflow that advice would be aimed at the wrong
+ * setting. Narrowing `shellScripts` is the remedy here.
+ */
+const MAX_SHELL_SCRIPTS = 200;
 /** Manifests above this size are skipped: nothing hand-written comes close. */
 const MAX_MANIFEST_BYTES = 1_000_000;
 /** The truncation warning is shown once per window, not once per scan. */
@@ -422,6 +607,12 @@ async function runScan(): Promise<ScriptEntry[]> {
     }
   }
 
+  // Shell scripts are matched by pattern rather than by file name, so they do
+  // not go through `MANIFEST_KINDS` and get a pass — and a budget — of their own.
+  if (enabled.has('shell')) {
+    entries.push(...(await collectShellScripts(exclude)));
+  }
+
   if (started === generation) {
     await detectPackageManagers(entries, started);
   }
@@ -516,6 +707,10 @@ async function parseManifest(
       return parseGoMod(text, cwd);
     case 'mise':
       return parseMise(text);
+    case 'docker-compose':
+      return parseCompose(text, file, cwd);
+    // `shell` never reaches here: its rows are built by `collectShellScripts`,
+    // from files no `MANIFEST_KINDS` entry names.
     default:
       return undefined;
   }
@@ -1159,25 +1354,33 @@ function parseJustfile(text: string, file: string): ParsedManifest | undefined {
 // --- Taskfile (go-task) ------------------------------------------------------
 
 /**
- * Only the task names are needed, and they are the keys one level under a
- * top-level `tasks:` — so the block is found by indentation rather than by
- * parsing YAML, which would mean bundling a parser for a list of keys.
+ * The keys one level under a named top-level block, each with the lines of its
+ * body — found by indentation rather than by parsing YAML, which would mean
+ * bundling a parser to read a list of keys.
+ *
+ * Shared by go-task's `tasks:` and compose's `services:`, which want exactly the
+ * same thing from a file of the same shape. What it does not do is what neither
+ * of them needs: an anchor merged into a body hides that body (the names still
+ * come out right), a second document in the same file runs its keys together,
+ * and flow style is not read at all.
+ *
+ * Exported so `locate.ts` can find a key with the rule that put it in the list.
  */
-function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
-  // task has its own order for Taskfile.yml, Taskfile.yaml and the dist
-  // variants, and would otherwise open whichever of them it prefers.
-  const runner = ['task', '--taskfile', file];
-  const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((line) => /^tasks:\s*(#.*)?$/.test(line));
+export function yamlBlockKeys(
+  lines: ReadonlyArray<string>,
+  block: string,
+): Array<{ name: string; body: string[]; line: number }> {
+  const start = lines.findIndex((line) => new RegExp(`^${block}:\\s*(#.*)?$`).test(line));
   if (start < 0) {
-    return undefined;
+    return [];
   }
 
-  const block: Array<{ name: string; body: string[] }> = [];
+  const entries: Array<{ name: string; body: string[]; line: number }> = [];
   let indent: number | undefined;
-  let current: { name: string; body: string[] } | undefined;
+  let current: { name: string; body: string[]; line: number } | undefined;
 
-  for (const line of lines.slice(start + 1)) {
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index];
     if (!line.trim() || line.trimStart().startsWith('#')) {
       continue;
     }
@@ -1198,9 +1401,18 @@ function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
     if (!key) {
       continue;
     }
-    current = { name: key[1].trim().replace(/^["']|["']$/g, ''), body: [] };
-    block.push(current);
+    current = { name: key[1].trim().replace(/^["']|["']$/g, ''), body: [], line: index };
+    entries.push(current);
   }
+
+  return entries;
+}
+
+function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
+  // task has its own order for Taskfile.yml, Taskfile.yaml and the dist
+  // variants, and would otherwise open whichever of them it prefers.
+  const runner = ['task', '--taskfile', file];
+  const block = yamlBlockKeys(text.split(/\r?\n/), 'tasks');
 
   const tasks: RawTask[] = [];
   for (const entry of block) {
@@ -1270,6 +1482,440 @@ function parseMise(text: string): ParsedManifest | undefined {
     });
   }
   return { tasks: out };
+}
+
+// --- Docker compose ----------------------------------------------------------
+
+/**
+ * Compose declares services, not tasks, so the rows for a file are the
+ * subcommands worth having on a list — the same shape cargo's rows take, and for
+ * the same reason.
+ */
+const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['up', 'down', 'build', 'logs', 'ps'];
+
+/**
+ * The arguments each command name stands for, after the `docker compose -f
+ * <file>` every row already carries. Anything not listed runs as itself.
+ *
+ * `logs` is the one that is not one-for-one: without `-f` it prints what has
+ * happened and exits, and a row that ends the moment you click it is a row that
+ * was never worth a spinner. `up` is deliberately not given `-d` for the
+ * opposite reason — see `parseCompose`.
+ */
+const DOCKER_COMPOSE_COMMANDS: Record<string, string[]> = {
+  up: ['up'],
+  down: ['down'],
+  build: ['build'],
+  logs: ['logs', '-f'],
+  ps: ['ps'],
+  start: ['start'],
+  stop: ['stop'],
+  restart: ['restart'],
+  pull: ['pull'],
+  config: ['config'],
+};
+
+/**
+ * How compose is invoked here: the v2 plugin by default, since the standalone
+ * v1 binary has been end-of-life since July 2023.
+ *
+ * A two-value setting and no `auto`, unlike `pythonRunner`: there the choice is
+ * decided by a lock file the scan can read, and the only honest detection for
+ * this one is running `docker compose version` — and a scan never spawns a
+ * process. Spelled as the command and split on whitespace, so what is in
+ * settings.json is what ends up in the terminal.
+ */
+function composeProgram(): string[] {
+  const configured = setting<string>('dockerCompose');
+  const value = (typeof configured === 'string' ? configured : '').trim();
+  return (value || 'docker compose').split(/\s+/);
+}
+
+/**
+ * The rows for one compose file.
+ *
+ * `-f <basename>` for the reason make, just and go-task all name their own file:
+ * what the scan saw is not what the runner would pick, and compose has its own
+ * precedence across four spellings. The catch is that passing `-f` turns off the
+ * automatic merge of the override file, which is a live development workflow —
+ * so it is looked for and appended as a second `-f`, which is exactly what the
+ * merge would have done.
+ *
+ * Only for the four default names, and this is the point of the distinction:
+ * the merge is something compose does to the file it chose for itself, and a
+ * `docker-compose.dev.yml` is never that file. Nor is the override matched by
+ * extension — compose searches its own four spellings in order whatever the base
+ * file is called, so `compose.yaml` beside `compose.override.yml` is a pair.
+ *
+ * `up` is the command that fans out: a bare row, plus one row per service when
+ * the file declares more than one. Unlike cargo's `run` the bare row stays —
+ * `docker compose up` across the whole stack is the row most people want, not an
+ * ambiguity. Six services is eleven rows rather than the thirty a full
+ * services × commands product would be.
+ *
+ * Nothing here ever passes `-d`. A detached `up` exits at once: the row would go
+ * idle with the containers still running, and Stop would stop nothing.
+ */
+async function parseCompose(
+  text: string,
+  file: string,
+  cwd: vscode.Uri,
+): Promise<ParsedManifest | undefined> {
+  const commands = settingList('dockerComposeCommands', DEFAULT_COMPOSE_COMMANDS);
+  // Not `{ tasks: [] }`: an empty parse counts as "the file declares nothing",
+  // which lands in `emptyManifests` and lets `pruneStaleRefs` delete every star
+  // and colour on it. Emptying a setting must not cost the user their marks.
+  if (commands.length === 0) {
+    return undefined;
+  }
+
+  const lines = text.split(/\r?\n/);
+  const services = yamlBlockKeys(lines, 'services')
+    .map((entry) => entry.name)
+    .filter(Boolean);
+
+  // A name the scan was sure about needs nothing else; one it matched by
+  // convention has to show a compose file's own shape before it is believed. A
+  // YAML file says nothing about what it is, and `deploy.staging.yml` sitting
+  // beside a compose file is not the only way to be wrong about that.
+  const named = COMPOSE_DEFAULT_FILES.includes(file);
+  if (!named && services.length === 0 && !lines.some((line) => /^include:\s*(#.*)?$/.test(line))) {
+    return undefined;
+  }
+
+  const program = composeProgram();
+  const files = ['-f', file];
+  const override = named ? await composeOverride(cwd) : undefined;
+  if (override) {
+    files.push('-f', override);
+  }
+  // The Compose Spec's own top-level `name:`, so the heading reads the project's
+  // name rather than the folder it happens to sit in.
+  const project = /^name:\s*["']?([^"'#\s]+)/m.exec(text);
+
+  const tasks: RawTask[] = [];
+  const push = (name: string, args: string[]) => {
+    const argv = [...program, ...files, ...args];
+    tasks.push({ name, command: argv.join(' '), argv });
+  };
+
+  for (const command of commands) {
+    const args = known(DOCKER_COMPOSE_COMMANDS, command) ?? [command];
+    push(command, args);
+    if (command === 'up' && services.length > 1) {
+      for (const service of services) {
+        push(`up: ${service}`, [...args, service]);
+      }
+    }
+  }
+
+  return { tasks, packageName: project?.[1] };
+}
+
+/** The override file beside a compose manifest, in compose's own order of preference. */
+async function composeOverride(cwd: vscode.Uri): Promise<string | undefined> {
+  for (const name of COMPOSE_OVERRIDE_FILES) {
+    if (await exists(vscode.Uri.joinPath(cwd, name))) {
+      return name;
+    }
+  }
+  return undefined;
+}
+
+// --- shell scripts -----------------------------------------------------------
+
+/**
+ * Where shell scripts are looked for. Narrow on purpose: the convention is a
+ * `.sh` under a `scripts` or `bin` folder, or in the root — and anything wider
+ * turns every vendored helper in a repository into a row.
+ *
+ * `findFiles` matches its glob against the path *relative to the workspace
+ * folder*, so the leading globstar is what carries the first two patterns past
+ * the root. Without it `scripts` would have to be a directory at the very top,
+ * and `apps/web/scripts/deploy.sh` — the case the nesting in the tree exists for
+ * — would never be found at all. The third pattern keeps no prefix on purpose:
+ * loose scripts are worth listing where a project root is, not in every
+ * directory of the repository.
+ */
+/** Every shell extension as one glob tail: `*.{sh,bash,zsh,ksh}`. */
+const SHELL_FILES = `*.{${SHELL_EXTENSIONS.join(',')}}`;
+
+const DEFAULT_SHELL_SCRIPTS: ReadonlyArray<string> = [
+  `**/scripts/**/${SHELL_FILES}`,
+  `**/bin/**/${SHELL_FILES}`,
+  SHELL_FILES,
+];
+
+/**
+ * One glob per alternative a `{a,b}` group holds: `bin/*.{sh,bash}` becomes
+ * `bin/*.sh` and `bin/*.bash`.
+ *
+ * The patterns are handed to `findFiles` as a single `{...}` group, and VS Code's
+ * own glob parser reads a group with a flat scan — the first `}` closes it,
+ * whatever sits nested inside. A braced pattern joined into that group would
+ * therefore match nothing at all, and silently. Expanding first is what lets the
+ * defaults above name four extensions on one readable line, and lets anyone write
+ * a braced pattern of their own in the setting.
+ */
+function expandBraces(pattern: string): string[] {
+  let expanded = [pattern];
+  // One group per pass, across every pattern the last pass produced, so the work
+  // stops at the budget rather than at the end of an expansion nobody asked for:
+  // groups multiply, and `{a,b}` twenty-five times over is thirty-three million
+  // patterns and a frozen window. Twenty-one is what the defaults expand to.
+  //
+  // A pattern that wants more than the budget contributes nothing at all, and
+  // that is the careful half. Handing it back with its braces intact was the
+  // first answer, and it was worse than dropping it: the caller joins every
+  // alternative into one `{…}` group, so a member that still carries braces
+  // nests one group inside another — which, by the same flat-scan rule this
+  // function exists for, is a glob that matches nothing. One unreasonable
+  // pattern would have silently taken `scripts/` and `bin/` down with it.
+  for (let pass = 0; pass <= MAX_GLOB_GROUPS; pass += 1) {
+    const next: string[] = [];
+    let opened = false;
+    for (const one of expanded) {
+      const parts = splitGroup(one);
+      opened = opened || parts.length > 1 || parts[0] !== one;
+      next.push(...parts);
+      if (next.length > MAX_GLOB_ALTERNATIVES) {
+        return [];
+      }
+    }
+    // Nothing left to open — which is also how a pattern with an unbalanced
+    // brace leaves, as itself, exactly as it was written.
+    if (!opened) {
+      return next;
+    }
+    expanded = next;
+  }
+  return [];
+}
+
+/** How far `expandBraces` will go before handing the pattern back as written. */
+const MAX_GLOB_ALTERNATIVES = 256;
+const MAX_GLOB_GROUPS = 12;
+
+/** One pattern with its first `{a,b}` group opened, or the pattern as it was. */
+function splitGroup(pattern: string): string[] {
+  const open = pattern.indexOf('{');
+  if (open === -1) {
+    return [pattern];
+  }
+  const choices: string[] = [];
+  let depth = 0;
+  let start = open + 1;
+  let close = -1;
+  for (let at = open; at < pattern.length; at += 1) {
+    const char = pattern[at];
+    if (char === '{') {
+      depth += 1;
+    } else if (char === ',' && depth === 1) {
+      choices.push(pattern.slice(start, at));
+      start = at + 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        choices.push(pattern.slice(start, at));
+        close = at;
+        break;
+      }
+    }
+  }
+  // An unclosed brace is not a group, and is left exactly as it was written.
+  if (close === -1) {
+    return [pattern];
+  }
+  const head = pattern.slice(0, open);
+  const tail = pattern.slice(close + 1);
+  return choices.map((choice) => `${head}${choice}${tail}`);
+}
+
+/**
+ * The words a Bourne-family script is run through. `bash` rather than the file
+ * itself, because running `./deploy.sh` needs both the executable bit and a
+ * shebang — and the bit is invisible to `vscode.workspace.fs` (`FilePermission`
+ * carries only `Readonly`), so checking it would mean importing `node:fs` and
+ * giving up Remote SSH and Dev Containers, which is the whole reason this file
+ * imports nothing but `path` and `vscode`.
+ *
+ * Empty runs the path on its own, for anyone who wants exactly that.
+ */
+function shellRunner(): string[] {
+  const configured = setting<string>('shellRunner');
+  const value = (typeof configured === 'string' ? configured : 'bash').trim();
+  return value ? value.split(/\s+/) : [];
+}
+
+/**
+ * What the extensions `shellRunner` does not speak for are run through.
+ *
+ * A `.ps1` handed to `bash` is an error message rather than a task, so each of
+ * the three Windows extensions says how it is started:
+ *
+ * - `powershell` and not `pwsh`: Windows PowerShell 5.1 ships with the OS and is
+ *   still what a stock Windows has, where PowerShell 7 is an install away.
+ *   `-File` is what makes the argument a script rather than a command to parse,
+ *   and `-NoProfile` keeps a user's profile out of a task's output. Someone on 7
+ *   sets `pwsh -NoProfile -File` here and nothing else changes. So does anyone
+ *   whose execution policy needs an `-ExecutionPolicy Bypass` in front of the
+ *   file — deliberately not the default: running a script is the user's call to
+ *   make, and quietly stepping over the machine's policy to do it is not ours.
+ * - `.bat` and `.cmd` are run as themselves, with no runner at all: they are
+ *   already programs to Windows, and the shell a task starts in there —
+ *   PowerShell, in a stock VS Code — takes the `./path/to/x.bat` this builds.
+ *   `cmd.exe` as the terminal profile is the exception, and wants `cmd /c` here.
+ */
+const DEFAULT_SHELL_RUNNERS: Readonly<Record<string, string>> = {
+  ps1: 'powershell -NoProfile -File',
+  bat: '',
+  cmd: '',
+};
+
+/**
+ * The runner each extension is started with, the user's map over the built-in
+ * one. An extension nobody has spoken for falls back to `shellRunner`, which is
+ * what every Bourne-family script uses and what an unknown extension is most
+ * likely to want.
+ */
+function shellRunners(): Record<string, string> {
+  const configured = setting<unknown>('shellRunners');
+  const overrides =
+    configured && typeof configured === 'object' && !Array.isArray(configured)
+      ? (configured as Record<string, unknown>)
+      : {};
+  const runners: Record<string, string> = { ...DEFAULT_SHELL_RUNNERS };
+  for (const [extension, value] of Object.entries(overrides)) {
+    if (typeof value === 'string') {
+      // Spelled as the file is — `.PS1` and `ps1` are one extension — and a
+      // leading dot is dropped, since that is how anyone would write one.
+      runners[extension.toLowerCase().replace(/^\./, '')] = value;
+    }
+  }
+  return runners;
+}
+
+/** The lower-case extension of a file, without its dot. */
+function extensionOf(file: vscode.Uri): string {
+  return path.posix.extname(file.path).slice(1).toLowerCase();
+}
+
+/** Comment lines that are addressed to a tool rather than to a reader. */
+const SHELL_PRAGMA = /^(shellcheck\b|vim:|emacs:|-\*-|!)/;
+
+/**
+ * How a comment opens, in the shells this scan reads. `#` is every Bourne shell
+ * and PowerShell; `REM` and `::` are the two a batch file has, and `::` is a
+ * label the parser skips rather than a comment keyword — which is exactly why
+ * everybody writes comments with it.
+ */
+const SHELL_COMMENT = /^(#+|::+|rem\b)\s*/i;
+
+/**
+ * The dimmed text a shell row gets: the first comment line in the file that was
+ * written for a person. The shebang goes, and so do the editor and linter
+ * pragmas that sit under it — the same idea as the `##` convention `MAKE_DOC`
+ * reads, for files that have no convention of their own.
+ *
+ * Bounded to the head of the file rather than stopping at the first line of
+ * code: `set -euo pipefail` and a `cd` to the repository root routinely sit
+ * above the comment that says what the script is for.
+ */
+export function shellDescription(text: string): string | undefined {
+  for (const line of text.split(/\r?\n/).slice(0, 40)) {
+    const trimmed = line.trim();
+    const opener = SHELL_COMMENT.exec(trimmed);
+    if (!opener) {
+      continue;
+    }
+    const body = trimmed.slice(opener[0].length).trim();
+    if (body && !SHELL_PRAGMA.test(body)) {
+      return body;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Every shell script the patterns find, as rows grouped by the directory they
+ * sit in.
+ *
+ * One group per directory, not per file: twelve scripts across `scripts/` and
+ * `bin/` are two headings rather than twelve one-row headings, where every group
+ * affordance — fold, hide, rename, drag scope — would be per-script noise. Not
+ * one workspace-wide heading either, which would lose the "where does this live"
+ * cue the rest of the tree is organised around.
+ *
+ * The group's `manifest` is therefore the directory. Its ref is
+ * `<folder>/scripts`, and a real manifest's always ends in a file name, so the
+ * only way the two collide is a directory literally named `package.json`.
+ */
+async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
+  const patterns = settingList('shellScripts', DEFAULT_SHELL_SCRIPTS);
+  if (patterns.length === 0) {
+    return [];
+  }
+  const alternatives = patterns.flatMap(expandBraces);
+  // Every pattern was dropped as unreasonable, and a glob of nothing would be a
+  // glob that matches everything in some readings. There is nothing to look for.
+  if (alternatives.length === 0) {
+    return [];
+  }
+  const glob = alternatives.length === 1 ? alternatives[0] : `{${alternatives.join(',')}}`;
+  const files = await vscode.workspace.findFiles(glob, exclude, MAX_SHELL_SCRIPTS);
+  // By directory first, so a group's scripts are one run and the shallower
+  // folders come first — the same shape the manifest sort above produces — and
+  // alphabetically inside one, which is the order a folder is read in.
+  files.sort((a, b) => {
+    const left = path.posix.dirname(a.path);
+    const right = path.posix.dirname(b.path);
+    return left.length - right.length || left.localeCompare(right) || a.path.localeCompare(b.path);
+  });
+
+  const runner = shellRunner();
+  const runners = shellRunners();
+  const entries: ScriptEntry[] = [];
+
+  for (const file of files) {
+    const directory = directoryOf(file);
+    // The workspace folder root, not the script's own directory: a
+    // `scripts/deploy.sh` is written to be run from the root of the repository,
+    // which is where `./scripts/deploy.sh` in a README means.
+    const cwd = vscode.workspace.getWorkspaceFolder(file)?.uri ?? directory;
+    const relative = (from: vscode.Uri, to: vscode.Uri) =>
+      path.relative(from.fsPath, to.fsPath).split(path.sep).join('/');
+
+    const inside = relative(cwd, file) || path.posix.basename(file.path);
+    // A group in the root of its folder has no path of its own to show, so it
+    // falls back to the folder's name — the same fallback a manifest's location
+    // takes when it sits at the root.
+    const location = relative(cwd, directory) || path.posix.basename(directory.path);
+    // The extension decides the words in front of the path: `bash` for the
+    // Bourne family, PowerShell for a `.ps1`, and nothing at all for a `.bat`,
+    // which is a program to Windows already. See `DEFAULT_SHELL_RUNNERS`.
+    const extension = extensionOf(file);
+    const words = extension in runners ? runners[extension].trim().split(/\s+/).filter(Boolean) : runner;
+    const argv = [...words, `./${inside}`];
+    const text = await readText(file);
+
+    entries.push({
+      // The file name keeps its extension: it is the identity in `scriptKey`,
+      // the terminal's title and the tooltip, and the category tokeniser splits
+      // `deploy.sh` to `['deploy', 'sh']` so the icon rules still read it.
+      key: scriptKey(directory.toString(), path.posix.basename(file.path)),
+      name: path.posix.basename(file.path),
+      command: (text !== undefined ? shellDescription(text) : undefined) ?? argv.join(' '),
+      argv,
+      manifest: directory,
+      file,
+      kind: 'shell',
+      cwd,
+      location,
+      directory: location.includes('/') ? location.slice(0, location.lastIndexOf('/')) : '',
+    });
+  }
+
+  return entries;
 }
 
 // --- shared parsing helpers --------------------------------------------------
