@@ -1385,6 +1385,14 @@ async function pickIcon(node: TreeNode | undefined): Promise<void> {
  * start with a folder or scheme name, never with the separator. */
 const FAVORITES_SCOPE = '::favorites';
 
+/**
+ * The id of the heading the starred rows sit under in `ecosystem` mode. A
+ * constant of ours rather than a manifest ref, which is what `collapseRef` and
+ * the colour and icon stores key the row on — see `buildTreeRoots` for why the
+ * heading exists in that mode and not in `flat`.
+ */
+const FAVORITES_GROUP_ID = 'group:favorites';
+
 /** Scope -> the script refs in it, in the order the user dragged them into. */
 function manualOrders(): Record<string, string[]> {
   const stored = storage?.get<unknown>(ORDER_KEY);
@@ -3224,10 +3232,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   }
 
   // Favorites sit above everything: a pinned list is only worth pinning if it
-  // does not move. They are rows at the root rather
-  // than a group of their own — a heading over the two or three tasks you run
-  // all day is a fold to open before you can click them, and the shortest list
-  // in the tree is the one that least needs a lid.
+  // does not move.
   //
   // The scripts stay in their own package group as well: this is a second way
   // in, not a way out of the package it lives in. What tells the two rows apart
@@ -3235,8 +3240,36 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   //
   // Starring already writes an order, so these rows are draggable in their own
   // right: the drag rewrites the starred list instead of a manifest's order.
+  //
+  // How they are drawn is the one thing the two modes disagree about.
+  //
+  // In `flat` mode they are rows at the root — a heading over the two or three
+  // tasks you run all day is a fold to open before you can click them, and the
+  // shortest list in the tree is the one that least needs a lid.
+  //
+  // In `ecosystem` mode every other root row is a heading, so bare task rows
+  // above them read as tasks belonging to the first ecosystem rather than as a
+  // list of their own. There they get a heading like everything else, pinned at
+  // the top and open by default: the lid costs nothing when it starts open, and
+  // it is what says where the starred list ends and Node begins.
   const favorites = runningFirst(favoriteScripts(scripts));
-  roots.unshift(...favorites.map((script): TreeNode => ({ kind: 'script', script, inFavorites: true })));
+  const starred = favorites.map((script): TreeNode => ({ kind: 'script', script, inFavorites: true }));
+  if (hierarchical() && starred.length > 0) {
+    roots.unshift({
+      kind: 'group',
+      id: FAVORITES_GROUP_ID,
+      label: `Favorites (${starred.length})`,
+      icon: 'star-full',
+      // The list the rows inside it belong to, which is what makes the heading
+      // itself a drop target: a task dropped on it is starred at the end of the
+      // list, the way one dropped on a package heading lands at the end of that
+      // package. See `dragScope` and `handleDrop`.
+      scope: FAVORITES_SCOPE,
+      children: starred,
+    });
+  } else {
+    roots.unshift(...starred);
+  }
 
   // And the pile itself, last on the list and shut by default: a group whose
   // point is to be out of the way has not moved out of the way if it opens

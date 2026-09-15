@@ -419,7 +419,8 @@ there is the activity bar view, plus the status bar entry and the keyboard short
 ### The Task & Script Explorer view
 
 The activity bar icon opens a tree with the same content as the dropdown, in this order: the
-[starred tasks](#favorites) first, as loose rows with no heading over them, then **OTHER TASKS** —
+[starred tasks](#favorites) first — as loose rows with no heading over them, or under a **Favorites**
+folder when [grouping by ecosystem](#grouping-by-ecosystem) is on — then **OTHER TASKS** —
 anything running that this extension did not start — then one group per manifest, in the order the
 scan found them in and [your drags](#reordering-rows) put them in, each with its own compose files
 and script folders [inside it](#what-a-project-takes-in-with-it). Nothing moves because something
@@ -544,6 +545,11 @@ Shell (2)
   tools/ci
     ▶ lint.sh
 ```
+
+[Starred tasks](#favorites) get a heading of their own in this mode — a **Favorites** folder pinned
+above the ecosystem rows, open by default. In the flat layout they sit loose at the root, which works
+because nothing above them has a heading; here every root row does, and loose rows would read as
+belonging to the first ecosystem.
 
 Here a compose file is filed under **Docker** and a script folder under **Shell**, rather than under
 the package they serve: the question this mode answers is what kind of thing a row is, so the
@@ -715,8 +721,9 @@ row](#reordering-rows) — pins that script to the very top of the tree, above e
 monorepo the two or three scripts you actually use stop being buried
 under twenty you never touch.
 
-There is no folder over them. A heading above the two or three tasks you run all day is a fold to
-open before you can click them, so the starred rows sit loose at the root, already in reach:
+In the default `flat` layout there is no folder over them. A heading above the two or three tasks you
+run all day is a fold to open before you can click them, so the starred rows sit loose at the root,
+already in reach:
 
 ```
   ▶ dev      api · vite dev
@@ -725,6 +732,24 @@ open before you can click them, so the starred rows sit loose at the root, alrea
 @acme/frontend • apps/web ────────────
   ▶ build    next build
 ```
+
+With [grouping by ecosystem](#grouping-by-ecosystem) on, every other root row is a heading, and bare
+task rows above them read as belonging to the first ecosystem rather than as a list of their own.
+There the stars get a **Favorites** folder of their own, pinned above everything and open by default
+— the lid costs nothing when it starts open, and it is what says where the starred list ends:
+
+```
+⭐ Favorites (3) ─────────────────────
+  ▶ dev      api · vite dev
+  ▶ dev      web · next dev
+  🧪 test    api · vitest run
+📦 Node (2) ──────────────────────────
+  @acme/frontend • apps/web ──────────
+    ▶ build  next build
+```
+
+It folds, paints and takes an icon like any other heading, and dropping a task on it stars that task
+at the end of the list.
 
 A favorite is a second way in, not a move: the script stays in its own package group as well. Since
 the starred row is listed away from that group heading, it says where it came from in its dimmed
@@ -975,8 +1000,8 @@ manifest rather than by a task, and are never touched by this — a manifest los
 nothing about whether the manifest is still there.
 
 An [ecosystem row](#grouping-by-ecosystem) has no manifest at all, so its fold, its colour and its
-icon are filed under a constant of ours — `group:eco:rust` — exactly as **OTHER TASKS** and the
-hidden pile are. Nothing about it can go stale, and the prune above never looks at it: it names no
+icon are filed under a constant of ours — `group:eco:rust` — exactly as **OTHER TASKS**, the
+**Favorites** folder and the hidden pile are. Nothing about it can go stale, and the prune above never looks at it: it names no
 task, so there is no task whose disappearance could take it away. The ecosystems themselves are
 ordered by where their first package sits in the one saved order the headings already have, so
 dragging a whole ecosystem and dragging one package inside it write the same store.

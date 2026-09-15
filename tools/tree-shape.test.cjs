@@ -318,7 +318,7 @@ test('favorites, OTHER TASKS and the hidden pile stay at the root', () => {
   });
   const roots = buildTreeRoots([WEB, API, ENGINE, TOOLS]);
   assert.deepEqual(ids(roots), [
-    'script:dev',
+    'group:favorites',
     'group:foreign',
     'group:eco:node',
     'group:eco:rust',
@@ -330,6 +330,36 @@ test('favorites, OTHER TASKS and the hidden pile stay at the root', () => {
   assert.deepEqual(ids(roots[5].children), ['group:file:///repo/api/package.json']);
   // And the parent's count is of what is shown, since hidden is split off first.
   assert.equal(roots[2].label, 'Node (1)');
+});
+
+test('in ecosystem mode the starred rows sit under a Favorites heading', () => {
+  const { buildTreeRoots } = harness({
+    settings: { grouping: 'ecosystem' },
+    stored: { favorites: ['file:///repo/web/package.json::dev', 'file:///repo/api/package.json::start'] },
+  });
+  const [favorites] = buildTreeRoots([WEB, API, ENGINE]);
+  assert.equal(favorites.kind, 'group');
+  assert.equal(favorites.label, 'Favorites (2)');
+  // The list the rows belong to, which is what makes the heading a drop target
+  // for starring — and it has no manifest of its own to rename or hide.
+  assert.equal(favorites.scope, '::favorites');
+  assert.equal(favorites.ref, undefined);
+  assert.deepEqual(ids(favorites.children), ['script:dev', 'script:start']);
+  // Starring is a second way in, not a move: both scripts are still drawn in
+  // the package group they came from.
+  assert.equal(favorites.children[0].inFavorites, true);
+});
+
+test('in flat mode the starred rows stay loose at the root', () => {
+  const { buildTreeRoots } = harness({
+    settings: { grouping: 'flat' },
+    stored: { favorites: ['file:///repo/web/package.json::dev'] },
+  });
+  assert.deepEqual(ids(buildTreeRoots([WEB, ENGINE])), [
+    'script:dev',
+    'group:file:///repo/web/package.json',
+    'group:file:///repo/engine/Cargo.toml',
+  ]);
 });
 
 // --- the rows themselves -----------------------------------------------------
