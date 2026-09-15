@@ -350,10 +350,10 @@ export const SOURCE_GLOB =
 
 /**
  * Go source files, which are the one case where what is *inside* the file
- * decides a row: a module root offers `run` because one of its own `.go` files
- * says `package main`, whatever that file is called. Editing `package server`
- * into `package main` creates and deletes nothing, so unlike `SOURCE_GLOB` this
- * one is watched for changes as well.
+ * decides a row: a module root offers `run` when its applicable root `.go`
+ * files form `package main` and declare `func main()`, whatever those files are
+ * called. Editing either declaration creates and deletes nothing, so unlike
+ * `SOURCE_GLOB` this one is watched for changes as well.
  *
  * Deliberately wider than what the scan reads — only the files beside a `go.mod`
  * matter, and no glob can say "beside a `go.mod`". The handler narrows it, so a
@@ -1522,9 +1522,10 @@ async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest
 
 /**
  * Whether the module root is itself a program: `go run .` wants a `package main`
- * there, and Go does not care what the file is called — `server.go` or `cli.go`
- * are as good as `main.go`. `main.go` is checked first as the cheap common case;
- * otherwise the root `.go` files (tests excluded) are read for the package clause.
+ * with a `func main()` in files selected for this platform. Go does not care what
+ * those files are called — `server.go` or `cli.go` are as good as `main.go`.
+ * `main.go` is checked first as the cheap common case; otherwise the root `.go`
+ * files (tests excluded) are read for the package and entry-point declarations.
  */
 async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
   const entries = await listDirectory(cwd);
@@ -1544,6 +1545,8 @@ async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
   // as far as the budget goes and then called a library, which is the answer
   // that costs a missing row rather than a row that cannot run.
   let budget = MAX_GO_ROOT_BYTES;
+  let mainPackage = false;
+  let mainFunction = false;
   for (const name of sources) {
     if (budget <= 0) {
       break;
@@ -1553,26 +1556,167 @@ async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
       continue;
     }
     budget -= text.length;
-    if (GO_BUILD_IGNORE.test(text)) {
+    if (!goFileNameApplies(name) || GO_BUILD_IGNORE.test(text) || !goBuildApplies(text)) {
       // `//go:build ignore` + `package main` is the `go generate` helper idiom;
       // it does not make a library a program.
       continue;
     }
-    // The clause is the first statement, so only what precedes `import`/`func`
-    // is looked at, with block comments taken out of the way first.
-    const head = text.replace(/\/\*[\s\S]*?\*\//g, '').split(/^(?:import|func|var|const|type)\b/m)[0];
-    if (GO_PACKAGE_MAIN.test(head)) {
-      return true;
+    const code = goCode(text);
+    if (GO_PACKAGE_MAIN.test(code)) {
+      mainPackage = true;
+      mainFunction = mainFunction || GO_MAIN_FUNCTION.test(code);
     }
   }
-  return false;
+  return mainPackage && mainFunction;
 }
 
 /** The package clause; `//go:build` lines and comments sit above it. */
-const GO_PACKAGE_MAIN = /^package\s+main\s*(?:\/\/.*)?$/m;
+const GO_PACKAGE_MAIN = /^package\s+main\s*$/m;
+/** The exact entry point required by the Go specification. */
+const GO_MAIN_FUNCTION = /^func\s+main\s*\(\s*\)\s*\{/m;
 const GO_BUILD_IGNORE = /^\/\/\s*(?:go:build|\+build)\s+ignore\b/m;
 /** How much of a module root is read looking for its package clause. */
 const MAX_GO_ROOT_BYTES = 256_000;
+
+const CURRENT_GOOS = process.platform === 'win32' ? 'windows' : process.platform;
+const CURRENT_GOARCH: string =
+  ({ x64: 'amd64', ia32: '386' } as Record<string, string>)[process.arch] ?? process.arch;
+const GO_OSES = new Set([
+  'aix', 'android', 'darwin', 'dragonfly', 'freebsd', 'illumos', 'ios', 'js', 'linux',
+  'netbsd', 'openbsd', 'plan9', 'solaris', 'wasip1', 'windows',
+]);
+const GO_ARCHES = new Set([
+  '386', 'amd64', 'arm', 'arm64', 'loong64', 'mips', 'mips64', 'mips64le',
+  'mipsle', 'ppc64', 'ppc64le', 'riscv64', 's390x', 'wasm',
+]);
+const GO_UNIX = new Set([
+  'aix', 'android', 'darwin', 'dragonfly', 'freebsd', 'illumos', 'ios', 'linux',
+  'netbsd', 'openbsd', 'solaris',
+]);
+
+/** Applies Go's platform suffix and ignored-file conventions without spawning Go. */
+function goFileNameApplies(name: string): boolean {
+  if (name.startsWith('.') || name.startsWith('_')) {
+    return false;
+  }
+  const parts = name.slice(0, -3).split('_');
+  const last = parts.at(-1) ?? '';
+  const before = parts.at(-2) ?? '';
+  if (GO_ARCHES.has(last)) {
+    return last === CURRENT_GOARCH && (!GO_OSES.has(before) || before === CURRENT_GOOS);
+  }
+  return !GO_OSES.has(last) || last === CURRENT_GOOS;
+}
+
+/** Applies modern and legacy build constraints using the host's standard tags. */
+function goBuildApplies(text: string): boolean {
+  const modern = /^\/\/go:build\s+(.+)$/m.exec(text)?.[1];
+  if (modern !== undefined) {
+    return goBuildExpression(modern);
+  }
+  const legacy = [...text.matchAll(/^\/\/\s*\+build\s+(.+)$/gm)].map((match) => match[1]);
+  return legacy.every((line) =>
+    line.trim().split(/\s+/).some((option) => option.split(',').every(goBuildTerm)),
+  );
+}
+
+function goBuildTerm(term: string): boolean {
+  if (term.startsWith('!')) {
+    return !goBuildTerm(term.slice(1));
+  }
+  return (
+    term === CURRENT_GOOS ||
+    term === CURRENT_GOARCH ||
+    term === 'gc' ||
+    (term === 'unix' && GO_UNIX.has(CURRENT_GOOS))
+  );
+}
+
+/** Recursive-descent evaluator for identifiers, !, &&, || and parentheses. */
+function goBuildExpression(source: string): boolean {
+  const tokens = source.match(/[A-Za-z0-9_.]+|&&|\|\||[!()]/g) ?? [];
+  let index = 0;
+  const primary = (): boolean => {
+    const token = tokens[index++];
+    if (token === '!') {
+      return !primary();
+    }
+    if (token === '(') {
+      const value = disjunction();
+      if (tokens[index] !== ')') {
+        return false;
+      }
+      index++;
+      return value;
+    }
+    return token !== undefined && goBuildTerm(token);
+  };
+  const conjunction = (): boolean => {
+    let value = primary();
+    while (tokens[index] === '&&') {
+      index++;
+      const right = primary();
+      value = value && right;
+    }
+    return value;
+  };
+  const disjunction = (): boolean => {
+    let value = conjunction();
+    while (tokens[index] === '||') {
+      index++;
+      const right = conjunction();
+      value = value || right;
+    }
+    return value;
+  };
+  const value = disjunction();
+  return index === tokens.length && value;
+}
+
+/** Removes comments and literals so declarations written inside either cannot match. */
+function goCode(text: string): string {
+  let out = '';
+  let at = 0;
+  while (at < text.length) {
+    const char = text[at];
+    const next = text[at + 1];
+    if (char === '/' && next === '/') {
+      while (at < text.length && text[at] !== '\n') {
+        at++;
+      }
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      at += 2;
+      while (at < text.length && !(text[at] === '*' && text[at + 1] === '/')) {
+        out += text[at] === '\n' ? '\n' : ' ';
+        at++;
+      }
+      at += 2;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      const quote = char;
+      out += ' ';
+      at++;
+      while (at < text.length) {
+        const inside = text[at++];
+        if (inside === '\n') {
+          out += '\n';
+        }
+        if (quote !== '`' && inside === '\\') {
+          at++;
+        } else if (inside === quote) {
+          break;
+        }
+      }
+      continue;
+    }
+    out += char;
+    at++;
+  }
+  return out;
+}
 
 // --- mise --------------------------------------------------------------------
 
@@ -1613,8 +1757,16 @@ const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['up', 'down', 'build', 
  * was never worth a spinner. `up` is deliberately not given `-d` for the
  * opposite reason — see `parseCompose`.
  */
-/** How `up` is asked to detach. Never passed on — see the loop in `parseCompose`. */
-const COMPOSE_DETACH = new Set(['-d', '--detach']);
+/** Whether an option makes `compose up` leave its containers behind. */
+function composeDetaches(word: string): boolean {
+  return (
+    word === '-d' ||
+    word === '--detach' ||
+    word.startsWith('--detach=') ||
+    word === '--wait' ||
+    word.startsWith('--wait=')
+  );
+}
 
 const DOCKER_COMPOSE_COMMANDS: Record<string, string[]> = {
   up: ['up'],
@@ -1722,7 +1874,7 @@ async function parseCompose(
     // truth only by accident — which is the one thing this setting promises
     // never happens, and splitting entries into words is what made `up -d`
     // reach the terminal at all.
-    const args = listed ?? words(entry).filter((word) => !COMPOSE_DETACH.has(word));
+    const args = listed ?? words(entry).filter((word) => !composeDetaches(word));
     if (args.length === 0) {
       continue;
     }

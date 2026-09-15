@@ -38,6 +38,7 @@ function harness() {
     keyForTask = (task) => task.definition.key;
     exports.lifecycle = {
       running, executionOf, stopExecution, stopNode, restartNode, markEnded,
+      liveExecutions, runningCount, forgetExecution, clearEnded,
     };
   `, context);
   const api = context.exports.lifecycle;
@@ -136,6 +137,30 @@ test('the other run of a task ending is not the end of this one', async () => {
   endSecond();
   assert.equal(await stopping, true);
   assert.deepEqual(h.tasks.taskExecutions, []);
+});
+
+test('an ended instance neither hides nor undercounts its live sibling', () => {
+  const h = harness();
+  const first = h.execution();
+  const second = h.execution();
+  h.tasks.taskExecutions = [first, second];
+  h.running.set('dev', second);
+
+  assert.equal(h.runningCount(), 2, 'the badge counts executions, not unique rows');
+  h.markEnded(first);
+  assert.deepEqual(h.liveExecutions(), [second], 'only the ended handle is suppressed');
+  assert.equal(h.runningCount(), 1);
+  assert.equal(h.executionOf({ kind: 'script', script: { key: 'dev' } }), second);
+});
+
+test('starting another instance does not revive an ended sibling still being listed', () => {
+  const h = harness();
+  const ended = h.execution();
+  const started = h.execution();
+  h.tasks.taskExecutions = [ended, started];
+  h.markEnded(ended);
+  h.clearEnded(started);
+  assert.deepEqual(h.liveExecutions(), [started]);
 });
 
 test('a foreign row resolves to its own run, not another of the same task', () => {

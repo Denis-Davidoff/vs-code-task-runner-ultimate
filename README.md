@@ -259,8 +259,9 @@ running.
 
 Two details are deliberate. **Nothing is ever run detached**: a `-d` row exits the moment it starts,
 which would leave the row idle with the containers still up and the ■ button with nothing to stop.
-A `-d` or `--detach` written into `dockerComposeCommands` is dropped rather than honoured, and the
-row is named by what it actually runs — so `up -d` is listed, and behaves, as plain `up`. And `logs`
+A `-d`, `--detach` or `--wait` (which implies detached mode) written into
+`dockerComposeCommands` is dropped rather than honoured, and the row is named by what it actually
+runs — so `up -d` is listed, and behaves, as plain `up`. And `logs`
 is always followed (`logs -f`) for the same reason. If you want a detached `up`, that is a terminal
 command, not a row that lies about its own state.
 
@@ -1194,10 +1195,10 @@ waiting for an answer.
 
 Some rows are not written down in any manifest, and those files count too: a crate offers `run`
 because it has a `src/main.rs`, a `run: <name>` for every binary under `src/bin`, an
-`example: <name>` for every example under `examples`, and a Go module offers `run` because its root
-holds a `package main` — in `main.go` or any other root `.go` file. Creating or deleting one of those
-refreshes the list as a manifest would; editing one does not, because what is inside them is the
-compiler's business and not the list's.
+`example: <name>` for every example under `examples`, and a Go module offers `run` when its applicable
+root `.go` files form `package main` and declare `func main()` — in `main.go` or any other root file.
+Creating, deleting, or editing one of those refreshes the list because its contents decide whether
+the row can run.
 
 Detected runners are dropped along with it. That matters because `packageManager` and `engines` live
 in the very file being edited: switching a package from npm to pnpm has to change how its scripts

@@ -65,6 +65,7 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
   const context = vm.createContext({
     exports: {},
     Buffer,
+    process,
     require: (name) => (name === 'vscode' ? vscode : name === 'path' ? path : {}),
   });
   vm.runInContext(
@@ -599,13 +600,13 @@ test('a file over the size limit is skipped without being read', async () => {
   assert.equal(await readText({ path: '/repo/package.json' }), undefined);
 });
 
-test('a Go module root is a program when any root file is `package main`', async () => {
+test('a Go module root is a program when applicable root files declare its main package and function', async () => {
   const gomod = 'module example.com/app\n';
   const settings = { goCommands: ['run', 'build'] };
   const withServer = harness({
     settings,
     present: ['/repo/server.go'],
-    found: { '/repo/server.go': '//go:build linux\n\n// Server.\npackage main\n\nfunc main() {}\n' },
+    found: { '/repo/server.go': '// Server.\npackage main\n\nfunc main() {}\n' },
     directory: { '/repo': [['server.go', 1], ['go.mod', 1]] },
   });
   assert.deepEqual(names(await withServer.parseGoMod(gomod, { path: '/repo' })), ['run', 'build']);
@@ -658,6 +659,48 @@ test('a crowded module root still finds its `main.go`', async () => {
   assert.deepEqual(names(await h.parseGoMod('module example.com/app\n', { path: '/repo' })), ['run']);
 });
 
+test('package main without a main function is not runnable', async () => {
+  const h = harness({
+    settings: { goCommands: ['run', 'build'] },
+    found: { '/repo/helpers.go': 'package main\n\nfunc helper() {}\n' },
+    directory: { '/repo': [['helpers.go', 1]] },
+  });
+  assert.deepEqual(names(await h.parseGoMod('module example.com/app\n', { path: '/repo' })), ['build']);
+});
+
+test('a main function may live in another file of the main package', async () => {
+  const h = harness({
+    settings: { goCommands: ['run'] },
+    found: {
+      '/repo/package.go': 'package main\n\nfunc helper() {}\n',
+      '/repo/entry.go': 'package main\n\nfunc main() {}\n',
+    },
+    directory: { '/repo': [['package.go', 1], ['entry.go', 1]] },
+  });
+  assert.deepEqual(names(await h.parseGoMod('module example.com/app\n', { path: '/repo' })), ['run']);
+});
+
+test('a main function for another platform does not make this root runnable', async () => {
+  const other = process.platform === 'win32' ? 'linux' : 'windows';
+  const file = `entry_${other}.go`;
+  const h = harness({
+    settings: { goCommands: ['run', 'build'] },
+    found: { [`/repo/${file}`]: 'package main\n\nfunc main() {}\n' },
+    directory: { '/repo': [[file, 1]] },
+  });
+  assert.deepEqual(names(await h.parseGoMod('module example.com/app\n', { path: '/repo' })), ['build']);
+});
+
+test('a false Go build constraint excludes its main function', async () => {
+  const other = process.platform === 'win32' ? 'linux' : 'windows';
+  const h = harness({
+    settings: { goCommands: ['run', 'build'] },
+    found: { '/repo/entry.go': `//go:build ${other}\n\npackage main\n\nfunc main() {}\n` },
+    directory: { '/repo': [['entry.go', 1]] },
+  });
+  assert.deepEqual(names(await h.parseGoMod('module example.com/app\n', { path: '/repo' })), ['build']);
+});
+
 test('the Go files are watched apart from the Rust ones', () => {
   const { SOURCE_GLOB, GO_GLOB } = harness();
   // A `.go` file's contents decide a row, so it needs change events the Rust
@@ -693,4 +736,14 @@ test('a compose command of your own keeps the flags that are not a detach', asyn
   const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
   assert.deepEqual(parsed.tasks.map((task) => task.name), ['up --build']);
   assert.deepEqual(parsed.tasks[0].argv.slice(-2), ['up', '--build']);
+});
+
+test('compose options that imply detach are removed too', async () => {
+  const { parseCompose } = harness({
+    settings: { dockerComposeCommands: ['up --wait', 'up --detach=true'] },
+  });
+  const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up', 'up: web', 'up: db']);
+  assert.ok(!parsed.tasks.some((task) => task.argv.some((word) => word.startsWith('--wait'))));
+  assert.ok(!parsed.tasks.some((task) => task.argv.some((word) => word.startsWith('--detach'))));
 });

@@ -504,11 +504,7 @@ export function deactivate(): void {
  */
 const endedExecutions = new Set<vscode.TaskExecution>();
 
-/**
- * Whether two executions stand for the same run. Identity first, since that is
- * what the events carry, and `sameTask` behind it because the task system may
- * hand out a fresh `TaskExecution` object for a task it is already running.
- */
+/** Whether two handles can stand for the same run when identity is unavailable. */
 function sameExecution(a: vscode.TaskExecution, b: vscode.TaskExecution): boolean {
   return a === b || sameTask(a.task, b.task);
 }
@@ -521,26 +517,20 @@ function markEnded(execution: vscode.TaskExecution): void {
 /**
  * Clears any note held against a task that has just started again.
  *
- * A restart is a stop and a start of the same task, and `sameExecution` cannot
- * tell the new run from the old one it matches. A start event can: it is the
- * task system saying this task is alive, which is the one thing a note about
- * its previous run must not be allowed to contradict.
+ * A start event carries the exact execution that is alive. Clearing by task
+ * definition would also erase the note for an older sibling instance that has
+ * ended but is still present in the task-system listing.
  */
 function clearEnded(execution: vscode.TaskExecution): void {
-  for (const ended of endedExecutions) {
-    if (sameExecution(ended, execution)) {
-      endedExecutions.delete(ended);
-    }
-  }
+  endedExecutions.delete(execution);
 }
 
 /**
  * The executions the task system lists, minus the ones it has already ended.
  *
- * The notes are dropped here rather than on a timer: an execution the listing
- * no longer carries is one nothing can count any more, so the note has nothing
- * left to do — and a note kept past that would hide the next run of the same
- * task instead.
+ * End events identify executions, not task definitions. Two instances of one
+ * task may be alive together, so a note for one must never hide its sibling.
+ * The notes are dropped once their exact handle leaves the task listing.
  */
 function liveExecutions(): vscode.TaskExecution[] {
   const listed = vscode.tasks.taskExecutions;
@@ -549,8 +539,7 @@ function liveExecutions(): vscode.TaskExecution[] {
       endedExecutions.delete(ended);
     }
   }
-  const ended = [...endedExecutions];
-  return listed.filter((item) => !ended.some((item2) => sameExecution(item, item2)));
+  return listed.filter((item) => !endedExecutions.has(item));
 }
 
 /**
@@ -623,7 +612,9 @@ function pruneRunning(): boolean {
  */
 function runningCount(): number {
   pruneRunning();
-  return running.size + foreignExecutions().length;
+  // The badge counts executions, not rows. Several instances of one task share
+  // one row in the tree but are still several running processes.
+  return liveExecutions().length;
 }
 
 /**
