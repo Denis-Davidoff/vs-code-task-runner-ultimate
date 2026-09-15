@@ -4,6 +4,7 @@ import { composeState } from './containers';
 import { locateTask } from './locate';
 import {
   ALL_ECOSYSTEMS,
+  enabledEcosystems,
   collectScripts,
   commandFor,
   Ecosystem,
@@ -240,19 +241,6 @@ function repaint(): void {
   activePicker?.refresh();
 }
 
-/**
- * The ecosystems `sources` leaves switched on. Read here as well as in the scan
- * because one watcher has to answer for a setting it cannot be rebuilt from.
- */
-function enabledSources(): string[] {
-  const configured = vscode.workspace
-    .getConfiguration('taskRunnerUltimate')
-    .get<unknown>('sources');
-  return Array.isArray(configured)
-    ? configured.filter((item): item is string => typeof item === 'string')
-    : [...ALL_ECOSYSTEMS];
-}
-
 export function activate(context: vscode.ExtensionContext): void {
   storage = context.workspaceState;
   // The settings entry in the menu filters the settings editor by this id, and
@@ -353,11 +341,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
       provideTasks: async () => (await collectScripts()).map((script) => buildTask(script)),
       resolveTask: async (task) => {
-        const { manifest, script } = task.definition as { manifest?: string; script?: string };
-        if (!manifest || !script) {
+        const key = keyForTask(task);
+        if (!key) {
           return undefined;
         }
-        const entry = (await collectScripts()).find((item) => item.key === scriptKey(manifest, script));
+        const entry = (await collectScripts()).find((item) => item.key === key);
         return entry ? buildTask(entry) : undefined;
       },
     }),
@@ -398,18 +386,20 @@ export function activate(context: vscode.ExtensionContext): void {
   sourceWatcher.onDidCreate(() => invalidateSoon());
   sourceWatcher.onDidDelete(() => invalidateSoon());
 
-  // The shell rows are files rather than entries in a file, so the same
-  // create-and-delete-only trick serves them — see `SHELL_GLOB` for why the
-  // pattern is fixed rather than built from `shellScripts`. The handler, not the
-  // watcher, is what `sources` switches off: a watcher is built once and this
-  // one has to stay right after the setting changes.
-  const shellWatcher = vscode.workspace.createFileSystemWatcher(SHELL_GLOB, false, true, false);
+  // The shell rows are files rather than entries in a file — see `SHELL_GLOB`
+  // for why the pattern is fixed rather than built from `shellScripts`. Unlike
+  // `SOURCE_GLOB`, a change matters here too: the row's dimmed description is
+  // the script's leading comment, so an edited header has to reach the tree.
+  // The handler, not the watcher, is what `sources` switches off: a watcher is
+  // built once and this one has to stay right after the setting changes.
+  const shellWatcher = vscode.workspace.createFileSystemWatcher(SHELL_GLOB);
   const onShellChange = () => {
-    if (enabledSources().includes('shell')) {
+    if (enabledEcosystems().has('shell')) {
       invalidateSoon();
     }
   };
   shellWatcher.onDidCreate(onShellChange);
+  shellWatcher.onDidChange(onShellChange);
   shellWatcher.onDidDelete(onShellChange);
 
   context.subscriptions.push(
@@ -453,6 +443,12 @@ export function deactivate(): void {
   running.clear();
   endedExecutions.clear();
   clearHint();
+  // The same goes for every other cache of one workspace's state: the next
+  // `activate` may come with another workspace's storage, whose folds and
+  // container marks these must not stand in for.
+  folded = undefined;
+  containers.clear();
+  prunedScan = undefined;
   // The module outlives a deactivate when the host keeps it loaded, so the flag
   // goes back with it: a second `activate` gets a new `context`, and the entry
   // that disposes the status bar has to be put in that one.
@@ -522,7 +518,8 @@ function liveExecutions(): vscode.TaskExecution[] {
       endedExecutions.delete(ended);
     }
   }
-  return listed.filter((item) => ![...endedExecutions].some((ended) => sameExecution(item, ended)));
+  const ended = [...endedExecutions];
+  return listed.filter((item) => !ended.some((item2) => sameExecution(item, item2)));
 }
 
 /**
@@ -569,8 +566,15 @@ function foreignExecutions(): vscode.TaskExecution[] {
 function pruneRunning(): boolean {
   const live = liveExecutions();
   let dropped = false;
+  const liveByKey = new Map<string, vscode.TaskExecution>();
+  for (const exec of live) {
+    const key = keyForTask(exec.task);
+    if (key !== undefined && !liveByKey.has(key)) {
+      liveByKey.set(key, exec);
+    }
+  }
   for (const key of [...running.keys()]) {
-    const alive = live.find((exec) => keyForTask(exec.task) === key);
+    const alive = liveByKey.get(key);
     if (alive) {
       running.set(key, alive);
     } else {
@@ -666,13 +670,26 @@ function syncTitles(): void {
   }
 }
 
+/**
+ * A tasks.json `manifest` in the spelling the scan uses for keys. Hand-written
+ * (`file:///c:/…`, an unescaped space) and generated (`file:///c%3A/…`) forms
+ * of one file must meet at the same key.
+ */
+function normalizedUri(text: string): string {
+  try {
+    return vscode.Uri.parse(text).toString();
+  } catch {
+    return text;
+  }
+}
+
 /** Maps a task back to a script key, for both our tasks and built-in npm tasks. */
 function keyForTask(task: vscode.Task): string | undefined {
   const definition = task.definition as { type: string; script?: string; path?: string; manifest?: string };
 
   if (definition.type === TASK_TYPE) {
     return definition.manifest && definition.script
-      ? scriptKey(definition.manifest, definition.script)
+      ? scriptKey(normalizedUri(definition.manifest), definition.script)
       : undefined;
   }
 
@@ -3958,33 +3975,35 @@ async function checkContainers(announce: boolean): Promise<void> {
   // compose files does not put dozens of docker CLI processes up together.
   const BATCH = 4;
   let asked = 0;
-  // Rebuilt rather than written into: an entry for a compose file the scan no
-  // longer has cannot describe anything on screen, and it was still being added
-  // to the total below — a deleted file's old services reported as up.
-  const fresh = new Map<string, Set<string>>();
+  // An entry for a compose file the scan no longer has cannot describe anything
+  // on screen, and would still count towards the total below — a deleted file's
+  // old services reported as up.
+  for (const key of [...containers.keys()]) {
+    if (!files.has(key)) {
+      containers.delete(key);
+    }
+  }
   const queue = [...files];
   while (queue.length > 0) {
     await Promise.all(
       queue.splice(0, BATCH).map(async ([key, script]) => {
         const prefix = composePrefix(script);
+        // Written per file, and only if nothing else answered meanwhile: a `down`
+        // that ends during a long probe writes through `refreshContainers`, and
+        // this probe's older picture must not paint the stack back up.
+        const before = containers.get(key);
         const state = prefix ? await composeState(prefix, script.cwd.fsPath) : undefined;
-        if (state) {
-          asked++;
-          fresh.set(key, state.running);
-        } else {
+        if (!state) {
           // Docker could not answer for this one, so its last answer stands —
           // "I could not ask" is not "your stack is down".
-          const previous = containers.get(key);
-          if (previous) {
-            fresh.set(key, previous);
-          }
+          return;
+        }
+        asked++;
+        if (containers.get(key) === before) {
+          containers.set(key, state.running);
         }
       }),
     );
-  }
-  containers.clear();
-  for (const [key, services] of fresh) {
-    containers.set(key, services);
   }
 
   repaint();
@@ -5177,7 +5196,10 @@ async function stopExecution(execution: vscode.TaskExecution): Promise<boolean> 
   }
   execution = live;
   const ended = waitForEnd(execution);
-  execution.terminate();
+  // `terminate()` rejects when the task has already gone between the listing
+  // above and this call — a short script, or a Ctrl+C in its terminal. The wait
+  // below sees that ending; the rejection itself has nothing to add.
+  Promise.resolve(execution.terminate()).catch(() => undefined);
   const stopped = await ended;
 
   if (!stopped) {
@@ -5205,10 +5227,14 @@ async function stopExecution(execution: vscode.TaskExecution): Promise<boolean> 
  * reporting that as an ending is how a live task gets drawn as a stopped one.
  */
 function waitForEnd(execution: vscode.TaskExecution): Promise<boolean> {
-  const alive = () =>
-    vscode.tasks.taskExecutions.some(
-      (item) => item === execution || sameTask(item.task, execution.task),
-    );
+  // While the handle is the one the task system lists, identity is the answer:
+  // with two runs of one task up (`instanceLimit`, a watch started twice), the
+  // end of the other run must not read as the end of this one. `sameExecution`
+  // is the fallback for a handle the listing has already replaced.
+  const listed = vscode.tasks.taskExecutions.includes(execution);
+  const matches = (item: vscode.TaskExecution) =>
+    listed ? item === execution : sameExecution(item, execution);
+  const alive = () => vscode.tasks.taskExecutions.some(matches);
 
   return new Promise((resolve) => {
     const deadline = Date.now() + 15_000;
@@ -5229,7 +5255,7 @@ function waitForEnd(execution: vscode.TaskExecution): Promise<boolean> {
     let timer = setTimeout(poll, 500);
 
     const subscription = vscode.tasks.onDidEndTask((event) => {
-      if (event.execution === execution || sameTask(event.execution.task, execution.task)) {
+      if (matches(event.execution)) {
         finish(true);
       }
     });

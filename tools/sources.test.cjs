@@ -24,7 +24,7 @@ function uri(at) {
  * @param found    what `findFiles` hands back, by path
  * @param root     the workspace folder every file is inside, or none at all
  */
-function harness({ settings = {}, present = [], found = [], root } = {}) {
+function harness({ settings = {}, present = [], found = [], root, directory = {} } = {}) {
   const onDisk = new Set(present);
   const calls = [];
   const contents = found && !Array.isArray(found) ? found : Object.fromEntries((found ?? []).map((at) => [at, '']));
@@ -48,17 +48,19 @@ function harness({ settings = {}, present = [], found = [], root } = {}) {
       },
       fs: {
         stat: async (target) => {
-          if (!onDisk.has(target.path)) {
+          if (!onDisk.has(target.path) && !(target.path in contents)) {
             throw new Error(`no such file: ${target.path}`);
           }
-          return {};
+          return { size: Buffer.byteLength(contents[target.path] ?? '', 'utf8') };
         },
         readFile: async (target) => Buffer.from(contents[target.path] ?? '', 'utf8'),
+        readDirectory: async (target) => directory[target.path] ?? [],
       },
     },
     Uri: {
       joinPath: (target, ...parts) => ({ path: [target.path, ...parts].join('/') }),
     },
+    FileType: { File: 1, Directory: 2 },
   };
   const context = vm.createContext({
     exports: {},
@@ -68,7 +70,7 @@ function harness({ settings = {}, present = [], found = [], root } = {}) {
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts };
+    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, readText, RUNNERS };
   `,
     context,
   );
@@ -149,6 +151,13 @@ test('shellDescription reads the two openers a batch file has', () => {
   assert.equal(shellDescription('@echo off\n:: Ship the API.\n'), 'Ship the API.');
   // `remove-old-logs` opens with the same three letters and is not a comment.
   assert.equal(shellDescription('remove-old-logs.exe\n:: Ship it.\n'), 'Ship it.');
+});
+
+test('shellDescription reads the batch openers only in a batch file', () => {
+  const { shellDescription } = harness();
+  const text = '#!/bin/bash\nREM=$(git rev-parse HEAD)\n# Deploy to staging.\n';
+  assert.equal(shellDescription(text, 'sh'), 'Deploy to staging.');
+  assert.equal(shellDescription('@echo off\nREM Ship it.\n', 'bat'), 'Ship it.');
 });
 
 test('shellDescription has nothing to say about a file with no comments', () => {
@@ -525,4 +534,90 @@ test('the shell scan reads nothing at all when the pattern list is emptied', asy
     found: { '/repo/bin/build.sh': '' },
   });
   assert.deepEqual(plain(await collectShellScripts('**/none')), []);
+});
+
+// --- manifests the review found misread --------------------------------------
+
+const names = (parsed) => plain((parsed?.tasks ?? []).map((task) => task.name));
+
+test('a Makefile assignment with `::=` or `:::=` is not a target', () => {
+  const { parseMakefile } = harness();
+  const text = 'FOO ::= $(shell pwd)\nBAR :::= x\nBAZ := y\nbuild: deps\n\tgo build\n';
+  assert.deepEqual(names(parseMakefile(text, 'Makefile')), ['build']);
+});
+
+test('a Makefile define…endef body is text, not rules', () => {
+  const { parseMakefile } = harness();
+  const text = 'define HELP\nUsage: make <target>\nTargets: build test\nendef\n\nbuild:\n\techo\n';
+  assert.deepEqual(names(parseMakefile(text, 'Makefile')), ['build']);
+});
+
+test('a grouped target marker is not a target of its own', () => {
+  const { parseMakefile } = harness();
+  assert.deepEqual(names(parseMakefile('a b &: c\n\ttouch a b\n', 'Makefile')), ['a', 'b']);
+});
+
+test('a justfile recipe is private inside an attribute list too', () => {
+  const { parseJustfile } = harness();
+  const text = '[private, no-cd]\nsetup-ci:\n  echo\n\n[no-cd, private]\nother:\n  echo\n\nbuild:\n  echo\n';
+  assert.deepEqual(names(parseJustfile(text, 'justfile')), ['build']);
+});
+
+test('a deno task made only of dependencies is still a row', () => {
+  const { parseDenoJson } = harness();
+  const text = JSON.stringify({
+    tasks: {
+      build: { dependencies: ['build:client', 'build:server'] },
+      'build:client': 'deno run a.ts',
+      'build:server': { command: 'deno run b.ts', description: 'Server' },
+    },
+  });
+  const parsed = plain(parseDenoJson(text));
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['build', 'build:client', 'build:server']);
+  assert.equal(parsed.tasks[0].command, 'build:client, build:server');
+});
+
+test('a scripts table that is an array names no rows', () => {
+  const { parsePackageJson, parseDenoJson } = harness();
+  assert.equal(parsePackageJson('{"scripts": ["echo hi", "npm test"]}'), undefined);
+  assert.equal(parseDenoJson('{"tasks": ["echo hi"]}'), undefined);
+});
+
+test('yarn scripts are run through `yarn run`, never as a bare subcommand', () => {
+  const { RUNNERS } = harness();
+  assert.deepEqual(plain(RUNNERS.yarn), ['yarn', 'run']);
+});
+
+test('a byte-order mark does not hide a manifest', async () => {
+  const { readText } = harness({ found: { '/repo/package.json': '\uFEFF{"scripts": {"a": "b"}}' } });
+  const text = await readText({ path: '/repo/package.json' });
+  assert.equal(text, '{"scripts": {"a": "b"}}');
+});
+
+test('a file over the size limit is skipped without being read', async () => {
+  const { readText } = harness({ found: { '/repo/package.json': 'x'.repeat(1_000_001) } });
+  assert.equal(await readText({ path: '/repo/package.json' }), undefined);
+});
+
+test('a Go module root is a program when any root file is `package main`', async () => {
+  const gomod = 'module example.com/app\n';
+  const settings = { goCommands: ['run', 'build'] };
+  const withServer = harness({
+    settings,
+    present: ['/repo/server.go'],
+    found: { '/repo/server.go': '//go:build linux\n\n// Server.\npackage main\n\nfunc main() {}\n' },
+    directory: { '/repo': [['server.go', 1], ['go.mod', 1]] },
+  });
+  assert.deepEqual(names(await withServer.parseGoMod(gomod, { path: '/repo' })), ['run', 'build']);
+
+  const library = harness({
+    settings,
+    found: {
+      '/repo/lib.go': 'package lib\n',
+      '/repo/gen.go': '//go:build ignore\n\npackage main\n\nfunc main() {}\n',
+      '/repo/doc.go': '/*\npackage main\n*/\npackage lib\n',
+    },
+    directory: { '/repo': [['lib.go', 1], ['gen.go', 1], ['doc.go', 1], ['lib_test.go', 1]] },
+  });
+  assert.deepEqual(names(await library.parseGoMod(gomod, { path: '/repo' })), ['build']);
 });

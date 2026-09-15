@@ -243,7 +243,7 @@ export const DEFAULT_EXCLUDE =
 /** The words each Node runner puts in front of a script's name. */
 const RUNNERS: Record<PackageManager, string[]> = {
   npm: ['npm', 'run'],
-  yarn: ['yarn'],
+  yarn: ['yarn', 'run'],
   pnpm: ['pnpm', 'run'],
   bun: ['bun', 'run'],
   deno: ['deno', 'task'],
@@ -259,8 +259,13 @@ const PACKAGE_MANAGERS = Object.keys(RUNNERS) as PackageManager[];
  * here come from settings — `cargoCommands`, `goCommands` — and a plain
  * `table[key]` would hand back a function for `constructor` or `toString`.
  */
-function known(table: Record<string, string[]>, key: string): string[] | undefined {
+function known<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
+/** A setting value split into argv words, so `build --release` is two arguments and not one. */
+function words(command: string): string[] {
+  return command.trim().split(/\s+/).filter(Boolean);
 }
 
 /**
@@ -327,7 +332,8 @@ export const WATCH_GLOB = `**/{${[
  * Some rows are not written down anywhere: cargo's `run` exists because the
  * crate has a `src/main.rs`, one `run: <name>` per file or directory under
  * `src/bin`, one `example: <name>` per entry under `examples`, and go's `run`
- * because the module root has a `main.go`. None of that is in a manifest, so a
+ * because the module root holds a `package main` — in `main.go` or any other
+ * root `.go` file. None of that is in a manifest, so a
  * manifest watcher never hears about it, and the list stayed a Refresh behind
  * the crate — a library that has just gained a `main.rs` has a `run` to offer.
  *
@@ -340,7 +346,7 @@ export const WATCH_GLOB = `**/{${[
  * compiler's business; only whether they are there is ours.
  */
 export const SOURCE_GLOB =
-  '**/{src/main.rs,src/bin/*,src/bin/*/main.rs,examples/*,examples/*/main.rs,main.go}';
+  '**/{src/main.rs,src/bin/*,src/bin/*/main.rs,examples/*,examples/*/main.rs,*.go}';
 
 /**
  * The extensions a shell row can be written with: the Bourne family, and the
@@ -371,8 +377,8 @@ export const SHELL_EXTENSIONS: ReadonlyArray<string> = [
  * stale the moment that setting changed. Over-hearing costs a debounced rescan
  * that finds nothing; under-hearing costs a row that never appears.
  *
- * Creation and deletion only, as `SOURCE_GLOB` is. The file being there is the
- * row; the comment line inside it is dimmed text a Refresh picks up.
+ * Changes count here, unlike `SOURCE_GLOB`: the file being there is the row, and
+ * the comment line inside it is the row's dimmed text, which an edit has to reach.
  */
 export const SHELL_GLOB = `**/*.{${SHELL_EXTENSIONS.join(',')}}`;
 
@@ -533,7 +539,11 @@ export async function collectScripts(): Promise<ScriptEntry[]> {
 
 async function runScan(): Promise<ScriptEntry[]> {
   const started = generation;
-  const exclude = setting<string>('exclude') || DEFAULT_EXCLUDE;
+  // A non-string (an array, the natural slip since every neighbour is one)
+  // would take the whole scan down inside `findFiles` with nothing naming the
+  // setting; fall back to the default rather than fail.
+  const configuredExclude = setting<unknown>('exclude');
+  const exclude = typeof configuredExclude === 'string' && configuredExclude ? configuredExclude : DEFAULT_EXCLUDE;
   const enabled = enabledEcosystems();
   const glob = manifestGlob(enabled);
   const manifests = glob ? await vscode.workspace.findFiles(glob, exclude, MAX_MANIFESTS) : [];
@@ -648,7 +658,8 @@ function settingList(key: string, fallback: ReadonlyArray<string>): string[] {
     : [...fallback];
 }
 
-function enabledEcosystems(): Set<Ecosystem> {
+/** Exported for the shell watcher, which has to answer for `sources` with the scan's own rule. */
+export function enabledEcosystems(): Set<Ecosystem> {
   const configured = settingList('sources', ALL_ECOSYSTEMS);
   return new Set(configured.filter((item): item is Ecosystem => ALL_ECOSYSTEMS.includes(item as Ecosystem)));
 }
@@ -721,7 +732,7 @@ async function parseManifest(
 function parsePackageJson(text: string): ParsedManifest | undefined {
   const json = parseJsonc(text) as Record<string, unknown> | undefined;
   const scripts = json?.scripts;
-  if (!scripts || typeof scripts !== 'object') {
+  if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) {
     return undefined;
   }
   const tasks: RawTask[] = [];
@@ -748,7 +759,7 @@ function parsePackageJson(text: string): ParsedManifest | undefined {
 function parseDenoJson(text: string): ParsedManifest | undefined {
   const json = parseJsonc(text) as Record<string, unknown> | undefined;
   const tasks = json?.tasks;
-  if (!tasks || typeof tasks !== 'object') {
+  if (!tasks || typeof tasks !== 'object' || Array.isArray(tasks)) {
     return undefined;
   }
   const out: RawTask[] = [];
@@ -756,6 +767,15 @@ function parseDenoJson(text: string): ParsedManifest | undefined {
     const command = commandOf(value);
     if (command !== undefined) {
       out.push({ name, command });
+      continue;
+    }
+    // Deno ≥ 2.1 lets a task be nothing but `dependencies` (or a `description`):
+    // `deno task <name>` is still valid, so the row stays.
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const meta = value as { description?: unknown; dependencies?: unknown };
+      const description = typeof meta.description === 'string' ? meta.description : undefined;
+      const deps = Array.isArray(meta.dependencies) ? meta.dependencies.filter((d): d is string => typeof d === 'string') : [];
+      out.push({ name, command: description ?? (deps.length > 0 ? deps.join(', ') : `deno task ${name}`) });
     }
   }
   return { tasks: out, packageName: typeof json?.name === 'string' ? json.name : undefined };
@@ -794,7 +814,7 @@ const COMPOSER_EVENTS = new Set([
 function parseComposerJson(text: string): ParsedManifest | undefined {
   const json = parseJsonc(text) as Record<string, unknown> | undefined;
   const scripts = json?.scripts;
-  if (!scripts || typeof scripts !== 'object') {
+  if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) {
     return undefined;
   }
   const descriptions =
@@ -884,10 +904,15 @@ async function parseCargo(text: string, cwd: vscode.Uri): Promise<ParsedManifest
     if (command === 'run') {
       continue;
     }
-    push(command, known(CARGO_COMMANDS, command) ?? ['cargo', command]);
+    // A command of the user's own may carry flags — `build --release` — so it
+    // is split into words rather than quoted as one.
+    push(command, known(CARGO_COMMANDS, command) ?? ['cargo', ...words(command)]);
   }
 
-  return { packageName, tasks };
+  // No rows at all is a setting's doing (`cargoCommands: []`, or `["run"]` on a
+  // library), not the manifest's — reporting it as an empty manifest would let
+  // the prune throw the crate's stars and colours away.
+  return tasks.length > 0 ? { packageName, tasks } : undefined;
 }
 
 /**
@@ -1073,7 +1098,9 @@ async function parsePyproject(text: string, cwd: vscode.Uri): Promise<ParsedMani
     (typeof project?.name === 'string' ? project.name : undefined) ??
     (typeof poetry?.name === 'string' ? poetry.name : undefined);
 
-  return { tasks, packageName };
+  // As with Cargo: `pythonRunner: "none"` leaving no rows is not a manifest
+  // that declares nothing, and must not read as one to the prune.
+  return tasks.length > 0 ? { tasks, packageName } : undefined;
 }
 
 async function pythonRunner(
@@ -1223,7 +1250,9 @@ function parseNoxfile(text: string): ParsedManifest | undefined {
  * Exported so `locate.ts` finds the line a target is on with the same rule that
  * put it in the list.
  */
-export const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?!=)\s*(.*)$/;
+// `(?![:=])` after the colon(s) keeps `FOO ::= x` and `FOO :::= x` — immediate
+// assignments — from reading as a rule for `FOO`.
+export const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?![:=])\s*(.*)$/;
 /** `build: deps ## Build everything` — the convention every self-documenting Makefile uses. */
 const MAKE_DOC = /##\s*(.*)$/;
 
@@ -1235,6 +1264,9 @@ function parseMakefile(text: string, file: string): ParsedManifest | undefined {
   const tasks: RawTask[] = [];
   const seen = new Set<string>();
   let doc = '';
+  // Inside `define … endef` a line is text, not a rule — the self-documenting
+  // `define HELP` / `Usage: make <target>` idiom would otherwise list `Usage`.
+  let defining = false;
 
   for (const line of text.split(/\r?\n/)) {
     // A tab starts a recipe body, which can hold anything at all.
@@ -1243,6 +1275,15 @@ function parseMakefile(text: string, file: string): ParsedManifest | undefined {
     }
     const trimmed = line.trim();
     if (!trimmed) {
+      doc = '';
+      continue;
+    }
+    if (defining) {
+      defining = !/^endef\b/.test(trimmed);
+      continue;
+    }
+    if (/^(?:override\s+)?define\b/.test(trimmed)) {
+      defining = true;
       doc = '';
       continue;
     }
@@ -1265,7 +1306,8 @@ function parseMakefile(text: string, file: string): ParsedManifest | undefined {
     for (const name of match[1].trim().split(/\s+/)) {
       // Skipped: pattern rules, anything built from a variable we cannot expand,
       // and the special targets — `.PHONY` and friends are declarations, not work.
-      if (!name || name.startsWith('.') || name.startsWith('-') || /[%$()]/.test(name) || seen.has(name)) {
+      // `&` is the grouped-target marker of make 4.3 (`a b &: c`), not a name.
+      if (!name || name.startsWith('.') || name.startsWith('-') || /[%$()&]/.test(name) || seen.has(name)) {
         continue;
       }
       seen.add(name);
@@ -1316,7 +1358,8 @@ function parseJustfile(text: string, file: string): ParsedManifest | undefined {
     }
     if (line.startsWith('[')) {
       // Attributes sit above the recipe they apply to.
-      priv = priv || /\[\s*private\s*\]/.test(line);
+      // `[private]` on its own, or one of several: `[private, no-cd]`.
+      priv = priv || /\[(?:[^\]]*,)?\s*private\s*(?:,[^\]]*)?\]/.test(line);
       const documented = /\[\s*doc\s*\(\s*['"]([^'"]*)['"]\s*\)\s*\]/.exec(line);
       if (documented) {
         doc = documented[1];
@@ -1370,7 +1413,8 @@ export function yamlBlockKeys(
   lines: ReadonlyArray<string>,
   block: string,
 ): Array<{ name: string; body: string[]; line: number }> {
-  const start = lines.findIndex((line) => new RegExp(`^${block}:\\s*(#.*)?$`).test(line));
+  const header = new RegExp(`^${block}:\\s*(#.*)?$`);
+  const start = lines.findIndex((line) => header.test(line));
   if (start < 0) {
     return [];
   }
@@ -1448,7 +1492,7 @@ const GO_COMMANDS: Record<string, string[]> = {
 
 async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest | undefined> {
   const module = /^module\s+(\S+)/m.exec(text);
-  const hasMain = await exists(vscode.Uri.joinPath(cwd, 'main.go'));
+  const hasMain = await goRootIsProgram(cwd);
 
   const tasks: RawTask[] = [];
   for (const command of settingList('goCommands', DEFAULT_GO_COMMANDS)) {
@@ -1456,12 +1500,50 @@ async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest
     if (command === 'run' && !hasMain) {
       continue;
     }
-    const argv = known(GO_COMMANDS, command) ?? ['go', command];
+    const argv = known(GO_COMMANDS, command) ?? ['go', ...words(command)];
     tasks.push({ name: command, command: argv.join(' '), argv });
   }
 
   return tasks.length > 0 ? { tasks, packageName: module?.[1] } : undefined;
 }
+
+/**
+ * Whether the module root is itself a program: `go run .` wants a `package main`
+ * there, and Go does not care what the file is called — `server.go` or `cli.go`
+ * are as good as `main.go`. `main.go` is checked first as the cheap common case;
+ * otherwise the root `.go` files (tests excluded) are read for the package clause.
+ */
+async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
+  if (await exists(vscode.Uri.joinPath(cwd, 'main.go'))) {
+    return true;
+  }
+  const entries = await listDirectory(cwd);
+  const sources = entries
+    .filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.go') && !name.endsWith('_test.go'))
+    .map(([name]) => name)
+    .slice(0, MAX_GO_ROOT_FILES);
+  for (const name of sources) {
+    const text = await readText(vscode.Uri.joinPath(cwd, name));
+    if (!text || GO_BUILD_IGNORE.test(text)) {
+      // `//go:build ignore` + `package main` is the `go generate` helper idiom;
+      // it does not make a library a program.
+      continue;
+    }
+    // The clause is the first statement, so only what precedes `import`/`func`
+    // is looked at, with block comments taken out of the way first.
+    const head = text.replace(/\/\*[\s\S]*?\*\//g, '').split(/^(?:import|func|var|const|type)\b/m)[0];
+    if (GO_PACKAGE_MAIN.test(head)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The package clause; `//go:build` lines and comments sit above it. */
+const GO_PACKAGE_MAIN = /^package\s+main\s*(?:\/\/.*)?$/m;
+const GO_BUILD_IGNORE = /^\/\/\s*(?:go:build|\+build)\s+ignore\b/m;
+/** A module root with more than this many Go files is a library by any sane layout. */
+const MAX_GO_ROOT_FILES = 40;
 
 // --- mise --------------------------------------------------------------------
 
@@ -1600,7 +1682,7 @@ async function parseCompose(
   };
 
   for (const command of commands) {
-    const args = known(DOCKER_COMPOSE_COMMANDS, command) ?? [command];
+    const args = known(DOCKER_COMPOSE_COMMANDS, command) ?? words(command);
     push(command, args);
     if (command === 'up' && services.length > 1) {
       for (const service of services) {
@@ -1810,6 +1892,8 @@ const SHELL_PRAGMA = /^(shellcheck\b|vim:|emacs:|-\*-|!)/;
  * everybody writes comments with it.
  */
 const SHELL_COMMENT = /^(#+|::+|rem\b)\s*/i;
+/** Only `#`: in a Bourne or PowerShell file `REM=…` is an assignment, not a comment. */
+const HASH_COMMENT = /^#+\s*/;
 
 /**
  * The dimmed text a shell row gets: the first comment line in the file that was
@@ -1821,10 +1905,13 @@ const SHELL_COMMENT = /^(#+|::+|rem\b)\s*/i;
  * code: `set -euo pipefail` and a `cd` to the repository root routinely sit
  * above the comment that says what the script is for.
  */
-export function shellDescription(text: string): string | undefined {
+export function shellDescription(text: string, extension?: string): string | undefined {
+  // The batch openers only for a batch file: `REM=$(git rev-parse HEAD)` in a
+  // `.sh` is a variable, and `::` never opens a comment there.
+  const comment = extension === undefined || extension === 'bat' || extension === 'cmd' ? SHELL_COMMENT : HASH_COMMENT;
   for (const line of text.split(/\r?\n/).slice(0, 40)) {
     const trimmed = line.trim();
-    const opener = SHELL_COMMENT.exec(trimmed);
+    const opener = comment.exec(trimmed);
     if (!opener) {
       continue;
     }
@@ -1894,7 +1981,9 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
     // Bourne family, PowerShell for a `.ps1`, and nothing at all for a `.bat`,
     // which is a program to Windows already. See `DEFAULT_SHELL_RUNNERS`.
     const extension = extensionOf(file);
-    const words = extension in runners ? runners[extension].trim().split(/\s+/).filter(Boolean) : runner;
+    // `known` rather than `in`: a file named `notes.toString` must not hand
+    // back a function off `Object.prototype`.
+    const words = known(runners, extension)?.trim().split(/\s+/).filter(Boolean) ?? runner;
     const argv = [...words, `./${inside}`];
     const text = await readText(file);
 
@@ -1904,7 +1993,7 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
       // `deploy.sh` to `['deploy', 'sh']` so the icon rules still read it.
       key: scriptKey(directory.toString(), path.posix.basename(file.path)),
       name: path.posix.basename(file.path),
-      command: (text !== undefined ? shellDescription(text) : undefined) ?? argv.join(' '),
+      command: (text !== undefined ? shellDescription(text, extension) : undefined) ?? argv.join(' '),
       argv,
       manifest: directory,
       file,
@@ -2005,11 +2094,21 @@ function commandOf(value: unknown): string | undefined {
 
 async function readText(uri: vscode.Uri): Promise<string | undefined> {
   try {
+    // Asked of the file system first, so a huge file is never pulled into the
+    // extension host only to be thrown away. The check after the read stays: the
+    // file can grow between the two calls.
+    const info = await vscode.workspace.fs.stat(uri);
+    if (info.size > MAX_MANIFEST_BYTES) {
+      return undefined;
+    }
     const bytes = await vscode.workspace.fs.readFile(uri);
     if (bytes.byteLength > MAX_MANIFEST_BYTES) {
       return undefined;
     }
-    return Buffer.from(bytes).toString('utf8');
+    const text = Buffer.from(bytes).toString('utf8');
+    // Windows editors like to lead with a byte-order mark, which JSON.parse and
+    // the TOML reader both reject, and which `\s` in a Makefile regex swallows.
+    return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   } catch {
     return undefined;
   }

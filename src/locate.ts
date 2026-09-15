@@ -100,7 +100,8 @@ function jsonKey(text: string, path: ReadonlyArray<string>): TaskLocation | unde
       }
       // A key at the right depth whose path matches to the last segment.
       if (stack.length === path.length && path.every((key, at) => (at === path.length - 1 ? key === value.text : stack[at + 1] === key))) {
-        return at(text, start, index - start);
+        // The name without its quotes, as every other locator selects it.
+        return at(text, start + 1, index - start - 2);
       }
       pending = value.text;
       index = after + 1;

@@ -1357,6 +1357,22 @@ test('a file Docker could not answer for keeps its last answer', async () => {
   assert.deepEqual([...(h.containers.get(MANIFEST) ?? [])], ['web']);
 });
 
+test('a fresher answer that lands during a probe is not painted over', async () => {
+  // A `down` that ends while Check Containers is asking writes through
+  // `refreshContainers`; the probe's older picture must not put the stack back up.
+  let release;
+  const h = harness({
+    scan: [C_UP],
+    probeReply: () => new Promise((resolve) => { release = () => resolve({ running: new Set(['web']) }); }),
+  });
+  const checking = h.checkContainers(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  h.containers.set(MANIFEST, new Set());
+  release();
+  await checking;
+  assert.deepEqual([...(h.containers.get(MANIFEST) ?? [])], [], 'the answer that came later stands');
+});
+
 test('a put-away project still hosts, in the order as well as in the tree', async () => {
   // The compose file belongs to `api`, not to the project above it, and putting
   // `api` away does not hand it over: it goes into the pile inside `api`. The

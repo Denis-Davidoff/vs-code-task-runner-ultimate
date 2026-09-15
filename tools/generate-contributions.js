@@ -606,7 +606,7 @@ manifest.contributes.keybindings = [
 manifest.contributes.taskDefinitions = [
   {
     type: 'taskRunnerUltimate',
-    required: ['script'],
+    required: ['script', 'manifest'],
     properties: {
       script: { type: 'string', description: 'Name of the task in its manifest.' },
       manifest: { type: 'string', description: 'URI of the manifest the task belongs to.' },

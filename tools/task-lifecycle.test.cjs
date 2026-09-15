@@ -119,6 +119,25 @@ test('stopping one of two runs of a task stops the one it was given', async () =
   assert.deepEqual(h.tasks.taskExecutions, [first]);
 });
 
+test('the other run of a task ending is not the end of this one', async () => {
+  // Two runs of one task up (`instanceLimit`, a watch started twice): the end
+  // event of the survivor's sibling must not resolve the stop, or a restart
+  // would raise a copy beside a run still holding its port.
+  const h = harness();
+  const first = h.execution();
+  const second = h.execution();
+  const endSecond = second.terminate;
+  second.terminate = () => first.terminate();
+  h.tasks.taskExecutions = [first, second];
+  let settled = false;
+  const stopping = h.stopExecution(second).then((result) => { settled = true; return result; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false, 'the first run ending does not end the second');
+  endSecond();
+  assert.equal(await stopping, true);
+  assert.deepEqual(h.tasks.taskExecutions, []);
+});
+
 test('a foreign row resolves to its own run, not another of the same task', () => {
   const h = harness();
   const first = h.execution();

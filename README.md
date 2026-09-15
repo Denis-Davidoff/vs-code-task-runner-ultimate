@@ -145,7 +145,7 @@ monorepo.
 
 | Ecosystem | File | Tasks read from | Runs as |
 | --- | --- | --- | --- |
-| **Node** | `package.json` | `scripts` | `npm run` / `yarn` / `pnpm run` / `bun run` — [detected](#runner-detection) |
+| **Node** | `package.json` | `scripts` | `npm run` / `yarn run` / `pnpm run` / `bun run` — [detected](#runner-detection) |
 | | `deno.json`, `deno.jsonc` | `tasks` | `deno task <name>` |
 | **Rust** | `Cargo.toml` | the crate itself — see [below](#rust) | `cargo run --bin …`, `cargo test`, … |
 | | `Makefile.toml` | `[tasks.*]` (cargo-make) | `cargo make <name>` |
@@ -1193,8 +1193,9 @@ waiting for an answer.
 Some rows are not written down in any manifest, and those files count too: a crate offers `run`
 because it has a `src/main.rs`, a `run: <name>` for every binary under `src/bin`, an
 `example: <name>` for every example under `examples`, and a Go module offers `run` because its root
-has a `main.go`. Creating or deleting one of those refreshes the list as a manifest would; editing
-one does not, because what is inside them is the compiler's business and not the list's.
+holds a `package main` — in `main.go` or any other root `.go` file. Creating or deleting one of those
+refreshes the list as a manifest would; editing one does not, because what is inside them is the
+compiler's business and not the list's.
 
 Detected runners are dropped along with it. That matters because `packageManager` and `engines` live
 in the very file being edited: switching a package from npm to pnpm has to change how its scripts
