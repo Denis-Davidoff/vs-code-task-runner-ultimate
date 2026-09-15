@@ -331,11 +331,10 @@ export const WATCH_GLOB = `**/{${[
  *
  * Some rows are not written down anywhere: cargo's `run` exists because the
  * crate has a `src/main.rs`, one `run: <name>` per file or directory under
- * `src/bin`, one `example: <name>` per entry under `examples`, and go's `run`
- * because the module root holds a `package main` — in `main.go` or any other
- * root `.go` file. None of that is in a manifest, so a
- * manifest watcher never hears about it, and the list stayed a Refresh behind
- * the crate — a library that has just gained a `main.rs` has a `run` to offer.
+ * `src/bin`, and one `example: <name>` per entry under `examples`. None of that
+ * is in a manifest, so a manifest watcher never hears about it, and the list
+ * stayed a Refresh behind the crate — a library that has just gained a
+ * `main.rs` has a `run` to offer.
  *
  * The patterns match exactly what the parsers read: the direct entries of those
  * two directories, plus the `main.rs` inside one, which is how an entry that is
@@ -343,10 +342,24 @@ export const WATCH_GLOB = `**/{${[
  * nothing about the list, and does not appear here.
  *
  * Watched for creation and deletion only. What is in these files is the
- * compiler's business; only whether they are there is ours.
+ * compiler's business; only whether they are there is ours. Go is the one
+ * exception and has a glob of its own — see `GO_GLOB`.
  */
 export const SOURCE_GLOB =
-  '**/{src/main.rs,src/bin/*,src/bin/*/main.rs,examples/*,examples/*/main.rs,*.go}';
+  '**/{src/main.rs,src/bin/*,src/bin/*/main.rs,examples/*,examples/*/main.rs}';
+
+/**
+ * Go source files, which are the one case where what is *inside* the file
+ * decides a row: a module root offers `run` because one of its own `.go` files
+ * says `package main`, whatever that file is called. Editing `package server`
+ * into `package main` creates and deletes nothing, so unlike `SOURCE_GLOB` this
+ * one is watched for changes as well.
+ *
+ * Deliberately wider than what the scan reads — only the files beside a `go.mod`
+ * matter, and no glob can say "beside a `go.mod`". The handler narrows it, so a
+ * save anywhere else in a Go repository costs one `stat` rather than a rescan.
+ */
+export const GO_GLOB = '**/*.go';
 
 /**
  * The extensions a shell row can be written with: the Bourne family, and the
@@ -1514,17 +1527,33 @@ async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest
  * otherwise the root `.go` files (tests excluded) are read for the package clause.
  */
 async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
-  if (await exists(vscode.Uri.joinPath(cwd, 'main.go'))) {
-    return true;
-  }
   const entries = await listDirectory(cwd);
   const sources = entries
     .filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.go') && !name.endsWith('_test.go'))
     .map(([name]) => name)
-    .slice(0, MAX_GO_ROOT_FILES);
+    // `main.go` first, and read like any other file rather than believed on its
+    // name: a library may hold a `main.go` that says `package library`, and
+    // `go run .` on that fails with "not a main package". Putting it first is
+    // only so the usual program costs one read whatever order the file system
+    // listed in.
+    .sort((a, b) => Number(b === 'main.go') - Number(a === 'main.go'));
+
+  // A budget in bytes rather than a count of files: what makes this expensive is
+  // how much there is to read, and a cap on files would hide the clause behind
+  // whatever the listing happened to put first. A root over the budget is read
+  // as far as the budget goes and then called a library, which is the answer
+  // that costs a missing row rather than a row that cannot run.
+  let budget = MAX_GO_ROOT_BYTES;
   for (const name of sources) {
+    if (budget <= 0) {
+      break;
+    }
     const text = await readText(vscode.Uri.joinPath(cwd, name));
-    if (!text || GO_BUILD_IGNORE.test(text)) {
+    if (text === undefined) {
+      continue;
+    }
+    budget -= text.length;
+    if (GO_BUILD_IGNORE.test(text)) {
       // `//go:build ignore` + `package main` is the `go generate` helper idiom;
       // it does not make a library a program.
       continue;
@@ -1542,8 +1571,8 @@ async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
 /** The package clause; `//go:build` lines and comments sit above it. */
 const GO_PACKAGE_MAIN = /^package\s+main\s*(?:\/\/.*)?$/m;
 const GO_BUILD_IGNORE = /^\/\/\s*(?:go:build|\+build)\s+ignore\b/m;
-/** A module root with more than this many Go files is a library by any sane layout. */
-const MAX_GO_ROOT_FILES = 40;
+/** How much of a module root is read looking for its package clause. */
+const MAX_GO_ROOT_BYTES = 256_000;
 
 // --- mise --------------------------------------------------------------------
 
@@ -1584,6 +1613,9 @@ const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['up', 'down', 'build', 
  * was never worth a spinner. `up` is deliberately not given `-d` for the
  * opposite reason — see `parseCompose`.
  */
+/** How `up` is asked to detach. Never passed on — see the loop in `parseCompose`. */
+const COMPOSE_DETACH = new Set(['-d', '--detach']);
+
 const DOCKER_COMPOSE_COMMANDS: Record<string, string[]> = {
   up: ['up'],
   down: ['down'],
@@ -1681,10 +1713,30 @@ async function parseCompose(
     tasks.push({ name, command: argv.join(' '), argv });
   };
 
-  for (const command of commands) {
-    const args = known(DOCKER_COMPOSE_COMMANDS, command) ?? words(command);
-    push(command, args);
-    if (command === 'up' && services.length > 1) {
+  const seen = new Set<string>();
+  for (const entry of commands) {
+    const listed = known(DOCKER_COMPOSE_COMMANDS, entry);
+    // A command of the user's own is split into words, minus any request to
+    // detach. A detached row exits the moment it starts, leaving the containers
+    // up, the square with nothing to stop and the mark on the row telling the
+    // truth only by accident — which is the one thing this setting promises
+    // never happens, and splitting entries into words is what made `up -d`
+    // reach the terminal at all.
+    const args = listed ?? words(entry).filter((word) => !COMPOSE_DETACH.has(word));
+    if (args.length === 0) {
+      continue;
+    }
+    // Named by what it runs rather than by what was written, so a dropped `-d`
+    // does not leave a row whose label promises what the terminal never got.
+    // That also lands `up -d` back on `up`, where the per-service rows, the
+    // container mark and the square all know what to do with it.
+    const name = listed ? entry : args.join(' ');
+    if (seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    push(name, args);
+    if (name === 'up' && services.length > 1) {
       for (const service of services) {
         push(`up: ${service}`, [...args, service]);
       }

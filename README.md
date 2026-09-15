@@ -259,8 +259,10 @@ running.
 
 Two details are deliberate. **Nothing is ever run detached**: a `-d` row exits the moment it starts,
 which would leave the row idle with the containers still up and the ■ button with nothing to stop.
-And `logs` is always followed (`logs -f`) for the same reason. If you want a detached `up`, that is
-a terminal command, not a row that lies about its own state.
+A `-d` or `--detach` written into `dockerComposeCommands` is dropped rather than honoured, and the
+row is named by what it actually runs — so `up -d` is listed, and behaves, as plain `up`. And `logs`
+is always followed (`logs -f`) for the same reason. If you want a detached `up`, that is a terminal
+command, not a row that lies about its own state.
 
 **Which files count.** The four names compose picks for itself — `compose.yaml`, `compose.yml`,
 `docker-compose.yaml`, `docker-compose.yml` — are compose files by name alone. Beyond those, the

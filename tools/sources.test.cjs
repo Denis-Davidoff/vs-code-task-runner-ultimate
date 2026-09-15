@@ -70,7 +70,7 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, readText, RUNNERS };
+    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, readText, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
   `,
     context,
   );
@@ -620,4 +620,77 @@ test('a Go module root is a program when any root file is `package main`', async
     directory: { '/repo': [['lib.go', 1], ['gen.go', 1], ['doc.go', 1], ['lib_test.go', 1]] },
   });
   assert.deepEqual(names(await library.parseGoMod(gomod, { path: '/repo' })), ['build']);
+});
+
+// --- a Go module root is a program only when it says so ----------------------
+
+test('a `main.go` that is not `package main` offers no run row', async () => {
+  const gomod = 'module example.com/lib\n';
+  const settings = { goCommands: ['run', 'build'] };
+  // The name is not the clause: a library may keep its own `main.go`, and
+  // `go run .` on that fails with "not a main package".
+  const library = harness({
+    settings,
+    found: { '/repo/main.go': 'package library\n\nfunc Run() {}\n' },
+    directory: { '/repo': [['main.go', 1]] },
+  });
+  assert.deepEqual(names(await library.parseGoMod(gomod, { path: '/repo' })), ['build']);
+
+  const program = harness({
+    settings,
+    found: { '/repo/main.go': 'package main\n\nfunc main() {}\n' },
+    directory: { '/repo': [['main.go', 1]] },
+  });
+  assert.deepEqual(names(await program.parseGoMod(gomod, { path: '/repo' })), ['run', 'build']);
+});
+
+test('a crowded module root still finds its `main.go`', async () => {
+  // The clause is looked for under a budget of bytes, and `main.go` is read
+  // first, so where the listing puts it decides nothing.
+  const found = { '/repo/main.go': 'package main\n\nfunc main() {}\n' };
+  const listing = [];
+  for (let at = 0; at < 60; at++) {
+    found[`/repo/z${at}.go`] = `package main_is_not_this\n`;
+    listing.push([`z${at}.go`, 1]);
+  }
+  listing.push(['main.go', 1]);
+  const h = harness({ settings: { goCommands: ['run'] }, found, directory: { '/repo': listing } });
+  assert.deepEqual(names(await h.parseGoMod('module example.com/app\n', { path: '/repo' })), ['run']);
+});
+
+test('the Go files are watched apart from the Rust ones', () => {
+  const { SOURCE_GLOB, GO_GLOB } = harness();
+  // A `.go` file's contents decide a row, so it needs change events the Rust
+  // targets must not get — which is only possible from a glob of its own.
+  assert.equal(SOURCE_GLOB.includes('.go'), false);
+  assert.equal(GO_GLOB, '**/*.go');
+});
+
+// --- compose is never asked to detach ----------------------------------------
+
+test('a compose command of your own is never run detached', async () => {
+  const { parseCompose } = harness({ settings: { dockerComposeCommands: ['up -d'] } });
+  const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
+  // `-d` would exit the moment it started, leaving the containers up and the
+  // square with nothing to stop. The row lands back on plain `up`, services
+  // and all, so the mark and the ■ still know what it is.
+  assert.deepEqual(
+    parsed.tasks.map((task) => task.name),
+    ['up', 'up: web', 'up: db'],
+  );
+  assert.equal(parsed.tasks[0].argv.includes('-d'), false);
+  assert.equal(parsed.tasks[0].argv.at(-1), 'up');
+});
+
+test('a detached spelling does not become a second copy of `up`', async () => {
+  const { parseCompose } = harness({ settings: { dockerComposeCommands: ['up', 'up --detach'] } });
+  const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up', 'up: web', 'up: db']);
+});
+
+test('a compose command of your own keeps the flags that are not a detach', async () => {
+  const { parseCompose } = harness({ settings: { dockerComposeCommands: ['up --build'] } });
+  const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up --build']);
+  assert.deepEqual(parsed.tasks[0].argv.slice(-2), ['up', '--build']);
 });

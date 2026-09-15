@@ -10,6 +10,7 @@ import {
   Ecosystem,
   ecosystemOf,
   emptyManifests,
+  GO_GLOB,
   launchArgv,
   plainArgument,
   resetSources,
@@ -241,6 +242,20 @@ function repaint(): void {
   activePicker?.refresh();
 }
 
+/**
+ * Whether a `.go` file sits beside a `go.mod` — the only Go files whose contents
+ * decide anything, since `go run .` is about the module root and nothing below it.
+ */
+async function isModuleRoot(file: vscode.Uri): Promise<boolean> {
+  const directory = file.with({ path: path.posix.dirname(file.path) });
+  try {
+    await vscode.workspace.fs.stat(vscode.Uri.joinPath(directory, 'go.mod'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   storage = context.workspaceState;
   // The settings entry in the menu filters the settings editor by this id, and
@@ -386,6 +401,21 @@ export function activate(context: vscode.ExtensionContext): void {
   sourceWatcher.onDidCreate(() => invalidateSoon());
   sourceWatcher.onDidDelete(() => invalidateSoon());
 
+  // Go is the exception: its `run` row turns on the `package` clause inside the
+  // file, so editing `package server` into `package main` has to reach the tree
+  // — and that is a change, not a create. The glob cannot say "beside a
+  // `go.mod`", so the handler asks, and a save anywhere else in a Go repository
+  // costs one `stat` instead of a rescan of the workspace.
+  const goWatcher = vscode.workspace.createFileSystemWatcher(GO_GLOB);
+  const onGoChange = async (uri: vscode.Uri) => {
+    if (await isModuleRoot(uri)) {
+      invalidateSoon();
+    }
+  };
+  goWatcher.onDidCreate(onGoChange);
+  goWatcher.onDidChange(onGoChange);
+  goWatcher.onDidDelete(onGoChange);
+
   // The shell rows are files rather than entries in a file — see `SHELL_GLOB`
   // for why the pattern is fixed rather than built from `shellScripts`. Unlike
   // `SOURCE_GLOB`, a change matters here too: the row's dimmed description is
@@ -405,6 +435,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     watcher,
     sourceWatcher,
+    goWatcher,
     shellWatcher,
     // A rescan waiting on its timer must not outlive the extension.
     { dispose: cancelInvalidate },
