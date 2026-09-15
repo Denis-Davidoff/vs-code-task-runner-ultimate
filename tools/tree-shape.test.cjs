@@ -668,6 +668,43 @@ test('script folders with no project above them share one shell row', () => {
   assert.deepEqual([...roots[1].children].map((node) => node.origin), ['scripts', 'bin']);
 });
 
+test('under Shell a script folder is its path, with no name in front of it', () => {
+  // `scripts • apps/web` beside `scripts • apps/api` is a column of the one word
+  // they share, read by its tails. The path is the name on these rows — the same
+  // thing the dropdown has called them all along.
+  const WEBS = shell('/repo/apps/web/scripts', 'build.sh');
+  const CI = shell('/repo/tools/ci', 'lint.sh');
+  const h = harness({ settings: { grouping: 'ecosystem' }, scan: [WEBS, CI] });
+  const rows = h.buildTreeRoots([WEBS, CI]).find((node) => node.id === 'group:eco:shell').children;
+  assert.deepEqual([...rows].map((row) => h.treeItemFor(row).label), [
+    'repo/apps/web/scripts',
+    'repo/tools/ci',
+  ]);
+  // The folder's own name is still what a rename restores to, and still what the
+  // tooltip keeps: only the half the row shows has changed.
+  assert.deepEqual([...rows].map((row) => row.label), ['scripts', 'ci']);
+});
+
+test('a script folder in the root of its workspace is that folder, as it always was', () => {
+  // It has no path of its own to show, so the new rule and the old one agree.
+  const ROOTS = shell('/repo', 'release.sh');
+  const h = harness({ settings: { grouping: 'ecosystem' }, scan: [ROOTS, TOOLS] });
+  const rows = h.buildTreeRoots([ROOTS, TOOLS]).find((node) => node.id === 'group:eco:shell').children;
+  assert.equal(h.treeItemFor(rows[0]).label, 'repo');
+});
+
+test('flat mode names its shell row rather than pathing it', () => {
+  // The path belongs to the `ecosystem` rows only: in `flat` mode these folders
+  // are one `shell` row inside the project, and the dimmed column beside each
+  // script is the folder's name — not the path of a row sitting right there.
+  const h = harness({ settings: { grouping: 'flat' } });
+  const other = shell('/repo/bin', 'build.sh');
+  const bucket = h.buildTreeRoots([TOOLS, SCRIPTS, other])[1];
+  assert.equal(h.treeItemFor(bucket).label, 'shell [2]');
+  assert.deepEqual([...bucket.children].map((node) => node.origin), ['scripts', 'bin']);
+  assert.equal(h.treeItemFor(h.buildTreeRoots([ROOT, SCRIPTS])[0].children[1]).label, 'shell');
+});
+
 test('what a project takes in does not make its folder look crowded', () => {
   const { buildTreeRoots } = harness({ settings: { grouping: 'flat' } });
   // A compose file and a script folder sitting beside an unnamed package.json
@@ -789,7 +826,10 @@ test('a hidden compose file comes back when it is dropped on a package', async (
   assert.deepEqual([...h.hiddenRefs()], []);
 });
 
-test('a heading whose project is hidden is droppable, since it is drawn at the root', async () => {
+test('a heading whose project is hidden travels into the pile with it', async () => {
+  // Putting a package away is putting the folder away, so what is drawn inside
+  // it goes too — still inside it. Left behind, the compose file surfaced at the
+  // root under the favorites, out of the folder the eye had just put away.
   const PKG = script('/repo/package.json', 'build', 'npm');
   const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
   const API = script('/repo/api/package.json', 'dev', 'npm');
@@ -797,13 +837,38 @@ test('a heading whose project is hidden is droppable, since it is drawn at the r
   const h = harness({ scan, stored: { hidden: ['file:///repo/package.json'] } });
 
   const roots = h.buildTreeRoots(scan);
-  // With its project put away, the compose file is a root heading like any other.
-  assert.deepEqual(ids(roots).slice(0, 2), [
-    'group:file:///repo/docker-compose.yml',
-    'group:file:///repo/api/package.json',
-  ]);
-  await h.dropGroups([roots[1].ref], roots[0], undefined);
-  assert.ok(h.memento.data.groupOrder, 'the drop must be honoured, not refused');
+  assert.deepEqual(ids(roots), ['group:file:///repo/api/package.json', 'group:hidden']);
+  const pile = roots[1];
+  // One row put away, so one row to open onto — not the two refs behind it.
+  assert.equal(pile.label, 'hidden (1)');
+  assert.deepEqual(ids(pile.children), ['group:file:///repo/package.json']);
+  const carried = pile.children[0].children.at(-1);
+  assert.equal(carried.id, 'group:file:///repo/docker-compose.yml');
+
+  // Neither eye on it: it is already in the pile, and it cannot leave on its own.
+  assert.equal(h.treeItemFor(pile.children[0]).contextValue, 'group:package:hidden');
+  assert.equal(h.treeItemFor(carried).contextValue, 'group:package:down:carried');
+
+  // And the rule that it stays inside its project still holds, so the drop that
+  // brings a put-away heading back is not its to make — honouring it would write
+  // an order and leave the row exactly where it was.
+  await h.dropGroups([carried.ref], roots[0], undefined);
+  assert.equal(h.memento.data.groupOrder, undefined, 'the drop must be refused, not written');
+  assert.match(h.hints.at(-1), /Not a drop target/);
+});
+
+test('a drop on a heading inside the pile puts the dragged package away', async () => {
+  // The pile is a drop target all the way down: the hand that aims at a row in
+  // there means the same thing whether that row was put away or only came along.
+  const PKG = script('/repo/package.json', 'build', 'npm');
+  const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
+  const API = script('/repo/api/package.json', 'dev', 'npm');
+  const scan = [PKG, COMPOSE, API];
+  const h = harness({ scan, stored: { hidden: ['file:///repo/package.json'] } });
+
+  const carried = h.buildTreeRoots(scan)[1].children[0].children.at(-1);
+  await h.dropGroups(['file:///repo/api/package.json'], carried, undefined);
+  assert.deepEqual([...h.hiddenRefs()], ['file:///repo/package.json', 'file:///repo/api/package.json']);
 });
 
 // --- one order, both surfaces --------------------------------------------------
@@ -1233,9 +1298,11 @@ test('a file Docker could not answer for keeps its last answer', async () => {
   assert.deepEqual([...(h.containers.get(MANIFEST) ?? [])], ['web']);
 });
 
-test('a put-away project hosts nothing, in the order as well as in the tree', async () => {
-  // `orderedByHost` counting a hidden project as a host filed the compose file
-  // behind a block the tree was not drawing, and the dropdown listed it there.
+test('a put-away project still hosts, in the order as well as in the tree', async () => {
+  // The compose file belongs to `api`, not to the project above it, and putting
+  // `api` away does not hand it over: it goes into the pile inside `api`. The
+  // dropdown is the same list flattened, so it has to file it in the same place
+  // — the one thing `orderedByHost` exists to guarantee.
   const ROOTPKG = script('/repo/package.json', 'build', 'npm');
   const API = script('/repo/api/package.json', 'dev', 'npm');
   const APIC = composeRow('/repo/api/docker-compose.yml', 'up', ['up']);
@@ -1244,11 +1311,39 @@ test('a put-away project hosts nothing, in the order as well as in the tree', as
 
   const saved = await h.savedOrder();
   const roots = h.buildTreeRoots(saved);
-  // With its project put away, the compose file falls to the root project.
-  assert.deepEqual(ids(roots[0].children.slice(1)), ['group:file:///repo/api/docker-compose.yml']);
+  // The root project keeps its own rows and gains none of `api`'s.
+  assert.deepEqual(ids(roots), ['group:file:///repo/package.json', 'group:hidden']);
+  assert.deepEqual(ids(roots[0].children), ['script:build']);
+  const pile = roots[1];
+  assert.deepEqual(ids(pile.children), ['group:file:///repo/api/package.json']);
+  assert.deepEqual(ids(pile.children[0].children.slice(1)), [
+    'group:file:///repo/api/docker-compose.yml',
+  ]);
   // And the dropdown lists it in the same place.
   assert.deepEqual(
     [...h.buildItems(saved)].filter((item) => item.kind === -1).map((item) => item.label),
-    ['repo/package.json', 'api/docker-compose.yml', 'repo/api/package.json'],
+    ['repo/package.json', 'repo/api/package.json', 'api/docker-compose.yml'],
   );
+});
+
+test('a put-away project takes its script folder with it', async () => {
+  // The shape the report came in as: a package hidden, and its shell and compose
+  // rows left standing at the root under the favorites.
+  const PKG = script('/repo/api/package.json', 'dev', 'npm');
+  const SETUP = shell('/repo/api/scripts', 'setup.sh');
+  const APIC = composeRow('/repo/api/docker-compose.yml', 'up', ['up']);
+  const WEBPKG = script('/repo/web/package.json', 'dev', 'npm');
+  const scan = [PKG, SETUP, APIC, WEBPKG];
+  const h = harness({ scan, stored: { hidden: ['file:///repo/api/package.json'] } });
+
+  const roots = h.buildTreeRoots(await h.savedOrder());
+  assert.deepEqual(ids(roots), ['group:file:///repo/web/package.json', 'group:hidden']);
+  const api = roots[1].children[0];
+  assert.deepEqual(ids(api.children), [
+    'script:dev',
+    'group:shell:group:file:///repo/api/package.json',
+    'group:file:///repo/api/docker-compose.yml',
+  ]);
+  // The one folder behind the row still leaves the row that folder, pile or not.
+  assert.equal(api.children[1].ref, 'file:///repo/api/scripts');
 });

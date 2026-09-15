@@ -1573,27 +1573,23 @@ function orderedByHost(scripts: ScriptEntry[]): ScriptEntry[] {
     script: scripts[indices[0]],
   }));
 
-  // Put-away projects host nothing, the same exclusion `attachToHosts` gets for
-  // free by being handed the visible groups and `groupHosts` makes by hand. Left
-  // in, this pass filed a compose file behind a project the tree was not drawing
-  // — and the dropdown then listed it somewhere the tree never put it, which is
-  // the one thing this pass exists to prevent.
-  const buried = new Set(hiddenRefs());
-  const hosts = new Map<string, string>();
-  for (const block of blocks) {
-    const folder = manifestFolder(block.script);
-    if (HOST_KINDS.has(block.script.kind) && !buried.has(block.ref) && !hosts.has(folder)) {
-      hosts.set(folder, block.ref);
-    }
-  }
+  // A put-away project hosts exactly what it hosted before, since that is where
+  // the tree still draws these blocks — inside it, in the pile. Filing them
+  // anywhere else here would have the dropdown list them somewhere the tree
+  // never put them, which is the one thing this pass exists to prevent.
+  const hosts = attachedHosts(
+    blocks.map((block) => ({
+      ref: block.ref,
+      at: manifestFolder(block.script),
+      kind: block.script.kind,
+    })),
+  );
 
   const attached = new Map<string, Array<(typeof blocks)[number]>>();
   const roots: Array<(typeof blocks)[number]> = [];
   for (const block of blocks) {
-    const host = attachable(block.script.kind)
-      ? hostOf(manifestFolder(block.script), hosts)
-      : undefined;
-    if (host === undefined || host === block.ref) {
+    const host = hosts.get(block.ref);
+    if (host === undefined) {
       roots.push(block);
       continue;
     }
@@ -2253,6 +2249,14 @@ type TreeNode =
        * its id, not by this: see `HIDDEN_COLOR`.
        */
       hidden?: boolean;
+      /**
+       * Whether the row is in the pile only because the project it is drawn
+       * inside of is. A compose file and a script folder travel with their
+       * project — see `buildTreeRoots` — but neither was put away in its own
+       * right, so neither eye belongs on them: there is nothing to bring back on
+       * its own, and nothing left to put away.
+       */
+      carried?: boolean;
       children: TreeNode[];
     }
   | {
@@ -2544,7 +2548,12 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
       hint(
         first.hidden
           ? `$(move) Moving ${what} — drop on any package outside hidden to bring it back`
-          : `$(move) Moving ${what} — drop on another package${inside} to reorder, or on hidden to put it away`,
+          : first.carried
+            ? // In the pile because its project is, and the only place it goes is
+              // among the rows it shares that project with. Saying so beats the
+              // line below, which offers a way out and a pile it is already in.
+              `$(move) Moving ${what} — drop on another row in the same package to reorder`
+            : `$(move) Moving ${what} — drop on another package${inside} to reorder, or on hidden to put it away`,
       );
       return;
     }
@@ -2652,6 +2661,12 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
 
   const buried = new Set(hiddenRefs());
   const nested = hierarchical();
+  const hosts = nested ? new Map<string, string>() : await groupHosts();
+  // Whether a heading is in the pile — put there by hand, or drawn inside a
+  // project that was. Only the first has a ref in the store, and a drop aimed at
+  // either of them means the same thing to the hand that made it.
+  const pile = (ref: string | undefined): boolean =>
+    ref !== undefined && (buried.has(ref) || buried.has(hosts.get(ref) ?? ''));
   const ecosystems = nested ? await groupEcosystems() : new Map<string, Ecosystem>();
   const current = await groupScopes();
   const moved = dragged.filter((ref) => current.includes(ref));
@@ -2686,7 +2701,7 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
   }
 
   const anchor = anchorGroup(target);
-  if (anchor && buried.has(anchor)) {
+  if (pile(anchor)) {
     await setGroupsHidden(dragged, true);
     return;
   }
@@ -2713,9 +2728,12 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
   // spanning the pile and the list could then splice a compose file out of its
   // project — an order the next repaint undoes, which is the "nothing happened"
   // this refusal exists to avoid.
+  // By ref in the store and not by `pile`: a heading that only travelled with
+  // its project cannot come back on its own, so the exemption is not its to
+  // take. The rule below is what tells it so, instead of a drop that writes an
+  // order and changes nothing on screen.
   const settling = moved.filter((ref) => !buried.has(ref));
   if (!nested && anchor && settling.length > 0) {
-    const hosts = await groupHosts();
     const inside = (ref: string) => hosts.get(ref) ?? '';
     const from = new Set(settling.map(inside));
     if (from.size > 1 || !from.has(inside(anchor))) {
@@ -2774,44 +2792,25 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
 
 /**
  * The project each compose file and script folder is drawn inside of, by ref —
- * the same walk `attachToHosts` does, over the scan instead of over the rows.
+ * `attachedHosts` read off the scan instead of off the rows.
  *
  * Over the scan because a drop has to reason about headings the tree is not
- * drawing: one in the hidden pile keeps its slot in the order a drop rewrites.
+ * drawing: one in the hidden pile keeps its slot in the order a drop rewrites,
+ * and one inside a put-away project is still drawn inside it.
  */
 async function groupHosts(): Promise<Map<string, string>> {
-  // Put-away headings are left out of both halves, which is what keeps this
-  // answer and the tree's the same one: `attachToHosts` is handed the visible
-  // groups, so a hidden project hosts nothing and a hidden compose file is
-  // inside nothing. Reading them here instead had the drop logic insist a row
-  // was nested that the tree had drawn at the root.
-  const buried = new Set(hiddenRefs());
-  const scripts = await savedOrder();
-  const hosts = new Map<string, string>();
+  // One row settles a heading's kind and its folder, so the first of each is all
+  // the walk needs.
   const sample = new Map<string, ScriptEntry>();
-
-  for (const script of scripts) {
+  for (const script of await savedOrder()) {
     const ref = groupRef(script);
-    if (buried.has(ref)) {
-      continue;
-    }
     if (!sample.has(ref)) {
       sample.set(ref, script);
     }
-    const folder = manifestFolder(script);
-    if (HOST_KINDS.has(script.kind) && !hosts.has(folder)) {
-      hosts.set(folder, ref);
-    }
   }
-
-  const attached = new Map<string, string>();
-  for (const [ref, script] of sample) {
-    const host = attachable(script.kind) ? hostOf(manifestFolder(script), hosts) : undefined;
-    if (host) {
-      attached.set(ref, host);
-    }
-  }
-  return attached;
+  return attachedHosts(
+    [...sample].map(([ref, script]) => ({ ref, at: manifestFolder(script), kind: script.kind })),
+  );
 }
 
 /**
@@ -3127,10 +3126,24 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
         // beside `mylib • crates/mylib/package.json`. A heading that already
         // differs is left alone: `engine • svc` beside `Makefile • svc` is two
         // rows nobody can confuse, and a path on both would be noise.
-        folder: colliding.has(headingKey(script, shared))
-          ? packagePath(script)
-          : packageFolder(script),
-        place: packageHeading(script, shared),
+        //
+        // A script folder takes neither half. It is drawn as its own path,
+        // whole, with nothing in front of the bullet: `scripts • apps/web` put
+        // the one word all of these rows share where the eye looks first and the
+        // half that tells them apart behind it, so a **Shell** parent held a
+        // column of `scripts`, `scripts`, `scripts` to be read by their tails.
+        // The path is the name here — which is what the dropdown has called
+        // these rows all along.
+        //
+        // `ecosystem` mode is where that row is drawn; in `flat` mode a
+        // project's script folders are one `shell` row by the time the tree has
+        // them, and that row is named rather than pathed. See `attachToHosts`.
+        folder: script.file
+          ? undefined
+          : colliding.has(headingKey(script, shared))
+            ? packagePath(script)
+            : packageFolder(script),
+        place: script.file ? packagePath(script) : packageHeading(script, shared),
         icon: GROUP_ICON,
         scope: groupRef(script),
         ref: groupRef(script),
@@ -3154,9 +3167,27 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   // A heading the user put away leaves the list it was in and goes to the pile at
   // the bottom, taking its tasks with it. It keeps its slot in the saved order all
   // the while, so the eye that brings it back puts it back where it was.
+  //
+  // It takes what is drawn inside it along. In `flat` mode a compose file and a
+  // script folder are rows inside a project rather than beside one, and putting
+  // the project away is putting that folder away: the rows go with it, nested as
+  // they were. Left behind they surfaced at the root, level with the packages —
+  // out of the folder the eye had just put away, and in the one place this mode
+  // never draws them.
   const buried = new Set(hiddenRefs());
-  const shown = groups.filter((group) => !(group.ref && buried.has(group.ref)));
-  const away = groups.filter((group) => group.ref && buried.has(group.ref));
+  const hosts = hierarchical()
+    ? new Map<string, string>()
+    : attachedHosts(
+        groups.flatMap((group) =>
+          group.ref !== undefined && group.at !== undefined && group.source !== undefined
+            ? [{ ref: group.ref, at: group.at, kind: group.source }]
+            : [],
+        ),
+      );
+  const inPile = (group: (typeof groups)[number]): boolean =>
+    group.ref !== undefined && (buried.has(group.ref) || buried.has(hosts.get(group.ref) ?? ''));
+  const shown = groups.filter((group) => !inPile(group));
+  const away = groups.filter((group) => inPile(group));
 
   // The saved order, whole: what is running inside a group is no reason to move
   // the group, here or in the picker. Inside one nothing moves either, unless
@@ -3216,14 +3247,37 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   // put-away packages routinely spans ecosystems, so parenting it would mostly
   // produce parent rows holding one child each — and `shown` and `away` are
   // split above, so a parent's count never includes anything hidden.
+  //
+  // They are nested by the same walk the list above uses, though, so a project
+  // in the pile is still the folder it was on the way in: opening the pile shows
+  // what was put away, not its contents tipped out beside it. `ecosystem` mode
+  // nests nothing anywhere, so there the pile is the flat list it always was.
   if (away.length > 0) {
+    const pile = hierarchical() ? away : attachToHosts(away, HIDDEN_GROUP_ID);
     roots.push({
       kind: 'group',
       id: HIDDEN_GROUP_ID,
-      label: `hidden (${away.length})`,
+      // What the fold opens onto, and not how many refs the store holds: a row
+      // travelling with its project is behind that project rather than beside
+      // it, and counting it here promised more rows than the pile has.
+      label: `hidden (${pile.length})`,
       icon: 'eye-closed',
       hidden: true,
-      children: away.map((group) => ({ ...group, hidden: true })),
+      children: pile.map(function putAway(node: TreeNode): TreeNode {
+        // The eye that brings a heading back belongs on the ones the user put
+        // here, and on nothing else: a row that only travelled with its project
+        // comes back when the project does, and a button that cannot do that is
+        // worse than no button at all.
+        return node.kind !== 'group'
+          ? node
+          : {
+              ...node,
+              ...(node.ref !== undefined && buried.has(node.ref)
+                ? { hidden: true }
+                : { carried: true }),
+              children: node.children.map(putAway),
+            };
+      }),
     });
   }
 
@@ -3248,8 +3302,13 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
  * In `ecosystem` mode this does not run at all. There the question the tree
  * answers is "what kind of thing is this", and the answer for a compose file is
  * Docker, not the package it happens to serve.
+ *
+ * It runs twice: once over the headings on the list, once over the ones in the
+ * pile. `rootKey` is what keeps the two `shell` buckets apart — one row per
+ * place, since a tree cannot hold two rows under one id, and the bucket with no
+ * project above it is the only one both calls could name the same way.
  */
-function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] {
+function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>, rootKey = ''): TreeNode[] {
   const hosts = new Map<string, TreeNode & { kind: 'group' }>();
   for (const group of groups) {
     if (group.at !== undefined && group.source && HOST_KINDS.has(group.source) && !hosts.has(group.at)) {
@@ -3268,7 +3327,7 @@ function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] 
   for (const group of groups) {
     const host = attachable(group.source) ? hostOf(group.at, hosts) : undefined;
     if (group.source === 'shell') {
-      const key = host?.id ?? '';
+      const key = host?.id ?? rootKey;
       let folder = folders.get(key);
       if (!folder) {
         folder = { row: shellFolder(key), host, members: [] };
@@ -3307,7 +3366,10 @@ function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] 
       // and `scripts` both hold a `build.sh` often enough. A script in the
       // project's own folder has no path to name and says nothing.
       for (const member of members) {
-        const origin = host ? insideOf(member, host) : member.place;
+        // The folder's own name, which for a script folder is what `label`
+        // holds: `place` is the whole path on these rows, and a dimmed column
+        // repeating the path of a row that is right there says nothing.
+        const origin = host ? insideOf(member, host) : member.label;
         row.children.push(
           ...member.children.map((child) =>
             child.kind === 'script' && origin ? { ...child, origin } : child,
@@ -3376,6 +3438,38 @@ function hostOf<T>(at: string | undefined, hosts: ReadonlyMap<string, T>): T | u
     folder = parent === folder ? undefined : parent;
   }
   return undefined;
+}
+
+/**
+ * The project each compose file and script folder belongs to, by ref — the one
+ * walk `orderedByHost`, `buildTreeRoots` and `groupHosts` all read, so the saved
+ * order, the tree and the drop arithmetic cannot disagree about what is drawn
+ * inside what.
+ *
+ * Hiding has nothing to do with it. A project that is put away still hosts what
+ * sits under it, which is what takes its compose files and script folders into
+ * the pile along with it. Left out, they came back to the root the moment their
+ * project went away — level with the packages, which is the one place `flat`
+ * mode never draws them, and out of the folder the eye had just put away whole.
+ */
+function attachedHosts(
+  entries: ReadonlyArray<{ ref: string; at: string; kind: SourceKind }>,
+): Map<string, string> {
+  const hosts = new Map<string, string>();
+  for (const entry of entries) {
+    if (HOST_KINDS.has(entry.kind) && !hosts.has(entry.at)) {
+      hosts.set(entry.at, entry.ref);
+    }
+  }
+
+  const attached = new Map<string, string>();
+  for (const entry of entries) {
+    const host = attachable(entry.kind) ? hostOf(entry.at, hosts) : undefined;
+    if (host !== undefined && host !== entry.ref) {
+      attached.set(entry.ref, host);
+    }
+  }
+  return attached;
 }
 
 /**
@@ -3613,7 +3707,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // carries neither, and reads exactly as it did before.
     const stack = composeUpNode(node);
     const stacked = stack ? (containersUp(stack.script) ? ':up' : ':down') : '';
-    const state = node.hidden ? `group:package${stacked}:hidden` : `group:package${stacked}`;
+    // Three states and not two. `:carried` is a heading the pile holds only
+    // because the project it is drawn inside of is put away: it is in there, so
+    // Hide has nothing left to do, and it was never put there on its own, so
+    // Show has nothing to bring back — see `carried` on the node.
+    const put = node.carried ? ':carried' : node.hidden ? ':hidden' : '';
+    const state = `group:package${stacked}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }

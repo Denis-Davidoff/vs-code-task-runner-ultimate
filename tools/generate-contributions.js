@@ -354,9 +354,13 @@ const inTitle = 'config.taskRunnerUltimate.showInEditorTitle';
 // the foot of the File Explorer — and the two draw the same rows with the same
 // actions, so every `when` clause below matches either view rather than naming one.
 const inTree = 'view =~ /^taskRunnerUltimate\\.(tree|explorer)$/';
-// A package heading can be visible or hidden, and idle or running. Keep the
-// complete shapes here so regenerating the manifest preserves actions for all
-// four states without letting similarly prefixed context values slip through.
+// A package heading can be visible, hidden or carried — that last one a heading
+// the pile holds only because the project it is drawn inside of was put away —
+// and idle or running. Keep the complete shapes here so regenerating the
+// manifest preserves actions for all of those states without letting similarly
+// prefixed context values slip through. Neither eye is offered on a carried row:
+// it is already in the pile, and it was never put there in its own right, so it
+// matches `PACKAGE_ROW` below and neither `PACKAGE` nor `HIDDEN_PACKAGE`.
 // A compose heading carries one segment more than every other package row: `up`
 // or `down`, which is what puts ▶ and ■ on the file itself — see `treeItemFor`.
 // Every pattern that matches a package row therefore allows it, and the two
@@ -373,8 +377,9 @@ const COMPOSE = '/^group:package:(up|down)$/';
 const COMPOSE_UP = '/^group:package:up$/';
 // An ecosystem parent holds groups rather than rows, but it still has things
 // running under it, so it gets the stop-all and restart-all buttons too.
-const RUNNING_PACKAGE = `/^group:(package${STACK}(:hidden)?|eco):running$/`;
-const PACKAGE_ROW = `group:package${STACK}(:hidden)?(:running)?`;
+const PUT_AWAY = '(:(hidden|carried))?';
+const RUNNING_PACKAGE = `/^group:(package${STACK}${PUT_AWAY}|eco):running$/`;
+const PACKAGE_ROW = `group:package${STACK}${PUT_AWAY}(:running)?`;
 const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];

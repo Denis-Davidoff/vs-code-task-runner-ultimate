@@ -495,6 +495,13 @@ and opened exactly as it always could. One standing for several names nothing on
 ecosystem row — it folds, takes a colour and an icon and stops everything under it, and offers no
 rename or hide.
 
+**Hiding the project hides what it took in.** Putting `acme` away is putting that folder away, so its
+compose file and its `shell` row go into **hidden** with it, still nested inside it — opening the
+pile shows the package you put away, not its contents tipped out beside it. They carry no eye of
+their own while they are in there: neither was put away in its own right, and both come back the
+moment the project does. Hiding one of them on its own still works, and lands it in the pile as a row
+of its own. In `ecosystem` mode nothing is nested anywhere, so nothing travels.
+
 Whatever a heading leads with, the half after the bullet is the **folder** it lives in and never the
 file name again: `docker-compose.yml • apps/web`, not `docker-compose.yml • apps/web/docker-compose.yml`.
 Where that folder would only repeat the name, or where there is no path left to show, the bullet goes
@@ -531,14 +538,22 @@ Rust (1)
 Docker (1)
   docker-compose.yml
     ▶ up
-Shell (1)
-  scripts
+Shell (2)
+  apps/web/scripts
     ▶ deploy.sh
+  tools/ci
+    ▶ lint.sh
 ```
 
 Here a compose file is filed under **Docker** and a script folder under **Shell**, rather than under
 the package they serve: the question this mode answers is what kind of thing a row is, so the
 nesting above is switched off and the files themselves are what each ecosystem row opens into.
+
+A script folder is the one heading drawn as its **path alone**, with no name before the bullet. Every
+one of these rows is called `scripts` or `bin`, so leading with that put the word they all share
+where the eye looks first and the half that tells them apart behind it — `scripts • apps/web` beside
+`scripts • apps/api`, a column read by its tails. The path is the name here, which is what
+[the dropdown](#in-the-dropdown) has called these rows all along.
 
 An ecosystem row is a row like any other in the ways that matter: fold it and the fold survives a
 reload, paint it, give it an icon, and stop or restart everything running anywhere under it. It is
