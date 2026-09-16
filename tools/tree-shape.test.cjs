@@ -25,7 +25,7 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, probeReply = () => ({ running: new Set(['web']) }) } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }) } = {}) {
   const probes = [];
   const launched = [];
   const terminals = [];
@@ -48,6 +48,9 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
       },
       // What a refused drop says, and the only place it says it.
       setStatusBarMessage: (message) => (hints.push(message), { dispose() {} }),
+      // The window's own list, which `terminalFor` searches by name. Empty is a
+      // window with nothing open, which is all the rows here ever need it to be.
+      terminals: [],
       createTerminal: (options) => {
         const terminal = { ...options, shown: 0, sent: [] };
         terminals.push(terminal);
@@ -181,7 +184,10 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     keyForTask = () => undefined;
     repaint = () => {};
     confirmScript = async () => true;
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, SCAN_SETTINGS };
+    // The real one waits fifteen seconds on a task that will not die. The
+    // harness gives that answer straight away, either way round.
+    stopExecution = async () => ${stops};
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, SCAN_SETTINGS };
   `,
     Object.assign(context, { memento }),
   );
@@ -1206,6 +1212,112 @@ test('▶ on a compose item runs up, and ■ runs down', async () => {
   // with only the terminal's title saying what is being run.
   assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up', 'down']);
   assert.match(h.launched[1].name, /^down\b/);
+});
+
+test('a compose row carries no confirmation toggle, and no flag on it survives', async () => {
+  // The file is one leaf, so there is no row to hang the toggle on and no way
+  // back off once it is on. Rather than raise a dialog naming a menu entry that
+  // does not exist, a compose action simply never asks — and a flag an older
+  // version stored against one is dropped on the next scan.
+  const rows = composeFile();
+  const h = harness({
+    settings: { grouping: 'flat' },
+    scan: rows,
+    stored: {
+      confirmations: [
+        'file:///repo/docker-compose.yml::down',
+        'file:///repo/package.json::deploy',
+      ],
+      favorites: ['file:///repo/docker-compose.yml::up'],
+    },
+  });
+  const row = h.treeItemFor({ kind: 'script', script: rows[2] });
+  assert.equal(row.contextValue, 'script:idle:nofav:task');
+  assert.equal(row.tooltip.includes('Asks before it starts or stops.'), false);
+
+  // The stored flag is not merely ignored: it would otherwise sit in the ⋮
+  // menu's count of guarded rows for ever, with nothing able to clear it but
+  // Reset all confirmations. The star beside it stays — that one still works.
+  await h.pruneStaleRefs(rows);
+  assert.deepEqual(h.memento.data.confirmations, ['file:///repo/package.json::deploy']);
+  assert.deepEqual(h.memento.data.favorites, ['file:///repo/docker-compose.yml::up']);
+
+  // Neither half of the toggle matches a value that stops before the axis.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const matches = (command, value) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}`)
+      .some((entry) => new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]).test(value));
+  assert.equal(matches('enableConfirmation', row.contextValue), false);
+  assert.equal(matches('disableConfirmation', row.contextValue), false);
+  // A task row still has both halves and everything else the axis sits behind.
+  const npm = h.treeItemFor({ kind: 'script', script: script('/repo/package.json', 'deploy', 'npm') });
+  assert.equal(npm.contextValue, 'script:idle:nofav:task:confirm');
+  assert.equal(matches('disableConfirmation', npm.contextValue), true);
+  const sh = h.treeItemFor({ kind: 'script', script: shell('/repo/scripts', 'deploy.sh') });
+  assert.equal(matches('addToTerminal', sh.contextValue), true);
+});
+
+test('▶ will not raise a second up over a run of ours', async () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = composeFile();
+  const heading = h.buildTreeRoots(rows)[0];
+  h.running.set(rows[0].key, { task: { name: 'up' } });
+
+  // The button is not drawn on a running row, but a context value is what the
+  // tree was last told. A second `up` would take the key in `running` from the
+  // first, leaving that terminal with nothing in here able to stop it.
+  await h.runGroup(heading);
+  assert.deepEqual([...h.launched], []);
+
+  // And the row only stands for the bare `up`: one service of it running is
+  // not the stack being up, so ▶ still brings the rest of it up.
+  h.running.clear();
+  h.running.set(rows[1].key, { task: { name: 'up: web' } });
+  await h.runGroup(heading);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up']);
+});
+
+test('■ leaves the stack alone when something of ours would not stop', async () => {
+  const h = harness({ settings: { grouping: 'flat' }, stops: false });
+  const rows = composeFile();
+  const heading = h.buildTreeRoots(rows)[0];
+  h.running.set(rows[0].key, { task: { name: 'up' } });
+
+  // `stopExecution` has already said on screen that the task is still running.
+  // A `down` on top of that is the stack being removed while an `up` is still
+  // there to raise it again.
+  await h.stopStack(heading);
+  assert.deepEqual([...h.launched], []);
+});
+
+test('every action a compose row has stays on it once the row is put away', () => {
+  // The row is a leaf, so there is no opening it to reach what is inside. A
+  // compose file in the pile with a run under it used to match no stop clause
+  // at all, which left the stack with no way down short of a terminal.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const clauses = (command) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}`)
+      .map((entry) => entry.when.match(/viewItem =~ \/(.+)\/$/)[1]);
+  const matches = (command, value) =>
+    clauses(command).some((pattern) => new RegExp(pattern).test(value));
+
+  for (const state of ['compose:up', 'compose:down', 'compose:up:hidden:running', 'compose:down:carried']) {
+    assert.equal(matches('stopStack', state), true, `stopStack on ${state}`);
+    assert.equal(matches('composeActions', state), true, `composeActions on ${state}`);
+    assert.equal(matches('openManifest', state), true, `openManifest on ${state}`);
+  }
+  // ▶ is the one exception, and both halves of it are deliberate: a row in the
+  // pile is out of the way until it is taken out, and a row with a run of ours
+  // on it already has its `up`.
+  assert.equal(matches('runGroup', 'compose:down'), true);
+  assert.equal(matches('runGroup', 'compose:up:running'), false);
+  assert.equal(matches('runGroup', 'compose:down:hidden'), false);
+  // And a package heading keeps every clause it had; `compose` is not a prefix
+  // of it, nor it of `compose`.
+  assert.equal(matches('stopStack', 'group:package:up:running'), false);
+  assert.equal(matches('openManifest', 'group:package:up:hidden:running'), true);
 });
 
 test('the compose context picker offers service up and the extra commands', async () => {
