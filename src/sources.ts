@@ -1827,13 +1827,16 @@ async function parseCompose(
   file: string,
   cwd: vscode.Uri,
 ): Promise<ParsedManifest | undefined> {
-  const commands = settingList('dockerComposeCommands', DEFAULT_COMPOSE_COMMANDS);
-  // Not `{ tasks: [] }`: an empty parse counts as "the file declares nothing",
-  // which lands in `emptyManifests` and lets `pruneStaleRefs` delete every star
-  // and colour on it. Emptying a setting must not cost the user their marks.
-  if (commands.length === 0) {
-    return undefined;
-  }
+  // Up and down are the compose item's fixed buttons. The setting supplies the
+  // remaining context-menu commands and may repeat either without duplicating
+  // it in the internal action list.
+  const commands = [
+    'up',
+    'down',
+    ...settingList('dockerComposeCommands', DEFAULT_COMPOSE_COMMANDS).filter(
+      (command) => command !== 'up' && command !== 'down',
+    ),
+  ];
 
   const lines = text.split(/\r?\n/);
   const services = yamlBlockKeys(lines, 'services')
@@ -1888,7 +1891,7 @@ async function parseCompose(
     }
     seen.add(name);
     push(name, args);
-    if (name === 'up' && services.length > 1) {
+    if (name === 'up') {
       for (const service of services) {
         push(`up: ${service}`, [...args, service]);
       }

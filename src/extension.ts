@@ -328,6 +328,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.stopGroup', (node?: TreeNode) => stopGroup(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.runGroup', (node?: TreeNode) => runGroup(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.stopStack', (node?: TreeNode) => stopStack(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.composeActions', (node?: TreeNode) => composeActions(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
     // One command per colour: a submenu entry is a command, and there is no way
     // to hand it an argument from contributes.menus. The list is the palette's,
@@ -3062,7 +3063,7 @@ function createTree(): vscode.Disposable[] {
       if (!node) {
         return buildTreeRoots(await listScripts());
       }
-      return node.kind === 'group' ? node.children : [];
+      return node.kind === 'group' && node.source !== 'docker-compose' ? node.children : [];
     },
   };
 
@@ -3679,7 +3680,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // touched shows everything it found, and one you have shows it as you left it.
     const item = new vscode.TreeItem(
       heading,
-      isCollapsed(node) ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded,
+      node.source === 'docker-compose'
+        ? vscode.TreeItemCollapsibleState.None
+        : isCollapsed(node)
+          ? vscode.TreeItemCollapsibleState.Collapsed
+          : vscode.TreeItemCollapsibleState.Expanded,
     );
     // The tooltip is where the manifest's own name survives a rename. A script
     // row keeps it in the dimmed description instead, which a heading cannot
@@ -3784,7 +3789,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // Hide has nothing left to do, and it was never put there on its own, so
     // Show has nothing to bring back — see `carried` on the node.
     const put = node.carried ? ':carried' : node.hidden ? ':hidden' : '';
-    const state = `group:package${stacked}${put}`;
+    const state = `${node.source === 'docker-compose' ? 'compose' : 'group:package'}${stacked}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
@@ -4542,17 +4547,53 @@ async function runGroup(node: TreeNode | undefined): Promise<void> {
   await runNode(composeUpNode(node), false);
 }
 
-/**
- * ■ on a compose heading whose containers Docker reported up while nothing of
- * ours is running them — somebody brought the stack up outside this window, or
- * in a session before this one. The square means stop either way, so it runs the
- * compose command that stops it; when a task of ours *is* running, the square on
- * the row is `stopGroup` instead and this one is not drawn.
- */
+/** ■ on a compose item: stop an attached action, then run its fixed `down`. */
 async function stopStack(node: TreeNode | undefined): Promise<void> {
-  const up = composeUpNode(node);
-  if (up) {
-    await stopContainers(up.script);
+  if (node?.kind !== 'group' || node.source !== 'docker-compose') {
+    return;
+  }
+  const down = node.children.find(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name === 'down',
+  );
+  if (down) {
+    // `up` is an attached task. End it first so its terminal does not linger
+    // after `docker compose down` has removed the stack.
+    await Promise.all(
+      runningScriptsOf(node).map((script) => {
+        const execution = running.get(script.key);
+        return execution ? stopExecution(execution) : Promise.resolve(true);
+      }),
+    );
+    await runNode(down, false);
+  }
+}
+
+/** Extra compose commands, including one `up` action for every declared service. */
+async function composeActions(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'group' || node.source !== 'docker-compose') {
+    return;
+  }
+  const actions = node.children.filter(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name !== 'up' && child.script.name !== 'down',
+  );
+  if (actions.length === 0) {
+    void vscode.window.showInformationMessage('No additional Compose actions are configured.');
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(
+    actions.map((action) => ({
+      label: action.script.name.startsWith('up: ')
+        ? `$(play) Up ${action.script.name.slice(4)}`
+        : action.script.name,
+      description: action.script.command,
+      action,
+    })),
+    { placeHolder: `Compose command for ${node.label}` },
+  );
+  if (picked) {
+    await runNode(picked.action, true);
   }
 }
 
