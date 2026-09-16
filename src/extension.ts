@@ -631,6 +631,11 @@ function runningCount(): number {
  * `onStateChanged` runs straight after and puts the real count back when there
  * is one, so the two assignments are one tick of the extension host and never a
  * badge anyone can see.
+ *
+ * The File Explorer view is cleared here too, and only here: earlier versions
+ * put the count on it, and a badge left over from one of them would otherwise
+ * sit on the File Explorer icon forever, since nothing writes to that view any
+ * more.
  */
 function clearStaleBadges(): void {
   for (const view of [treeView, explorerTreeView]) {
@@ -647,13 +652,15 @@ function onStateChanged(): void {
   updateStatusBar(count);
   activePicker?.refresh();
   treeChanged.fire();
-  // Both views carry the badge: the count belongs to the tasks, not to the
-  // sidebar the list happens to be read in.
-  const badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
-  for (const view of [treeView, explorerTreeView]) {
-    if (view) {
-      view.badge = badge;
-    }
+  // Only the extension's own view in the activity bar carries the badge. A
+  // badge on a view is drawn on the icon of the container that view sits in,
+  // and the File Explorer section sits in the File Explorer's container — so
+  // badging it puts the task count on the File Explorer icon, next to a number
+  // of unsaved files it has nothing to do with. The activity bar icon is the
+  // extension's own, and the status bar entry carries the count for anyone who
+  // reads the list from the File Explorer.
+  if (treeView) {
+    treeView.badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
   }
 }
 
