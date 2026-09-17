@@ -320,13 +320,15 @@ test('a Dockerfile offers build, the configured extras, and one build per named 
   );
   assert.deepEqual(parsed.tasks.map((task) => task.command), [
     'docker build -f Dockerfile -t api .',
-    'docker build -f Dockerfile --target deps -t api:deps .',
-    'docker build -f Dockerfile --target builder -t api:builder .',
+    // The stage is a path segment on the repository, not part of the tag — see
+    // `imageTag`, and the collision test below for why.
+    'docker build -f Dockerfile --target deps -t api/deps .',
+    'docker build -f Dockerfile --target builder -t api/builder .',
     'docker run --rm -it api',
   ]);
   // A task name reaches a shell, so the words are carried as a vector.
   assert.deepEqual(parsed.tasks[1].argv, [
-    'docker', 'build', '-f', 'Dockerfile', '--target', 'deps', '-t', 'api:deps', '.',
+    'docker', 'build', '-f', 'Dockerfile', '--target', 'deps', '-t', 'api/deps', '.',
   ]);
   // Nothing in a Dockerfile names the project, so no heading is claimed from it.
   assert.equal(parsed.packageName, undefined);
@@ -341,8 +343,8 @@ test('a profile in the file name qualifies the tag, stage and all', async () => 
       parsed.tasks.map((task) => task.command),
       [
         `docker build -f ${file} -t api:dev .`,
-        `docker build -f ${file} --target deps -t api:dev-deps .`,
-        `docker build -f ${file} --target builder -t api:dev-builder .`,
+        `docker build -f ${file} --target deps -t api/deps:dev .`,
+        `docker build -f ${file} --target builder -t api/builder:dev .`,
         'docker run --rm -it api:dev',
         'docker push api:dev',
       ],
@@ -351,11 +353,13 @@ test('a profile in the file name qualifies the tag, stage and all', async () => 
   }
 });
 
+/** What a row tags its image: the word after `-t`, wherever the flags put it. */
+const tagged = (task) => task.argv[task.argv.indexOf('-t') + 1];
+
 test('the derived tag is a name Docker will take', async () => {
   const { parseDockerfile } = harness({ settings: { dockerfileCommands: [] } });
   const tag = async (folder, file = 'Dockerfile') =>
-    plain(await parseDockerfile('FROM scratch\n', file, { path: `/repo/${folder}` })).tasks[0]
-      .argv[5];
+    tagged(plain(await parseDockerfile('FROM scratch\n', file, { path: `/repo/${folder}` })).tasks[0]);
   // The repository half is lower case only, which is the half Docker insists on.
   assert.equal(await tag('MyApp'), 'myapp');
   // Everything outside Docker's own alphabet becomes a dash, and a separator
@@ -368,7 +372,54 @@ test('the derived tag is a name Docker will take', async () => {
   assert.equal(await tag('api', 'Dockerfile.CI'), 'api:CI');
 });
 
-test('a command of the user\'s own runs verbatim, with no file and no image bolted on', async () => {
+test('no two rows of a folder can build the same image', async () => {
+  // The reference has two halves and the two things that tell these rows apart
+  // take one each, so the mapping is reversible. Joined into one they were not:
+  // a `Dockerfile.dev` with no target and a `Dockerfile` targeting a stage
+  // called `dev` both read `api:dev`, and the second build silently retagged the
+  // first — after which `run` started an image built from the other file.
+  const { parseDockerfile } = harness({ settings: { dockerfileCommands: [] } });
+  const at = { path: '/repo/apps/api' };
+  const built = async (file, body) =>
+    plain(await parseDockerfile(body, file, at)).tasks.map(tagged);
+
+  const plainFile = await built('Dockerfile', 'FROM scratch AS dev\nFROM scratch AS prod\n');
+  const profiled = await built('Dockerfile.dev', 'FROM scratch AS prod\n');
+  // The pair the old scheme collapsed: stage `dev` against profile `dev`.
+  assert.deepEqual(plainFile, ['api', 'api/dev', 'api/prod']);
+  assert.deepEqual(profiled, ['api:dev', 'api/prod:dev']);
+
+  // And the other pair it collapsed: profile `dev` + stage `prod` against a
+  // profile that happens to be spelled `dev-prod`.
+  const joined = await built('Dockerfile.dev-prod', 'FROM scratch\n');
+  assert.deepEqual(joined, ['api:dev-prod']);
+
+  const all = [...plainFile, ...profiled, ...joined];
+  assert.equal(new Set(all).size, all.length, 'every row must build a reference of its own');
+});
+
+test('a known verb keeps its file, its tag and its context when flags follow it', async () => {
+  const { parseDockerfile } = harness({
+    settings: { dockerfileCommands: ['build --no-cache', 'run --name api'] },
+  });
+  const parsed = plain(await parseDockerfile('FROM scratch AS deps\n', 'Dockerfile', cwd));
+  assert.deepEqual(parsed.tasks.map((task) => task.command), [
+    'docker build -f Dockerfile -t repo .',
+    'docker build -f Dockerfile --target deps -t repo/deps .',
+    // The verb alone decides what this is. Matched on the whole of what was
+    // written, this fell through to the verbatim branch as
+    // `docker build --no-cache` — a build with no context, which fails before it
+    // starts.
+    'docker build -f Dockerfile --no-cache -t repo .',
+    // The flags go before the image, which `run` takes last.
+    'docker run --rm -it --name api repo',
+  ]);
+  // A verb carrying flags is the one row that was asked for: only the bare
+  // `build` fans out, which is the rule `parseCompose` already follows for `up`.
+  assert.equal(parsed.tasks.filter((task) => task.name.startsWith('build --no-cache')).length, 1);
+});
+
+test('a verb of the user\'s own runs as written, with no file and no image bolted on', async () => {
   const { parseDockerfile } = harness({
     settings: { dockerfileCommands: ['builder prune -f', 'run -d', 'build'] },
   });

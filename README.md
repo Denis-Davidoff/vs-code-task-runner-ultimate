@@ -113,8 +113,8 @@ monorepo.
 
 - **Every task, one list** — [eleven ecosystems](#what-gets-scanned): Node, Rust, Python, Make, just,
   go-task, Go, Composer, mise, Docker (compose files and Dockerfiles alike) and the `scripts/*.sh`
-  every repository accumulates — grouped per manifest, or [per ecosystem](#grouping-by-ecosystem), with `node_modules`, `target`,
-  `.venv` and build output skipped.
+  every repository accumulates — grouped per manifest, or [per ecosystem](#grouping-by-ecosystem),
+  with `node_modules`, `target`, `.venv` and build output skipped.
 - **Searchable by command, not just by name** — type `vitest` and find the script that runs it.
 - **Running tasks included** — even ones this extension did not start: tasks from `tasks.json`, other
   extensions, or the built-in npm list. Stop or restart them from the same place.
@@ -343,8 +343,8 @@ command you have to remember:
 ```text
 Dockerfile • apps/api
   📦 build            docker build -f Dockerfile -t api .
-  📦 build: deps      docker build -f Dockerfile --target deps -t api:deps .
-  📦 build: builder   docker build -f Dockerfile --target builder -t api:builder .
+  📦 build: deps      docker build -f Dockerfile --target deps -t api/deps .
+  📦 build: builder   docker build -f Dockerfile --target builder -t api/builder .
   ▶ run               docker run --rm -it api
 ```
 
@@ -352,12 +352,33 @@ A stage with no name is not a row: `--target` needs one. The bare `build` stays 
 stage is named, because `docker build` with no target is what most people want and the menu reads the
 same whatever the file holds.
 
-**The tag.** Nothing in a Dockerfile says what the image should be called, and a `docker build` with
-no `-t` leaves a dangling image with an id for a name. So the folder is the name — the same thing
-compose does for a project that does not name itself — lowercased and reduced to what Docker accepts.
-The tag after the colon is what keeps the Dockerfiles of one folder apart: the profile from the file
-name, the stage being targeted, or both. A plain `Dockerfile` in `apps/api` builds `api`;
-`Dockerfile.dev` builds `api:dev`, and its `builder` stage builds `api:dev-builder`.
+**The image reference.** Nothing in a Dockerfile says what the image should be called, and a
+`docker build` with no `-t` leaves a dangling image with an id for a name. So the folder is the
+name — the same thing compose does for a project that does not name itself — lowercased and reduced
+to what Docker accepts.
+
+The two things that tell the Dockerfiles of one folder apart take one half of the reference each:
+the **stage** is a path segment on the repository, the **profile** from the file name is the tag. In
+`apps/api` that gives
+
+| file | target | builds |
+| --- | --- | --- |
+| `Dockerfile` | — | `api` |
+| `Dockerfile` | `builder` | `api/builder` |
+| `Dockerfile.dev` | — | `api:dev` |
+| `Dockerfile.dev` | `builder` | `api/builder:dev` |
+
+so no two rows of a folder can build over each other. Joining the two into one tag could: a
+`Dockerfile.dev` with no target and a `Dockerfile` targeting a stage called `dev` would both read
+`api:dev`, and the second build would silently retag the first — after which `run` starts an image
+built from the other file. No separator fixes that, because every character Docker allows in a tag it
+also allows in a stage name.
+
+Two Dockerfiles in **different** folders that happen to share a name still share a repository:
+`services/api/Dockerfile` and `tools/api/Dockerfile` are both `api`. The parser reads one file at a
+time and cannot see the other, and naming an image after its folder is the convention compose
+follows too — so pick the folder names, or give the images names of your own with a `build -t …`
+entry.
 
 **The context** is the directory the Dockerfile sits in, which is also the directory every row runs
 in. A Dockerfile kept in `docker/` and built from the repository root is a real layout, but nothing in
@@ -369,11 +390,23 @@ the name is the whole test — nothing except a Dockerfile is called one — but
 name and holds no `FROM` declares no rows, which is what keeps a `Dockerfile.md` explaining how to
 write one off the list.
 
-Commands are known by name: `build`, `run` (`--rm -it`, so a row you pressed four times does not
-leave four stopped containers behind) and `push`. Anything else in `dockerfileCommands` runs as
-`docker <name>` verbatim, with no `-f` and no tag appended — `builder prune` and `image ls` mean what
-they say. Nothing is ever run detached: `-d` and `--detach` are dropped, and the row is named by what
-it actually runs, so `run -d` is listed, and behaves, as plain `run`.
+**Commands.** Each entry in `dockerfileCommands` is split on whitespace into a verb and its
+arguments — quoting is not preserved — and the **verb alone** decides what the row is. The known
+verbs are `build`, `run` (`--rm -it`, so a row you pressed four times does not leave four stopped
+containers behind) and `push`, and each splices your arguments where they belong: `build --no-cache`
+still carries its `-f`, its `-t` and its build context, and `run --name api` puts the flag before the
+image `run` takes last. A verb that is none of the three runs as `docker <verb> <arguments>` with no
+`-f` and no image appended, so `builder prune` and `image ls` mean what they say.
+
+Only the bare `build` fans out per stage; a verb carrying arguments is the one row that was asked
+for, which is the rule the compose rows already follow for `up`. Nothing is ever run detached: `-d`
+and `--detach` are dropped, and the row is named by what is left — so `run -d` is listed, and
+behaves, as plain `run`.
+
+One caveat `run` inherits from Docker: `docker run` does not forward signals while a tty is
+allocated, so stopping the row kills the CLI and leaves the container up with `--rm` unfired. The
+compose half of this extension has **Check Containers** and a ■ that reaches real containers; the
+Dockerfile rows do not, so a container left this way is yours to `docker rm`.
 
 `docker` is not configurable the way `taskRunnerUltimate.dockerCompose` is, because there is no
 second spelling of it: compose forked into a plugin and a standalone binary, and `docker build` did

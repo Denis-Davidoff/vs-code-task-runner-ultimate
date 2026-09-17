@@ -2004,11 +2004,20 @@ const DEFAULT_DOCKERFILE_COMMANDS: ReadonlyArray<string> = ['run'];
  * `run` is interactive on purpose. A container started from a VS Code terminal
  * has a real tty, and `--rm` is what keeps a row you pressed four times from
  * leaving four stopped containers behind.
+ *
+ * Each one places `extra` — whatever the setting wrote after the verb — itself,
+ * because there is no one end of the line to append to: `docker build` takes its
+ * context last, so a flag added after the `.` is a second context and an error,
+ * and `run` takes the image last for the same reason. Splicing is what lets
+ * `build --no-cache` still carry the `-f`, the `-t` and the context it needs.
  */
-const DOCKERFILE_COMMANDS: Record<string, (at: { file: string; tag: string }) => string[]> = {
-  build: ({ file, tag }) => ['build', '-f', file, '-t', tag, '.'],
-  run: ({ tag }) => ['run', '--rm', '-it', tag],
-  push: ({ tag }) => ['push', tag],
+const DOCKERFILE_COMMANDS: Record<
+  string,
+  (at: { file: string; tag: string; extra: string[] }) => string[]
+> = {
+  build: ({ file, tag, extra }) => ['build', '-f', file, ...extra, '-t', tag, '.'],
+  run: ({ tag, extra }) => ['run', '--rm', '-it', ...extra, tag],
+  push: ({ tag, extra }) => ['push', ...extra, tag],
 };
 
 /**
@@ -2045,15 +2054,31 @@ function dockerName(value: string, lower: boolean): string {
  * folder it sits in is the name, which is the same thing compose does for a
  * project that does not name itself.
  *
- * The tag is what keeps the Dockerfiles of one folder apart: the profile from
- * the file name, the stage being targeted, or both joined — so `Dockerfile.dev`
- * targeting `builder` in `apps/api` builds `api:dev-builder`, and a plain
- * `Dockerfile` with no target is `api`, which is `api:latest` to Docker.
+ * The two things that tell the Dockerfiles of one folder apart sit in the two
+ * halves a reference has, rather than being joined into one: the **stage** is a
+ * path segment on the repository, the **profile** from the file name is the tag.
+ * So `apps/api` holds
+ *
+ * - `Dockerfile` → `api`
+ * - `Dockerfile` targeting `builder` → `api/builder`
+ * - `Dockerfile.dev` → `api:dev`
+ * - `Dockerfile.dev` targeting `builder` → `api/builder:dev`
+ *
+ * and no two of them can land on the same reference. Joining the two with a dash
+ * could: a `Dockerfile.dev` with no target and a `Dockerfile` targeting a stage
+ * called `dev` both read `api:dev`, and the second build would silently retag
+ * the first — after which `run` starts an image built from the other file. A
+ * separator cannot fix that, because every character Docker allows in a tag is
+ * also one it allows in a stage name.
+ *
+ * The stage is lower-cased on its way into the repository half, which is the one
+ * Docker insists on; the tag half keeps its case.
  */
 function imageTag(cwd: vscode.Uri, file: string, stage?: string): string {
   const base = dockerName(path.posix.basename(cwd.path), true) || 'image';
-  const variant = dockerName([dockerfileProfile(file), stage].filter(Boolean).join('-'), false);
-  return variant ? `${base}:${variant}` : base;
+  const repository = stage ? `${base}/${dockerName(stage, true)}` : base;
+  const tag = dockerName(dockerfileProfile(file) ?? '', false);
+  return tag ? `${repository}:${tag}` : repository;
 }
 
 /**
@@ -2115,38 +2140,45 @@ function parseDockerfile(text: string, file: string, cwd: vscode.Uri): ParsedMan
     // dropped and forgotten: a detached `run` exits at once, leaving the
     // container up, the square with nothing to stop and the spinner telling the
     // truth only by accident — and a row still labelled `run -d` would promise
-    // what the terminal never got. A known name has no flags on it, so it comes
-    // back through this unchanged.
-    const name = words(entry)
-      .filter((word) => !detaches(word))
-      .join(' ');
-    if (!name || seen.has(name)) {
+    // what the terminal never got.
+    const [head, ...extra] = words(entry).filter((word) => !detaches(word));
+    if (!head) {
+      continue;
+    }
+    const name = [head, ...extra].join(' ');
+    if (seen.has(name)) {
       continue;
     }
     seen.add(name);
-    // Looked up after the stripping rather than before it, which is what lands
-    // `run -d` back on `run` — where the image that the bare word knows nothing
-    // about is waiting.
+    // The verb alone decides what this is, so `build --no-cache` is still a
+    // build and keeps the `-f`, the `-t` and the context that make it one —
+    // matching the whole of what was written would have handed it to the branch
+    // below, where `docker build --no-cache` is a build with no context at all
+    // and fails before it starts. Looking the verb up after the stripping rather
+    // than before it is also what lands `run -d` back on `run`.
     //
-    // A command that is nobody's but the user's gets no `-f` and no tag:
-    // `docker builder prune` and `docker image ls` are the sort of thing written
-    // here, and appending this file's image to one of them would be an argument
-    // nobody asked for. A command that wants the image can name it — the tag is
+    // A verb that is nobody's but the user's gets no `-f` and no tag: `docker
+    // builder prune` and `docker image ls` are the sort of thing written here,
+    // and appending this file's image to one of them would be an argument nobody
+    // asked for. A command that wants the image can name it — the reference is
     // the folder, and the setting says so.
-    const listed = known(DOCKERFILE_COMMANDS, name);
-    push(name, listed ? listed({ file, tag: imageTag(cwd, file) }) : words(name));
+    const listed = known(DOCKERFILE_COMMANDS, head);
+    push(name, listed ? listed({ file, tag: imageTag(cwd, file), extra }) : [head, ...extra]);
+    // Only the bare `build` fans out, which is the rule `parseCompose` already
+    // follows for `up`: a verb carrying flags of its own is the one row that was
+    // asked for, not a row per stage as well.
     if (name === 'build') {
       for (const stage of stages) {
-        push(`build: ${stage}`, [
-          'build',
-          '-f',
-          file,
-          '--target',
-          stage,
-          '-t',
-          imageTag(cwd, file, stage),
-          '.',
-        ]);
+        // Through the same builder as the row above, so the two cannot drift
+        // over where a flag or the context belongs.
+        push(
+          `build: ${stage}`,
+          DOCKERFILE_COMMANDS.build({
+            file,
+            tag: imageTag(cwd, file, stage),
+            extra: ['--target', stage],
+          }),
+        );
       }
     }
   }
