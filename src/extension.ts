@@ -153,6 +153,7 @@ const SCAN_SETTINGS = [
   // it launches, so a change to either has to be read again off disk.
   'dockerCompose',
   'dockerComposeCommands',
+  'dockerfileCommands',
   'shellScripts',
   // Both runner settings, for the same reason: `collectShellScripts` puts the
   // words in front of the path into `argv` at scan time, so a row launched after
@@ -2462,13 +2463,13 @@ const HOST_KINDS: ReadonlySet<SourceKind> = new Set<SourceKind>([
 /**
  * Whether a heading describes what is *around* a project rather than a project.
  *
- * These two are the reason the tree has a second level at all in `flat` mode: a
- * compose file and a `scripts/` folder span a repository rather than sitting in
- * it, and reading them as siblings of the packages they serve put a column of
- * infrastructure between one project and the next.
+ * These are the reason the tree has a second level at all in `flat` mode: a
+ * compose file, a Dockerfile and a `scripts/` folder describe how a project is
+ * shipped rather than what it is, and reading them as siblings of the packages
+ * they serve put a column of infrastructure between one project and the next.
  */
 function attachable(kind: SourceKind | undefined): boolean {
-  return kind === 'docker-compose' || kind === 'shell';
+  return kind === 'docker-compose' || kind === 'dockerfile' || kind === 'shell';
 }
 
 /** The id an ecosystem's parent row is built with, and files its fold and colour under. */
@@ -3184,8 +3185,13 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       //
       // A compose file always does, crowded folder or not: a folder can hold
       // `docker-compose.yml` and `docker-compose.dev.yml` at once, and the
-      // `name:` inside them is as often as not the same word.
-      const shared = crowded.has(manifestFolder(script)) || script.kind === 'docker-compose';
+      // `name:` inside them is as often as not the same word. A Dockerfile is
+      // the same case with none of the doubt — `Dockerfile` beside
+      // `Dockerfile.dev` names nothing at all, so the folder would be both.
+      const shared =
+        crowded.has(manifestFolder(script)) ||
+        script.kind === 'docker-compose' ||
+        script.kind === 'dockerfile';
       group = {
         kind: 'group',
         id: `group:${key}`,
@@ -3585,9 +3591,9 @@ function attachedHosts(
  * has already named everything the two have in common, and repeating it is the
  * noise the tree avoids by not printing the workspace name on every row.
  *
- * The compose files are what reaches this: a project's script folders are one
- * `shell` row by the time they are drawn, and that row is named rather than
- * pathed. `insideOf` is the half of this they do use.
+ * The compose files and the Dockerfiles are what reaches this: a project's script
+ * folders are one `shell` row by the time they are drawn, and that row is named
+ * rather than pathed. `insideOf` is the half of this they do use.
  */
 function insideHost(
   group: TreeNode & { kind: 'group' },
@@ -4253,13 +4259,13 @@ function runningIcon(): vscode.ThemeIcon {
 function crowdedFolders(scripts: ScriptEntry[]): Set<string> {
   const manifests = new Map<string, Set<string>>();
   for (const script of scripts) {
-    // Neither a compose file nor a script folder is ever competing with a
-    // manifest over what to call the folder: a shell group *is* a folder, and a
-    // compose heading is always named by its own file (see `buildTreeRoots`).
-    // Counting them would have a single `docker-compose.yml` beside a
-    // `package.json` report the folder as crowded and rename the project's
-    // heading after its file — which is what that rule exists to avoid, not
-    // cause.
+    // Neither a compose file, a Dockerfile nor a script folder is ever competing
+    // with a manifest over what to call the folder: a shell group *is* a folder,
+    // and a compose or Dockerfile heading is always named by its own file (see
+    // `buildTreeRoots`). Counting them would have a single `docker-compose.yml`
+    // beside a `package.json` report the folder as crowded and rename the
+    // project's heading after its file — which is what that rule exists to
+    // avoid, not cause.
     if (attachable(script.kind)) {
       continue;
     }
@@ -4291,9 +4297,9 @@ function headingKey(script: ScriptEntry, shared: boolean): string {
 function collidingHeadings(scripts: ScriptEntry[], crowded: ReadonlySet<string>): Set<string> {
   const seen = new Map<string, Set<string>>();
   for (const script of scripts) {
-    // A compose file and a script folder are left out for the same reason
-    // `crowdedFolders` leaves them out: neither is competing with a manifest
-    // over what to call the folder. A compose heading is its own file name, and
+    // A compose file, a Dockerfile and a script folder are left out for the same
+    // reason `crowdedFolders` leaves them out: none is competing with a manifest
+    // over what to call the folder. Those headings are their own file name, and
     // no folder holds that name twice; a script folder is drawn as `shell`
     // whatever its own path says. Counted here, a `scripts/` in a project root
     // would collide with the unnamed package.json above it and put a path on a

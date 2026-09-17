@@ -23,6 +23,7 @@ export type SourceKind =
   | 'go'
   | 'mise'
   | 'docker-compose'
+  | 'dockerfile'
   | 'shell';
 
 /** What the `sources` setting switches on and off: a language or a task runner, not a file. */
@@ -78,6 +79,7 @@ const ECOSYSTEM_OF: Record<SourceKind, Ecosystem> = {
   go: 'go',
   mise: 'mise',
   'docker-compose': 'docker',
+  dockerfile: 'docker',
   shell: 'shell',
 };
 
@@ -126,6 +128,8 @@ const MANIFEST_KINDS: Record<string, SourceKind> = {
   'docker-compose.yaml': 'docker-compose',
   'compose.yml': 'docker-compose',
   'compose.yaml': 'docker-compose',
+  Dockerfile: 'dockerfile',
+  dockerfile: 'dockerfile',
 };
 
 /**
@@ -202,6 +206,92 @@ const COMPOSE_GLOBS: ReadonlyArray<string> = [
   'docker-compose.*.yaml',
 ];
 
+// --- Dockerfile names --------------------------------------------------------
+
+/**
+ * The two conventions for a Dockerfile that is not simply `Dockerfile`:
+ * `Dockerfile.dev` and `dev.Dockerfile`. Both are in the wild in roughly equal
+ * measure — the first is what Docker's own documentation uses, the second is
+ * what every editor's syntax highlighting recognises — so both are rows.
+ *
+ * Unlike compose, the name is the whole test and nothing inside the file has to
+ * agree with it: a YAML file says nothing about what it is, but nothing except
+ * a Dockerfile is called `Dockerfile`. `parseDockerfile` still insists on a
+ * `FROM`, which is a different question — whether the file has anything to
+ * build, not whether it is one.
+ *
+ * `Dockerfile` and `dockerfile` on their own are in `MANIFEST_KINDS` already,
+ * and the alternation here deliberately does not match them a second time: a
+ * name matched twice is a name whose profile would come back empty.
+ */
+const DOCKERFILE_NAME = /^(?:[Dd]ockerfile\.[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+\.[Dd]ockerfile)$/;
+
+/**
+ * The profile a Dockerfile's name carries — `dev` for both `Dockerfile.dev` and
+ * `dev.Dockerfile`, and nothing for a plain `Dockerfile`. It is what the image
+ * tag is qualified with, so two Dockerfiles in one folder do not build over each
+ * other; see `imageTag`.
+ */
+function dockerfileProfile(file: string): string | undefined {
+  const head = /^[Dd]ockerfile\.(.+)$/.exec(file);
+  const tail = /^(.+)\.[Dd]ockerfile$/.exec(file);
+  return head?.[1] ?? tail?.[1];
+}
+
+/**
+ * Suffixes that say the file is *about* a Dockerfile, or is one waiting to be
+ * rendered — never one to build.
+ *
+ * `DOCKERFILE_NAME` leaves the extension unconstrained, unlike the compose
+ * globs which pin `.yml`/`.yaml`, so `Dockerfile.<anything>` reaches the parser.
+ * The `FROM` check there was meant to turn these away and cannot: a template
+ * *is* a Dockerfile textually, and a document explaining how to write one is the
+ * file most likely to quote a `FROM`. So they are refused by name, which is the
+ * same thing `COMPOSE_OVERRIDE_NAME` does for a fragment that must never be a
+ * heading of its own.
+ *
+ * Three kinds, and nothing speculative beyond them: what a merge, a patch or an
+ * editor leaves behind; what documentation is written in; and the template
+ * engines whose output is the real Dockerfile. `.orig` and `.rej` are the ones
+ * that actually turn up — a conflicted merge leaves both beside the file.
+ */
+const DOCKERFILE_NOT_A_BUILD: ReadonlySet<string> = new Set([
+  'orig', 'rej', 'bak', 'save', 'swp', 'tmp', 'patch', 'diff',
+  'md', 'markdown', 'txt', 'rst', 'adoc',
+  'template', 'tmpl', 'tpl', 'j2', 'jinja', 'jinja2', 'erb', 'mustache', 'hbs', 'in', 'gotmpl',
+]);
+
+/**
+ * Whether a `Dockerfile.<profile>` is one of those.
+ *
+ * The last dotted segment, so `Dockerfile.dev.orig` — what a conflicted merge
+ * leaves beside `Dockerfile.dev` — is refused on the `orig` rather than believed
+ * on the `dev`.
+ *
+ * Only the `Dockerfile.<profile>` spelling is tested. In the other convention
+ * the word before the dot is a name the author chose, and a stage genuinely
+ * called `template` would be refused for a word that means nothing there.
+ */
+function rendersLater(file: string): boolean {
+  const profile = /^[Dd]ockerfile\.(.+)$/.exec(file)?.[1];
+  return profile !== undefined && DOCKERFILE_NOT_A_BUILD.has(profile.slice(profile.lastIndexOf('.') + 1).toLowerCase());
+}
+
+/**
+ * The globs that find the profile-named Dockerfiles above. The two bare names
+ * are in `MANIFEST_KINDS` and need none.
+ *
+ * `*.[Dd]ockerfile` is not narrowed any further on purpose: nothing else in a
+ * repository ends in that word, where `Dockerfile.*` needs no defending either
+ * — `manifestKind` turns away whatever these over-match.
+ */
+const DOCKERFILE_GLOBS: ReadonlyArray<string> = [
+  'Dockerfile.*',
+  'dockerfile.*',
+  '*.Dockerfile',
+  '*.dockerfile',
+];
+
 /**
  * The kind of manifest a path is, by its file name alone. The exact table first,
  * then the one convention that cannot be spelled out as a list of names.
@@ -213,6 +303,9 @@ function manifestKind(uri: vscode.Uri): SourceKind | undefined {
   }
   if (COMPOSE_NAME.test(name) && !COMPOSE_OVERRIDE_NAME.test(name)) {
     return 'docker-compose';
+  }
+  if (DOCKERFILE_NAME.test(name)) {
+    return rendersLater(name) ? undefined : 'dockerfile';
   }
   return undefined;
 }
@@ -232,7 +325,7 @@ function manifestGlob(enabled: ReadonlySet<Ecosystem>): string | undefined {
   const names = Object.keys(MANIFEST_KINDS).filter((name) => enabled.has(ECOSYSTEM_OF[MANIFEST_KINDS[name]]));
   // Compose is the one kind whose files are not a fixed list of names; see
   // `COMPOSE_GLOBS`. What those globs over-match, `manifestKind` turns away.
-  const patterns = enabled.has('docker') ? COMPOSE_GLOBS : [];
+  const patterns = enabled.has('docker') ? [...COMPOSE_GLOBS, ...DOCKERFILE_GLOBS] : [];
   const all = [...names, ...patterns];
   return all.length > 0 ? `**/{${all.join(',')}}` : undefined;
 }
@@ -321,6 +414,9 @@ export const WATCH_GLOB = `**/{${[
     // And the profile-named compose files, which no list of names can hold.
     ...COMPOSE_OVERRIDE_FILES,
     ...COMPOSE_GLOBS,
+    // The profile-named Dockerfiles, which are the same case: no list of names
+    // holds `Dockerfile.dev` and `dev.Dockerfile`.
+    ...DOCKERFILE_GLOBS,
     ...DETECTION_FILES.map(([file]) => file),
     ...PYTHON_LOCKS.map(([file]) => file),
   ]),
@@ -733,6 +829,8 @@ async function parseManifest(
       return parseMise(text);
     case 'docker-compose':
       return parseCompose(text, file, cwd);
+    case 'dockerfile':
+      return parseDockerfile(text, file, cwd);
     // `shell` never reaches here: its rows are built by `collectShellScripts`,
     // from files no `MANIFEST_KINDS` entry names.
     default:
@@ -1762,10 +1860,22 @@ const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['build', 'logs', 'ps'];
  * was never worth a spinner. `up` is deliberately not given `-d` for the
  * opposite reason — see `parseCompose`.
  */
-/** Whether an option makes `compose up` leave its containers behind. */
-function composeDetaches(word: string): boolean {
+/**
+ * Whether an option makes a container command leave its containers behind.
+ *
+ * Shared by compose and the Dockerfile rows: a detached row exits the moment it
+ * starts, so ■ has nothing to stop and the spinner lies. `--wait` is compose's
+ * alone — `docker run` has no such flag — and costs nothing to test for.
+ */
+function detaches(word: string): boolean {
   return (
-    word === '-d' ||
+    // A bundle of short options carrying `d`, which is how `docker run` is
+    // conventionally written: `-dit` is in Docker's own documentation, and the
+    // `-d` inside it detaches exactly as a `-d` on its own would. Lower case
+    // only, so the `-D` that means `--debug` is left where it is, and one dash
+    // only, so `--detach-keys=…` — which sets a key sequence rather than
+    // detaching — is not swept up by it.
+    /^-[a-z]*d[a-z]*$/.test(word) ||
     word === '--detach' ||
     word.startsWith('--detach=') ||
     word === '--wait' ||
@@ -1883,7 +1993,7 @@ async function parseCompose(
     // truth only by accident — which is the one thing this setting promises
     // never happens, and splitting entries into words is what made `up -d`
     // reach the terminal at all.
-    const args = listed ?? words(entry).filter((word) => !composeDetaches(word));
+    const args = listed ?? words(entry).filter((word) => !detaches(word));
     if (args.length === 0) {
       continue;
     }
@@ -1915,6 +2025,290 @@ async function composeOverride(cwd: vscode.Uri): Promise<string | undefined> {
     }
   }
   return undefined;
+}
+
+// --- Dockerfile --------------------------------------------------------------
+
+/**
+ * A Dockerfile declares build stages, not tasks, so what a file offers is the
+ * handful of `docker` subcommands worth having on a list — the same shape cargo
+ * and compose take, and for the same reason.
+ *
+ * `build` is not here. It is the one action every Dockerfile has, added by
+ * `parseDockerfile` whatever the setting says, and listing it as a default would
+ * invite somebody to take it out of a list that no longer controls it.
+ */
+const DEFAULT_DOCKERFILE_COMMANDS: ReadonlyArray<string> = ['run'];
+
+/**
+ * What each command name stands for. Unlike compose there is no shared prefix
+ * past the program: `build` is the only one that reads the file at all, and the
+ * rest address the image the build produced — which is why this is a function of
+ * the file and its tag rather than the flat table `DOCKER_COMPOSE_COMMANDS` is.
+ *
+ * `run` is interactive on purpose. A container started from a VS Code terminal
+ * has a real tty, and `--rm` is what keeps a row you pressed four times from
+ * leaving four stopped containers behind.
+ *
+ * Each one places `extra` — whatever the setting wrote after the verb — itself,
+ * because there is no one end of the line to append to: `docker build` takes its
+ * context last, so a flag added after the `.` is a second context and an error,
+ * and `run` takes the image last for the same reason. Splicing is what lets
+ * `build --no-cache` still carry the `-f`, the `-t` and the context it needs.
+ *
+ * `tag` is a function rather than a string because a command may not want the
+ * derived reference at all, and `build` may want one for a different stage than
+ * the row it is on — see each entry.
+ */
+type DockerfileCommand = (at: {
+  file: string;
+  extra: string[];
+  tag: (stage?: string) => string;
+}) => string[];
+
+/** Whether `extra` carries one of these options, as `--opt` or as `--opt=value`. */
+function hasOption(extra: ReadonlyArray<string>, names: ReadonlyArray<string>): boolean {
+  return extra.some((word) => names.some((name) => word === name || word.startsWith(`${name}=`)));
+}
+
+/** The value given to `--opt`, whether written as `--opt value` or `--opt=value`. */
+function optionValue(extra: ReadonlyArray<string>, name: string): string | undefined {
+  const at = extra.indexOf(name);
+  if (at >= 0) {
+    return extra[at + 1];
+  }
+  const joined = extra.find((word) => word.startsWith(`${name}=`));
+  return joined?.slice(name.length + 1) || undefined;
+}
+
+/**
+ * Whether `extra` already names the image for `docker push`.
+ *
+ * Reliable here and nowhere else: `push` takes exactly one `NAME[:TAG]`, and of
+ * its options only `--platform` takes a value of its own — so a bare word that
+ * is not that value is the reference the user meant. `run` is the opposite case
+ * and is why this is not attempted for it: dozens of its options take values,
+ * and reading the `api` of `--name api` as an image would leave the command with
+ * no image at all.
+ */
+function pushNamesImage(extra: ReadonlyArray<string>): boolean {
+  return extra.some(
+    (word, at) => !word.startsWith('-') && extra[at - 1] !== '--platform',
+  );
+}
+
+const DOCKERFILE_COMMANDS: Record<string, DockerfileCommand> = {
+  // A `-t` of the user's own replaces the derived one rather than joining it:
+  // `docker build -t mine -t api .` applies *both* names, which is what made the
+  // documented way of naming an image yourself change nothing at all. And a
+  // `--target` of the user's own is what the tag is derived for, so an entry
+  // that builds one stage cannot land on the whole image's name.
+  build: ({ file, extra, tag }) =>
+    hasOption(extra, ['-t', '--tag'])
+      ? ['build', '-f', file, ...extra, '.']
+      : ['build', '-f', file, ...extra, '-t', tag(optionValue(extra, '--target')), '.'],
+  run: ({ extra, tag }) => ['run', '--rm', '-it', ...extra, tag()],
+  push: ({ extra, tag }) => (pushNamesImage(extra) ? ['push', ...extra] : ['push', ...extra, tag()]),
+};
+
+/**
+ * `FROM node:20 AS builder`, which is the only line in a Dockerfile that names
+ * something a row could stand for.
+ *
+ * The image is matched lazily and with anything in front of it, because the
+ * flags come before it — `FROM --platform=$BUILDPLATFORM node:20 AS build` is
+ * ordinary in a cross-built image — and `AS` is anchored to the end so a stage
+ * called `as` in the image name cannot answer for it. Case-insensitive: the
+ * instructions are conventionally shouted and the parser does not care.
+ */
+export const DOCKERFILE_STAGE = /^\s*FROM\s+.*?\s+AS\s+([A-Za-z0-9][A-Za-z0-9_.-]*)\s*$/i;
+
+/** Whether the file has anything to build at all. */
+const DOCKERFILE_FROM = /^\s*FROM\s+\S/im;
+
+/**
+ * One component of the repository half of a reference, reduced to something
+ * Docker will certainly accept.
+ *
+ * Docker's grammar for a component is `[a-z0-9]+` runs joined by a separator,
+ * and a separator is a *single* `.` or `_`, or a `__`, or a run of `-`. Nothing
+ * else: `my..app` and `a___b` are rejected outright with `invalid reference
+ * format`, and a folder may be called either. Rather than police which runs are
+ * legal, the alphanumeric runs are taken and joined with a single `-`, which is
+ * always a valid separator — so every folder name on earth lands on a component
+ * Docker parses.
+ *
+ * The dots go with them, and that is the point rather than a side effect:
+ * Docker reads a *first* component containing a dot as a registry domain, so a
+ * folder called `example.com` would have turned `push` into a push at a real
+ * remote and `run` into a pull from one. The repository half here is always
+ * rooted at the folder, so no dot may survive in it.
+ *
+ * Lower case because that half admits nothing else.
+ */
+function repositoryComponent(value: string): string {
+  return value.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join('-');
+}
+
+/**
+ * The tag half, which is the permissive one: `[\w][\w.-]{0,127}`, case and all.
+ * Only the leading character is constrained, and the length — 128 in total, and
+ * a profile read off a file name is not bounded by anything else, so it is cut
+ * rather than allowed to produce `invalid reference format`.
+ */
+function tagPart(value: string): string {
+  const cleaned = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[._-]+/, '').replace(/[._-]+$/, '');
+  return cleaned.slice(0, 128);
+}
+
+/**
+ * The image a row builds and runs.
+ *
+ * Nothing in a Dockerfile says what the image should be called, and a `docker
+ * build` with no `-t` leaves a dangling image with an id for a name — so the
+ * folder it sits in is the name, which is the same thing compose does for a
+ * project that does not name itself.
+ *
+ * The two things that tell the Dockerfiles of one folder apart sit in the two
+ * halves a reference has, rather than being joined into one: the **stage** is a
+ * path segment on the repository, the **profile** from the file name is the tag.
+ * So `apps/api` holds
+ *
+ * - `Dockerfile` → `api`
+ * - `Dockerfile` targeting `builder` → `api/builder`
+ * - `Dockerfile.dev` → `api:dev`
+ * - `Dockerfile.dev` targeting `builder` → `api/builder:dev`
+ *
+ * and no two of them can land on the same reference. Joining the two with a dash
+ * could: a `Dockerfile.dev` with no target and a `Dockerfile` targeting a stage
+ * called `dev` both read `api:dev`, and the second build would silently retag
+ * the first — after which `run` starts an image built from the other file. A
+ * separator cannot fix that, because every character Docker allows in a tag is
+ * also one it allows in a stage name.
+ *
+ * The stage is lower-cased on its way into the repository half, which is the one
+ * Docker insists on; the tag half keeps its case.
+ */
+function imageTag(cwd: vscode.Uri, file: string, stage?: string): string {
+  const base = repositoryComponent(path.posix.basename(cwd.path)) || 'image';
+  const repository = stage ? `${base}/${repositoryComponent(stage)}` : base;
+  const tag = tagPart(dockerfileProfile(file) ?? '');
+  return tag ? `${repository}:${tag}` : repository;
+}
+
+/**
+ * The rows for one Dockerfile.
+ *
+ * `-f <file>` for the reason make, just and compose all name their own file:
+ * what the scan saw is not what the runner would pick, and `docker build` looks
+ * for `Dockerfile` in the context whatever else is beside it.
+ *
+ * The context is `.` — the directory the file sits in, which is the directory
+ * every row already runs in. A Dockerfile kept in `docker/` and built from the
+ * repository root is a real layout and not one any file says out loud, so the
+ * honest default is the one every other manifest here uses: the folder the file
+ * is in.
+ *
+ * `build` is the command that fans out: the bare action, plus one `build:
+ * <stage>` per named stage, which is `--target` and a tag of its own. The bare
+ * one stays even for a file whose last stage is named — `docker build` with no
+ * target is what most people want, and the menu reads the same whatever the file
+ * holds, which is the rule the compose rows already follow.
+ */
+function parseDockerfile(text: string, file: string, cwd: vscode.Uri): ParsedManifest | undefined {
+  // A file matched by name that builds nothing is not a row — a `Dockerfile.md`
+  // describing how to build one is matched by `DOCKERFILE_NAME` and has no
+  // `FROM` in it. It comes back empty rather than undefined so the scan records
+  // that the file was read and understood; see `emptyManifests`.
+  if (!DOCKERFILE_FROM.test(text)) {
+    return { tasks: [] };
+  }
+
+  // `build` is the Dockerfile's fixed action. The setting supplies the rest and
+  // may repeat it without duplicating the row.
+  const commands = [
+    'build',
+    ...settingList('dockerfileCommands', DEFAULT_DOCKERFILE_COMMANDS).filter(
+      (command) => command !== 'build',
+    ),
+  ];
+
+  const stages: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const stage = DOCKERFILE_STAGE.exec(line);
+    // A stage may be named twice in a file that was edited badly, and a name
+    // listed twice is a row whose key the scan would drop anyway.
+    if (stage && !stages.includes(stage[1])) {
+      stages.push(stage[1]);
+    }
+  }
+
+  const tasks: RawTask[] = [];
+  const push = (name: string, args: string[]) => {
+    const argv = ['docker', ...args];
+    tasks.push({ name, command: argv.join(' '), argv });
+  };
+
+  const seen = new Set<string>();
+  for (const entry of commands) {
+    // Split into words and named by what is left, so a request to detach is both
+    // dropped and forgotten: a detached `run` exits at once, leaving the
+    // container up, the square with nothing to stop and the spinner telling the
+    // truth only by accident — and a row still labelled `run -d` would promise
+    // what the terminal never got.
+    const [head, ...extra] = words(entry).filter((word) => !detaches(word));
+    if (!head) {
+      continue;
+    }
+    const name = [head, ...extra].join(' ');
+    if (seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    // The verb alone decides what this is, so `build --no-cache` is still a
+    // build and keeps the `-f`, the `-t` and the context that make it one —
+    // matching the whole of what was written would have handed it to the branch
+    // below, where `docker build --no-cache` is a build with no context at all
+    // and fails before it starts. Looking the verb up after the stripping rather
+    // than before it is also what lands `run -d` back on `run`.
+    //
+    // A verb that is nobody's but the user's gets no `-f` and no tag: `docker
+    // builder prune` and `docker image ls` are the sort of thing written here,
+    // and appending this file's image to one of them would be an argument nobody
+    // asked for. A command that wants the image can name it — the reference is
+    // the folder, and the setting says so.
+    const listed = known(DOCKERFILE_COMMANDS, head);
+    push(
+      name,
+      listed
+        ? listed({ file, extra, tag: (stage) => imageTag(cwd, file, stage) })
+        : [head, ...extra],
+    );
+    // Only the bare `build` fans out, which is the rule `parseCompose` already
+    // follows for `up`: a verb carrying flags of its own is the one row that was
+    // asked for, not a row per stage as well.
+    if (name === 'build') {
+      for (const stage of stages) {
+        // Claimed here as well as pushed: a `build: deps` written into the
+        // setting would otherwise produce a second row of that name, and the
+        // scan's own per-manifest de-duplication would drop one of them without
+        // saying which.
+        seen.add(`build: ${stage}`);
+        // Through the same builder as the row above, so the two cannot drift
+        // over where a flag or the context belongs.
+        push(
+          `build: ${stage}`,
+          DOCKERFILE_COMMANDS.build({
+            file,
+            extra: ['--target', stage],
+            tag: (of) => imageTag(cwd, file, of),
+          }),
+        );
+      }
+    }
+  }
+
+  return { tasks };
 }
 
 // --- shell scripts -----------------------------------------------------------
