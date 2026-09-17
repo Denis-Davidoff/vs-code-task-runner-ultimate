@@ -1742,11 +1742,16 @@ function parseMise(text: string): ParsedManifest | undefined {
 // --- Docker compose ----------------------------------------------------------
 
 /**
- * Compose declares services, not tasks, so the rows for a file are the
- * subcommands worth having on a list — the same shape cargo's rows take, and for
- * the same reason.
+ * Compose declares services, not tasks, so what a file offers is the subcommands
+ * worth having on a list — the same shape cargo's rows take, and for the same
+ * reason.
+ *
+ * `up` and `down` are not here. They are the compose item's two fixed buttons,
+ * added by `parseCompose` whatever the setting says, and listing them as
+ * defaults would invite somebody to take them out of a list that no longer
+ * controls them.
  */
-const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['up', 'down', 'build', 'logs', 'ps'];
+const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['build', 'logs', 'ps'];
 
 /**
  * The arguments each command name stands for, after the `docker compose -f
@@ -1813,27 +1818,31 @@ function composeProgram(): string[] {
  * extension — compose searches its own four spellings in order whatever the base
  * file is called, so `compose.yaml` beside `compose.override.yml` is a pair.
  *
- * `up` is the command that fans out: a bare row, plus one row per service when
- * the file declares more than one. Unlike cargo's `run` the bare row stays —
- * `docker compose up` across the whole stack is the row most people want, not an
- * ambiguity. Six services is eleven rows rather than the thirty a full
+ * `up` is the command that fans out: the bare action, plus one per declared
+ * service. Unlike cargo's `run` the bare one stays — `docker compose up` across
+ * the whole stack is what most people want, not an ambiguity — and it fans out
+ * even for a single-service file, so the menu reads the same whatever the file
+ * holds. Six services is eleven actions rather than the thirty a full
  * services × commands product would be.
  *
- * Nothing here ever passes `-d`. A detached `up` exits at once: the row would go
- * idle with the containers still running, and Stop would stop nothing.
+ * Nothing here ever passes `-d`. A detached `up` exits at once: the item would
+ * go idle with the containers still running, and ■ would stop nothing.
  */
 async function parseCompose(
   text: string,
   file: string,
   cwd: vscode.Uri,
 ): Promise<ParsedManifest | undefined> {
-  const commands = settingList('dockerComposeCommands', DEFAULT_COMPOSE_COMMANDS);
-  // Not `{ tasks: [] }`: an empty parse counts as "the file declares nothing",
-  // which lands in `emptyManifests` and lets `pruneStaleRefs` delete every star
-  // and colour on it. Emptying a setting must not cost the user their marks.
-  if (commands.length === 0) {
-    return undefined;
-  }
+  // Up and down are the compose item's fixed buttons. The setting supplies the
+  // remaining context-menu commands and may repeat either without duplicating
+  // it in the internal action list.
+  const commands = [
+    'up',
+    'down',
+    ...settingList('dockerComposeCommands', DEFAULT_COMPOSE_COMMANDS).filter(
+      (command) => command !== 'up' && command !== 'down',
+    ),
+  ];
 
   const lines = text.split(/\r?\n/);
   const services = yamlBlockKeys(lines, 'services')
@@ -1888,7 +1897,7 @@ async function parseCompose(
     }
     seen.add(name);
     push(name, args);
-    if (name === 'up' && services.length > 1) {
+    if (name === 'up') {
       for (const service of services) {
         push(`up: ${service}`, [...args, service]);
       }

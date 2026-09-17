@@ -328,6 +328,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.stopGroup', (node?: TreeNode) => stopGroup(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.runGroup', (node?: TreeNode) => runGroup(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.stopStack', (node?: TreeNode) => stopStack(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.composeActions', (node?: TreeNode) => composeActions(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
     // One command per colour: a submenu entry is a command, and there is no way
     // to hand it an argument from contributes.menus. The list is the palette's,
@@ -630,6 +631,11 @@ function runningCount(): number {
  * `onStateChanged` runs straight after and puts the real count back when there
  * is one, so the two assignments are one tick of the extension host and never a
  * badge anyone can see.
+ *
+ * The File Explorer view is cleared here too, and only here: earlier versions
+ * put the count on it, and a badge left over from one of them would otherwise
+ * sit on the File Explorer icon forever, since nothing writes to that view any
+ * more.
  */
 function clearStaleBadges(): void {
   for (const view of [treeView, explorerTreeView]) {
@@ -646,13 +652,15 @@ function onStateChanged(): void {
   updateStatusBar(count);
   activePicker?.refresh();
   treeChanged.fire();
-  // Both views carry the badge: the count belongs to the tasks, not to the
-  // sidebar the list happens to be read in.
-  const badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
-  for (const view of [treeView, explorerTreeView]) {
-    if (view) {
-      view.badge = badge;
-    }
+  // Only the extension's own view in the activity bar carries the badge. A
+  // badge on a view is drawn on the icon of the container that view sits in,
+  // and the File Explorer section sits in the File Explorer's container — so
+  // badging it puts the task count on the File Explorer icon, next to a number
+  // of unsaved files it has nothing to do with. The activity bar icon is the
+  // extension's own, and the status bar entry carries the count for anyone who
+  // reads the list from the File Explorer.
+  if (treeView) {
+    treeView.badge = count > 0 ? { value: count, tooltip: `${count} running task(s)` } : undefined;
   }
 }
 
@@ -881,13 +889,29 @@ function confirmRefs(): string[] {
   return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
 }
 
+/**
+ * Never a compose action, whatever is stored against it.
+ *
+ * A compose file is one leaf in the tree — ▶, ■ and a menu of extra commands,
+ * with no rows underneath — so there is nowhere to put the toggle and nowhere
+ * to turn it back off. A dialog naming a switch the user cannot reach is worse
+ * than no dialog, and ▶ and ■ on a stack are already the deliberate gesture the
+ * flag exists to make you perform: pressing either is a decision about the whole
+ * file, not about one row among forty.
+ *
+ * Flags left on a compose row by an older version are dropped rather than
+ * honoured in silence — see `pruneStaleRefs`.
+ */
 function needsConfirmation(script: ScriptEntry): boolean {
-  return confirmRefs().includes(scriptRef(script));
+  return script.kind !== 'docker-compose' && confirmRefs().includes(scriptRef(script));
 }
 
 /** The two halves of the toggle in the context menu, one command each. */
 async function setConfirmation(node: TreeNode | undefined, on: boolean): Promise<void> {
-  if (node?.kind !== 'script') {
+  // Compose rows carry no confirmation axis in their context value, so neither
+  // half of the toggle is ever on their menu. Refused here as well, for the
+  // command invoked any other way.
+  if (node?.kind !== 'script' || node.script.kind === 'docker-compose') {
     return;
   }
   const ref = scriptRef(node.script);
@@ -1862,11 +1886,21 @@ async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
     return group !== undefined && scanned.has(group) && !live.has(ref);
   };
 
-  for (const [key, refs] of [
-    [FAVORITES_KEY, favoriteRefs()],
-    [CONFIRM_KEY, confirmRefs()],
-  ] as const) {
-    const kept = refs.filter((ref) => !gone(ref));
+  // A compose row does not ask any more — see `needsConfirmation` — so a flag an
+  // older version left on one is a setting with nothing behind it: it changes
+  // nothing, has no toggle to clear it, and still counts in the ⋮ menu's tally
+  // of guarded rows. Dropped here, where the scan says which refs those are.
+  // Stars are not: a compose row can still be starred, and still shows in the
+  // favourites at the top.
+  const unguarded = new Set(
+    scripts.filter((script) => script.kind === 'docker-compose').map(scriptRef),
+  );
+
+  for (const [key, refs, dropped] of [
+    [FAVORITES_KEY, favoriteRefs(), undefined],
+    [CONFIRM_KEY, confirmRefs(), unguarded],
+  ] as [string, string[], Set<string> | undefined][]) {
+    const kept = refs.filter((ref) => !gone(ref) && !dropped?.has(ref));
     if (kept.length !== refs.length) {
       await storage?.update(key, kept);
     }
@@ -3062,7 +3096,7 @@ function createTree(): vscode.Disposable[] {
       if (!node) {
         return buildTreeRoots(await listScripts());
       }
-      return node.kind === 'group' ? node.children : [];
+      return node.kind === 'group' && node.source !== 'docker-compose' ? node.children : [];
     },
   };
 
@@ -3679,7 +3713,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // touched shows everything it found, and one you have shows it as you left it.
     const item = new vscode.TreeItem(
       heading,
-      isCollapsed(node) ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded,
+      node.source === 'docker-compose'
+        ? vscode.TreeItemCollapsibleState.None
+        : isCollapsed(node)
+          ? vscode.TreeItemCollapsibleState.Collapsed
+          : vscode.TreeItemCollapsibleState.Expanded,
     );
     // The tooltip is where the manifest's own name survives a rename. A script
     // row keeps it in the dimmed description instead, which a heading cannot
@@ -3771,12 +3809,13 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
       item.contextValue = alive ? 'group:eco:running' : 'group:eco';
       return item;
     }
-    // A compose heading says whether its stack is up, which is what puts ▶ and ■
-    // on the heading itself: the file *is* the stack, and bringing it up or
-    // taking it down is the one thing anybody asks of a compose file. `up` is
-    // what Docker last answered — see `containers` — and `down` is everything
-    // else, "nobody has asked" included. A heading with no `up` row to press
-    // carries neither, and reads exactly as it did before.
+    // A compose row says whether its stack is up: `up` is what Docker last
+    // answered — see `containers` — and `down` is everything else, "nobody has
+    // asked" included. It is not what puts ▶ and ■ on the row; those are on
+    // every compose row, because the file *is* the stack and taking it up or
+    // down is the one thing anybody asks of one. The segment is here so a `when`
+    // clause can still tell the two apart, and so the shape of a compose context
+    // value is the package row's shape with one more state in front of the tail.
     const stack = composeUpNode(node);
     const stacked = stack ? (containersUp(stack.script) ? ':up' : ':down') : '';
     // Three states and not two. `:carried` is a heading the pile holds only
@@ -3784,7 +3823,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // Hide has nothing left to do, and it was never put there on its own, so
     // Show has nothing to bring back — see `carried` on the node.
     const put = node.carried ? ':carried' : node.hidden ? ':hidden' : '';
-    const state = `group:package${stacked}${put}`;
+    const state = `${node.source === 'docker-compose' ? 'compose' : 'group:package'}${stacked}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
@@ -3853,7 +3892,14 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // shell rows and nowhere else. It goes here rather than after `confirm`
     // because that one is matched with a `$` anchor — see below.
     node.script.kind === 'shell' ? 'shell' : 'task',
-    needsConfirmation(node.script) ? 'confirm' : 'noconfirm',
+    // The last axis, and absent altogether on a compose row — which is the whole
+    // of how neither half of the toggle reaches one. Both clauses that offer it
+    // end in `:confirm$` or `:noconfirm$`, so a value that simply stops here
+    // matches neither, and the menu is one entry shorter rather than showing a
+    // switch for a row that never asks. See `needsConfirmation`.
+    ...(node.script.kind === 'docker-compose'
+      ? []
+      : [needsConfirmation(node.script) ? 'confirm' : 'noconfirm']),
   ].join(':');
   item.command = {
     command: 'taskRunnerUltimate.toggleItem',
@@ -4514,15 +4560,14 @@ function runningScriptsOf(node: TreeNode | undefined): ScriptEntry[] {
 }
 
 /**
- * The bare `up` row of a compose heading — the whole file, no service named.
+ * The bare `up` action of a compose item — the whole file, no service named.
  *
- * It is what the ▶ and ■ on the heading act on, and the row Docker's answer is
- * read off. Nothing else is: a heading of a manifest has no single row that
- * stands for the file, and a compose file has exactly one — which is why these
- * two buttons are on the compose headings and nowhere else.
- *
- * Absent when `composeCommands` has been narrowed to a list without `up`. The
- * buttons go with it: there is then no such thing as bringing this file up.
+ * It is what ▶ runs, and the action Docker's answer is read off. Nothing else
+ * is: a heading of a manifest has no single row that stands for the file, and a
+ * compose file has exactly one — which is why ▶ and ■ are on the compose rows
+ * and nowhere else. `parseCompose` puts `up` and `down` there whatever
+ * `dockerComposeCommands` says, so this only comes back empty for a node that
+ * is not a compose file at all.
  */
 function composeUpNode(node: TreeNode | undefined): (TreeNode & { kind: 'script' }) | undefined {
   if (node?.kind !== 'group' || node.source !== 'docker-compose') {
@@ -4535,24 +4580,94 @@ function composeUpNode(node: TreeNode | undefined): (TreeNode & { kind: 'script'
 }
 
 /**
- * ▶ on a compose heading: the file's own `up`, exactly as pressing ▶ on the row
- * inside it would — the confirmation included.
+ * ▶ on a compose item: the file's own bare `up`, confirmation included.
+ *
+ * A run already up is not started a second time. The `when` clause on the button
+ * says the same thing — ▶ is not drawn on a row with something running under
+ * it — but a context value is what the tree was last told, and a second `up`
+ * over the first would overwrite the handle in `running` with the newer one:
+ * the first task would then be a terminal nothing in here can stop, ■ and Stop
+ * All included. So the map itself has the last word, and the answer to a press
+ * that finds it already running is its terminal rather than another process.
  */
 async function runGroup(node: TreeNode | undefined): Promise<void> {
-  await runNode(composeUpNode(node), false);
+  const up = composeUpNode(node);
+  if (!up) {
+    return;
+  }
+  if (running.has(up.script.key)) {
+    await showTerminal(up);
+    return;
+  }
+  await runNode(up, false);
 }
 
 /**
- * ■ on a compose heading whose containers Docker reported up while nothing of
- * ours is running them — somebody brought the stack up outside this window, or
- * in a session before this one. The square means stop either way, so it runs the
- * compose command that stops it; when a task of ours *is* running, the square on
- * the row is `stopGroup` instead and this one is not drawn.
+ * ■ on a compose item: end whatever of ours is attached to the file, then take
+ * the stack down.
+ *
+ * Both halves matter. `up` is an attached task, so a `down` on its own would
+ * leave its terminal behind with the containers already gone; and a `down` is
+ * the only thing that removes containers somebody brought up outside this
+ * window, which no `terminate()` can reach.
+ *
+ * `down` runs only once every stop has actually taken — `stopExecution` returns
+ * `false` on a task that outlived the wait, and has said so on screen — because
+ * a `down` racing a live `up` is the stack being removed and raised again by
+ * turns.
+ *
+ * Nothing here asks first. Pressing ■ on a file that *is* a stack is already
+ * the deliberate gesture, and a compose row carries no confirmation flag for the
+ * same reason it carries no toggle to clear one with — see `needsConfirmation`.
  */
 async function stopStack(node: TreeNode | undefined): Promise<void> {
-  const up = composeUpNode(node);
-  if (up) {
-    await stopContainers(up.script);
+  if (node?.kind !== 'group' || node.source !== 'docker-compose') {
+    return;
+  }
+  const down = node.children.find(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name === 'down',
+  );
+  if (!down) {
+    return;
+  }
+  const stopped = await Promise.all(
+    runningScriptsOf(node).map((script) => {
+      const execution = running.get(script.key);
+      return execution ? stopExecution(execution) : Promise.resolve(true);
+    }),
+  );
+  if (!stopped.every(Boolean)) {
+    return;
+  }
+  await startScript(down.script, false);
+}
+
+/** Extra compose commands, including one `up` action for every declared service. */
+async function composeActions(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'group' || node.source !== 'docker-compose') {
+    return;
+  }
+  const actions = node.children.filter(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name !== 'up' && child.script.name !== 'down',
+  );
+  if (actions.length === 0) {
+    void vscode.window.showInformationMessage('No additional Compose actions are configured.');
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(
+    actions.map((action) => ({
+      label: action.script.name.startsWith('up: ')
+        ? `$(play) Up ${action.script.name.slice(4)}`
+        : action.script.name,
+      description: action.script.command,
+      action,
+    })),
+    { placeHolder: `Compose command for ${node.label}` },
+  );
+  if (picked) {
+    await runNode(picked.action, true);
   }
 }
 

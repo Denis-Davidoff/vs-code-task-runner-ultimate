@@ -25,13 +25,14 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, probeReply = () => ({ running: new Set(['web']) }) } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }) } = {}) {
   const probes = [];
   const launched = [];
   const terminals = [];
   const writes = [];
   const warnings = [];
   const hints = [];
+  const quickPicks = [];
   const vscode = {
     // The workbench's own answer for "what shell does a new terminal open in",
     // which is what decides how a typed command line is quoted.
@@ -40,8 +41,16 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
       // Enough of a terminal to answer the two questions Add to Terminal asks of
       // one: where it opened, and what was typed into it without being run.
       showWarningMessage: (message) => (warnings.push(message), Promise.resolve(undefined)),
+      showInformationMessage: () => Promise.resolve(undefined),
+      showQuickPick: (items, options) => {
+        quickPicks.push({ items, options });
+        return Promise.resolve(items[pick]);
+      },
       // What a refused drop says, and the only place it says it.
       setStatusBarMessage: (message) => (hints.push(message), { dispose() {} }),
+      // The window's own list, which `terminalFor` searches by name. Empty is a
+      // window with nothing open, which is all the rows here ever need it to be.
+      terminals: [],
       createTerminal: (options) => {
         const terminal = { ...options, shown: 0, sent: [] };
         terminals.push(terminal);
@@ -175,11 +184,14 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     keyForTask = () => undefined;
     repaint = () => {};
     confirmScript = async () => true;
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, SCAN_SETTINGS };
+    // The real one waits fifteen seconds on a task that will not die. The
+    // harness gives that answer straight away, either way round.
+    stopExecution = async () => ${stops};
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, SCAN_SETTINGS };
   `,
     Object.assign(context, { memento }),
   );
-  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints };
+  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -877,7 +889,7 @@ test('a heading whose project is hidden travels into the pile with it', async ()
 
   // Neither eye on it: it is already in the pile, and it cannot leave on its own.
   assert.equal(h.treeItemFor(pile.children[0]).contextValue, 'group:package:hidden');
-  assert.equal(h.treeItemFor(carried).contextValue, 'group:package:down:carried');
+  assert.equal(h.treeItemFor(carried).contextValue, 'compose:down:carried');
 
   // And the rule that it stays inside its project still holds, so the drop that
   // brings a put-away heading back is not its to make — honouring it would write
@@ -1169,23 +1181,23 @@ test('a compose heading says whether its stack is up, and no other heading does'
 
   // Nobody has asked Docker yet, which is not "the stack is down" — but it is
   // not "up" either, and ▶ is what a heading in that state offers.
-  assert.equal(heading(), 'group:package:down');
+  assert.equal(heading(), 'compose:down');
   h.containers.set('file:///repo/docker-compose.yml', new Set(['web']));
-  assert.equal(heading(), 'group:package:up');
+  assert.equal(heading(), 'compose:up');
 
   // A run of ours outranks it, the way it does on the row: ⟳ and ■ take the slot.
   h.running.set(rows[0].key, { task: { name: 'up' } });
-  assert.equal(heading(), 'group:package:up:running');
+  assert.equal(heading(), 'compose:up:running');
   h.running.clear();
 
   // Every clause that matched a package row before still matches one, compose or
   // not — the state rides in front of the anchored tail.
-  assert.match(heading(), /^group:package(:(up|down))?(:hidden)?(:running)?$/);
+  assert.match(heading(), /^compose:(up|down)(:(hidden|carried))?(:running)?$/);
   const npm = h.treeItemFor(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
   assert.equal(npm.contextValue, 'group:package');
 });
 
-test('▶ on a compose heading runs the file\'s own up, and ■ stops its containers', async () => {
+test('▶ on a compose item runs up, and ■ runs down', async () => {
   const h = harness({ settings: { grouping: 'flat' } });
   const rows = composeFile();
   const heading = h.buildTreeRoots(rows)[0];
@@ -1198,10 +1210,126 @@ test('▶ on a compose heading runs the file\'s own up, and ■ stops its contai
   await h.stopStack(heading);
   // Filed under the same row — the square belongs to the row it was pressed on —
   // with only the terminal's title saying what is being run.
-  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up', 'up']);
-  // `stop` and not `down` — the words themselves are `stopContainers`', which the
-  // square on the row inside already hands to Docker.
-  assert.match(h.launched[1].name, /^stop\b/);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up', 'down']);
+  assert.match(h.launched[1].name, /^down\b/);
+});
+
+test('a compose row carries no confirmation toggle, and no flag on it survives', async () => {
+  // The file is one leaf, so there is no row to hang the toggle on and no way
+  // back off once it is on. Rather than raise a dialog naming a menu entry that
+  // does not exist, a compose action simply never asks — and a flag an older
+  // version stored against one is dropped on the next scan.
+  const rows = composeFile();
+  const h = harness({
+    settings: { grouping: 'flat' },
+    scan: rows,
+    stored: {
+      confirmations: [
+        'file:///repo/docker-compose.yml::down',
+        'file:///repo/package.json::deploy',
+      ],
+      favorites: ['file:///repo/docker-compose.yml::up'],
+    },
+  });
+  const row = h.treeItemFor({ kind: 'script', script: rows[2] });
+  assert.equal(row.contextValue, 'script:idle:nofav:task');
+  assert.equal(row.tooltip.includes('Asks before it starts or stops.'), false);
+
+  // The stored flag is not merely ignored: it would otherwise sit in the ⋮
+  // menu's count of guarded rows for ever, with nothing able to clear it but
+  // Reset all confirmations. The star beside it stays — that one still works.
+  await h.pruneStaleRefs(rows);
+  assert.deepEqual(h.memento.data.confirmations, ['file:///repo/package.json::deploy']);
+  assert.deepEqual(h.memento.data.favorites, ['file:///repo/docker-compose.yml::up']);
+
+  // Neither half of the toggle matches a value that stops before the axis.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const matches = (command, value) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}`)
+      .some((entry) => new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]).test(value));
+  assert.equal(matches('enableConfirmation', row.contextValue), false);
+  assert.equal(matches('disableConfirmation', row.contextValue), false);
+  // A task row still has both halves and everything else the axis sits behind.
+  const npm = h.treeItemFor({ kind: 'script', script: script('/repo/package.json', 'deploy', 'npm') });
+  assert.equal(npm.contextValue, 'script:idle:nofav:task:confirm');
+  assert.equal(matches('disableConfirmation', npm.contextValue), true);
+  const sh = h.treeItemFor({ kind: 'script', script: shell('/repo/scripts', 'deploy.sh') });
+  assert.equal(matches('addToTerminal', sh.contextValue), true);
+});
+
+test('▶ will not raise a second up over a run of ours', async () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = composeFile();
+  const heading = h.buildTreeRoots(rows)[0];
+  h.running.set(rows[0].key, { task: { name: 'up' } });
+
+  // The button is not drawn on a running row, but a context value is what the
+  // tree was last told. A second `up` would take the key in `running` from the
+  // first, leaving that terminal with nothing in here able to stop it.
+  await h.runGroup(heading);
+  assert.deepEqual([...h.launched], []);
+
+  // And the row only stands for the bare `up`: one service of it running is
+  // not the stack being up, so ▶ still brings the rest of it up.
+  h.running.clear();
+  h.running.set(rows[1].key, { task: { name: 'up: web' } });
+  await h.runGroup(heading);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up']);
+});
+
+test('■ leaves the stack alone when something of ours would not stop', async () => {
+  const h = harness({ settings: { grouping: 'flat' }, stops: false });
+  const rows = composeFile();
+  const heading = h.buildTreeRoots(rows)[0];
+  h.running.set(rows[0].key, { task: { name: 'up' } });
+
+  // `stopExecution` has already said on screen that the task is still running.
+  // A `down` on top of that is the stack being removed while an `up` is still
+  // there to raise it again.
+  await h.stopStack(heading);
+  assert.deepEqual([...h.launched], []);
+});
+
+test('every action a compose row has stays on it once the row is put away', () => {
+  // The row is a leaf, so there is no opening it to reach what is inside. A
+  // compose file in the pile with a run under it used to match no stop clause
+  // at all, which left the stack with no way down short of a terminal.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const clauses = (command) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}`)
+      .map((entry) => entry.when.match(/viewItem =~ \/(.+)\/$/)[1]);
+  const matches = (command, value) =>
+    clauses(command).some((pattern) => new RegExp(pattern).test(value));
+
+  for (const state of ['compose:up', 'compose:down', 'compose:up:hidden:running', 'compose:down:carried']) {
+    assert.equal(matches('stopStack', state), true, `stopStack on ${state}`);
+    assert.equal(matches('composeActions', state), true, `composeActions on ${state}`);
+    assert.equal(matches('openManifest', state), true, `openManifest on ${state}`);
+  }
+  // ▶ is the one exception, and both halves of it are deliberate: a row in the
+  // pile is out of the way until it is taken out, and a row with a run of ours
+  // on it already has its `up`.
+  assert.equal(matches('runGroup', 'compose:down'), true);
+  assert.equal(matches('runGroup', 'compose:up:running'), false);
+  assert.equal(matches('runGroup', 'compose:down:hidden'), false);
+  // And a package heading keeps every clause it had; `compose` is not a prefix
+  // of it, nor it of `compose`.
+  assert.equal(matches('stopStack', 'group:package:up:running'), false);
+  assert.equal(matches('openManifest', 'group:package:up:hidden:running'), true);
+});
+
+test('the compose context picker offers service up and the extra commands', async () => {
+  const rows = [
+    ...composeFile(),
+    { ...script('/repo/docker-compose.yml', 'logs', 'docker-compose'), command: 'docker compose logs -f' },
+  ];
+  const h = harness({ settings: { grouping: 'flat' }, pick: 1 });
+  await h.composeActions(h.buildTreeRoots(rows)[0]);
+
+  assert.deepEqual([...h.quickPicks[0].items].map((item) => item.label), ['$(play) Up web', 'logs']);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['logs']);
 });
 
 test('a compose heading spins while any part of its stack runs', () => {
@@ -1241,23 +1369,23 @@ test('a compose heading spins while any part of its stack runs', () => {
   assert.deepEqual({ ...npm.treeItemFor(npm.buildTreeRoots([dev])[0]).iconPath }, { themeFile: true });
 });
 
-test('the heading buttons have nothing to act on without an up row', async () => {
+test('a compose item can still run down when its internal up action is absent', async () => {
   const h = harness({ settings: { grouping: 'flat' } });
   // `composeCommands` narrowed to a list without `up`: there is no such thing as
   // bringing this file up, so the heading carries neither button.
   const rows = composeFile().filter((row) => row.name === 'down');
   const heading = h.buildTreeRoots(rows)[0];
-  assert.equal(h.treeItemFor(heading).contextValue, 'group:package');
+  assert.equal(h.treeItemFor(heading).contextValue, 'compose');
   await h.runGroup(heading);
   await h.stopStack(heading);
   // A package heading is not a stack either.
   await h.runGroup(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
-  assert.deepEqual(h.launched, []);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['down']);
 });
 
 // --- what a heading looks like the first time it is seen ------------------------
 
-test('a compose heading starts shut, and the store remembers opening it', () => {
+test('a compose file is a leaf while ordinary groups remain expandable', () => {
   const PKG = script('/repo/package.json', 'dev', 'npm');
   const COMPOSE = script('/repo/docker-compose.yml', 'up', 'docker-compose');
   const SCRIPTS = shell('/repo/scripts', 'deploy.sh');
@@ -1268,19 +1396,17 @@ test('a compose heading starts shut, and the store remembers opening it', () => 
   const state = (node) => h.treeItemFor(node).collapsibleState;
   const [compose, scripts] = roots[0].children.filter((node) => node.kind === 'group');
 
-  // Seven rows for one file, most of them read rather than pressed: shut.
-  assert.equal(state(compose), 1, 'compose starts collapsed');
+  assert.equal(state(compose), 0, 'compose is not a folder');
   // Everything else is unchanged — the project and its script folder open.
   assert.equal(state(roots[0]), 2, 'the project starts expanded');
   assert.equal(state(scripts), 2, 'a script folder starts expanded');
 
-  // For a group that starts shut the store holds the opposite exception, so a
-  // ref in it means the user opened this one.
+  // Old fold state cannot turn the file back into a folder.
   const opened = harness({ scan, stored: { collapsed: ['file:///repo/docker-compose.yml'] } });
   const composeAgain = opened
     .buildTreeRoots(scan)[0]
     .children.filter((node) => node.kind === 'group')[0];
-  assert.equal(opened.treeItemFor(composeAgain).collapsibleState, 2, 'a remembered open stays open');
+  assert.equal(opened.treeItemFor(composeAgain).collapsibleState, 0, 'remembered fold state is ignored');
 });
 
 // --- asking Docker again --------------------------------------------------------
