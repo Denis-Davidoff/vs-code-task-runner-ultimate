@@ -334,6 +334,10 @@ test('a Dockerfile offers build, the configured extras, and one build per named 
   assert.equal(parsed.packageName, undefined);
 });
 
+// Both conventions collapse to the same profile word, so the two files build the
+// same reference. Known and documented rather than guarded against: telling them
+// apart would need a marker in the tag that nobody would want to read. Use one
+// convention per folder.
 test('a profile in the file name qualifies the tag, stage and all', async () => {
   const { parseDockerfile } = harness({ settings: { dockerfileCommands: ['run', 'push'] } });
   const at = { path: '/repo/apps/api' };
@@ -417,6 +421,111 @@ test('a known verb keeps its file, its tag and its context when flags follow it'
   // A verb carrying flags is the one row that was asked for: only the bare
   // `build` fans out, which is the rule `parseCompose` already follows for `up`.
   assert.equal(parsed.tasks.filter((task) => task.name.startsWith('build --no-cache')).length, 1);
+});
+
+test('every derived reference is one Docker will parse', async () => {
+  // Docker's own grammar: a repository component is alphanumeric runs joined by
+  // a single `.`/`_`, a `__`, or a run of `-`. A folder may be called anything,
+  // so `my..app` and `a___b` used to produce `invalid reference format` on every
+  // row of the group.
+  const component = /^[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*$/;
+  const tagRe = /^[\w][\w.-]{0,127}$/;
+  const valid = (ref) => {
+    const [repository, tag] = ref.split(':');
+    return repository.split('/').every((part) => component.test(part)) && (tag === undefined || tagRe.test(tag));
+  };
+  const { parseDockerfile } = harness({ settings: { dockerfileCommands: [] } });
+  const ref = async (folder, file = 'Dockerfile') =>
+    tagged(plain(await parseDockerfile('FROM scratch\n', file, { path: `/repo/${folder}` })).tasks[0]);
+
+  for (const folder of ['my..app', 'my._app', 'a___b', 'v1..2', '@acme/web', 'MyApp', '@@@']) {
+    assert.ok(valid(await ref(folder)), `${folder} -> ${await ref(folder)}`);
+  }
+  // A dot never survives in the repository half, and that is the point rather
+  // than a side effect: Docker reads a first component carrying one as a
+  // registry domain, so `push` would have pushed at a real remote.
+  assert.equal(await ref('example.com'), 'example-com');
+  // The tag half is bounded at 128, which a profile read off a file name is not.
+  assert.equal((await ref('api', `Dockerfile.${'a'.repeat(200)}`)).split(':')[1].length, 128);
+});
+
+test('an image the user names, or a stage they target, is the one that is built', async () => {
+  const at = { path: '/repo/services/api' };
+  const commands = async (entry) =>
+    plain(
+      await harness({ settings: { dockerfileCommands: [entry] } }).parseDockerfile(
+        'FROM scratch AS builder\n',
+        'Dockerfile',
+        at,
+      ),
+    ).tasks.map((task) => task.command);
+
+  // `-t` of the user's own replaces the derived one. Appended alongside it,
+  // `docker build -t acme/api -t api .` applied *both* names — so the documented
+  // way of naming an image yourself changed nothing about the name `run` uses.
+  assert.deepEqual((await commands('build -t acme/api')).at(-1), 'docker build -f Dockerfile -t acme/api .');
+  // A `--target` of the user's own is what the tag is derived for, so an entry
+  // that builds one stage cannot land on the whole image's name.
+  assert.deepEqual(
+    (await commands('build --target builder')).at(-1),
+    'docker build -f Dockerfile --target builder -t api/builder .',
+  );
+  // `push` takes exactly one NAME, so a reference of the user's own replaces the
+  // derived one rather than becoming a second positional argument.
+  const push = async (entry) =>
+    plain(
+      await harness({ settings: { dockerfileCommands: [entry] } }).parseDockerfile('FROM scratch\n', 'Dockerfile', {
+        path: '/repo/api',
+      }),
+    ).tasks.at(-1).command;
+  assert.equal(await push('push acme/api'), 'docker push acme/api');
+  // `--platform` is the one option of `push` that takes a value, so its value is
+  // not mistaken for the image.
+  assert.equal(await push('push --platform linux/amd64'), 'docker push --platform linux/amd64 api');
+});
+
+test('a bundle of short options carrying -d still detaches nothing', async () => {
+  const run = async (entry) =>
+    plain(
+      await harness({ settings: { dockerfileCommands: [entry] } }).parseDockerfile('FROM scratch\n', 'Dockerfile', {
+        path: '/repo/api',
+      }),
+    ).tasks.at(-1).command;
+  // `docker run -dit` is in Docker's own documentation, and the `-d` inside it
+  // detaches exactly as one on its own would: the row would exit at once, the
+  // square would have nothing to stop, and no Check Containers reaches a
+  // Dockerfile row.
+  assert.equal(await run('run -dit'), 'docker run --rm -it api');
+  assert.equal(await run('run -itd'), 'docker run --rm -it api');
+  // `--detach-keys` sets a key sequence rather than detaching, and `-D` is
+  // `--debug`. Neither is swept up.
+  assert.equal(await run('run --detach-keys=ctrl-a'), 'docker run --rm -it --detach-keys=ctrl-a api');
+  assert.equal(await run('run -D'), 'docker run --rm -it -D api');
+});
+
+test('a file that is about a Dockerfile, or is one waiting to be rendered, is not one', () => {
+  const { manifestKind } = harness();
+  const kind = (name) => manifestKind({ path: `/repo/${name}` });
+  // The `FROM` check cannot turn these away: a template *is* a Dockerfile
+  // textually, and a document explaining how to write one quotes a `FROM`.
+  for (const name of ['Dockerfile.md', 'Dockerfile.j2', 'Dockerfile.template', 'Dockerfile.orig', 'Dockerfile.rej']) {
+    assert.equal(kind(name), undefined, name);
+  }
+  // The last segment decides, so what a conflicted merge leaves beside
+  // `Dockerfile.dev` is refused on the `orig` rather than believed on the `dev`.
+  assert.equal(kind('Dockerfile.dev.orig'), undefined);
+  assert.equal(kind('Dockerfile.dev'), 'dockerfile');
+  // Only the `Dockerfile.<profile>` spelling is tested: in the other convention
+  // the word is a name the author chose.
+  assert.equal(kind('template.Dockerfile'), 'dockerfile');
+});
+
+test('a setting entry cannot collide with a generated stage row', async () => {
+  // The generated names are claimed in the same set the entries are, so the
+  // scan's own per-manifest de-duplication is never the thing that drops one.
+  const { parseDockerfile } = harness({ settings: { dockerfileCommands: ['build: deps'] } });
+  const parsed = plain(await parseDockerfile('FROM scratch AS deps\n', 'Dockerfile', { path: '/repo/api' }));
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['build', 'build: deps']);
 });
 
 test('a verb of the user\'s own runs as written, with no file and no image bolted on', async () => {
