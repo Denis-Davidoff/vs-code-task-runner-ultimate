@@ -902,28 +902,44 @@ function confirmRefs(): string[] {
 }
 
 /**
- * Never a compose action, whatever is stored against it.
+ * The manifest kinds the tree draws as a single row rather than as a folder of
+ * rows — see `isFileItem`, which reads this for the node side of the same
+ * question. Kept as a set of kinds because the rules that turn on it are about
+ * the *task*, which knows its kind and not the node it is drawn under.
+ */
+function isItemKind(kind: SourceKind): boolean {
+  return kind === 'docker-compose' || kind === 'dockerfile';
+}
+
+/**
+ * Never an action of a file the tree draws as one row, whatever is stored
+ * against it.
  *
- * A compose file is one leaf in the tree — ▶, ■ and a menu of extra commands,
- * with no rows underneath — so there is nowhere to put the toggle and nowhere
- * to turn it back off. A dialog naming a switch the user cannot reach is worse
- * than no dialog, and ▶ and ■ on a stack are already the deliberate gesture the
- * flag exists to make you perform: pressing either is a decision about the whole
- * file, not about one row among forty.
+ * A compose file and a Dockerfile are one leaf each — ▶, the buttons beside it
+ * and a menu of extra commands, with no rows underneath — so there is nowhere to
+ * put the toggle and nowhere to turn it back off. A dialog naming a switch the
+ * user cannot reach is worse than no dialog, and ▶ on a stack or an image is
+ * already the deliberate gesture the flag exists to make you perform: pressing it
+ * is a decision about the whole file, not about one row among forty.
  *
- * Flags left on a compose row by an older version are dropped rather than
- * honoured in silence — see `pruneStaleRefs`.
+ * Starring does not buy the toggle back. A starred row is drawn in the favourites
+ * with a full menu, but starring needs a row to star and the dropdown offers no
+ * star — so a flag set on one of these would be a setting with no way off but the
+ * global reset, which is the whole of what this rule prevents.
+ *
+ * Flags left on such a row by an older version are dropped rather than honoured
+ * in silence — see `pruneStaleRefs`.
  */
 function needsConfirmation(script: ScriptEntry): boolean {
-  return script.kind !== 'docker-compose' && confirmRefs().includes(scriptRef(script));
+  return !isItemKind(script.kind) && confirmRefs().includes(scriptRef(script));
 }
 
 /** The two halves of the toggle in the context menu, one command each. */
 async function setConfirmation(node: TreeNode | undefined, on: boolean): Promise<void> {
-  // Compose rows carry no confirmation axis in their context value, so neither
+  // These rows carry no confirmation axis in their context value, so neither
   // half of the toggle is ever on their menu. Refused here as well, for the
   // command invoked any other way.
-  if (node?.kind !== 'script' || node.script.kind === 'docker-compose') {
+  if (node?.kind !== 'script' || isItemKind(node.script.kind)) {
     return;
   }
   const ref = scriptRef(node.script);
@@ -1898,15 +1914,15 @@ async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
     return group !== undefined && scanned.has(group) && !live.has(ref);
   };
 
-  // A compose row does not ask any more — see `needsConfirmation` — so a flag an
-  // older version left on one is a setting with nothing behind it: it changes
-  // nothing, has no toggle to clear it, and still counts in the ⋮ menu's tally
-  // of guarded rows. Dropped here, where the scan says which refs those are.
-  // Stars are not: a compose row can still be starred, and still shows in the
-  // favourites at the top.
-  const unguarded = new Set(
-    scripts.filter((script) => script.kind === 'docker-compose').map(scriptRef),
-  );
+  // A compose row and a Dockerfile row do not ask any more — see
+  // `needsConfirmation` — so a flag an older version left on one is a setting
+  // with nothing behind it: it changes nothing, has no toggle to clear it, and
+  // still counts in the ⋮ menu's tally of guarded rows. Dropped here, where the
+  // scan says which refs those are. The Dockerfile half matters on upgrade: its
+  // rows were ordinary rows with the toggle on them until they became one leaf.
+  // Stars are not dropped: such a row can still be starred, and still shows in
+  // the favourites at the top.
+  const unguarded = new Set(scripts.filter((script) => isItemKind(script.kind)).map(scriptRef));
 
   for (const [key, refs, dropped] of [
     [FAVORITES_KEY, favoriteRefs(), undefined],
@@ -3073,7 +3089,7 @@ function startsOpen(node: TreeNode): boolean {
  * the rest behind the menu button beside it.
  */
 function isFileItem(node: TreeNode): boolean {
-  return node.kind === 'group' && (node.source === 'docker-compose' || node.source === 'dockerfile');
+  return node.kind === 'group' && node.source !== undefined && isItemKind(node.source);
 }
 
 function isCollapsed(node: TreeNode): boolean {
@@ -3862,15 +3878,32 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // A Dockerfile takes a head of its own for the same reason compose has one:
     // the row is a file that is run rather than a package that holds rows, so the
     // package's menu — Run/Stop on a script, the confirmation toggle — is not the
-    // menu it wants. It carries no `stacked` segment: `composeUpNode` answers for
-    // compose alone, and nothing asks Docker whether an image exists.
+    // menu it wants.
     const head =
       node.source === 'docker-compose'
         ? 'compose'
         : node.source === 'dockerfile'
           ? 'dockerfile'
           : 'group:package';
-    const state = `${head}${stacked}${put}`;
+    // What the file's own action is doing, in the slot compose fills with `:up`
+    // and `:down`. A Dockerfile's own action is `build`, and the only thing a
+    // `when` clause needs of it is whether *that* is what is running.
+    //
+    // `:running` cannot answer it. That segment is true when anything under the
+    // row is alive, and the commonest thing alive under a Dockerfile is the
+    // container `run` started — which has nothing to do with whether the image
+    // can be rebuilt. Keying ▶ on `:running` took the rebuild out of the
+    // edit-build-restart loop at exactly the point the loop needs it, so the one
+    // press ▶ must refuse is the second build over a live one, and that is what
+    // this says. `runLead` refuses it again by key, for the press that arrives
+    // before the tree has been repainted.
+    //
+    // It never appears beside `stacked`: `composeUpNode` answers for compose
+    // alone and `dockerfileBuildNode` for Dockerfiles alone, so a row has one
+    // slot filled or neither.
+    const lead = dockerfileBuildNode(node);
+    const building = lead && running.has(lead.script.key) ? ':building' : '';
+    const state = `${head}${stacked}${building}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
@@ -3939,12 +3972,14 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // shell rows and nowhere else. It goes here rather than after `confirm`
     // because that one is matched with a `$` anchor — see below.
     node.script.kind === 'shell' ? 'shell' : 'task',
-    // The last axis, and absent altogether on a compose row — which is the whole
-    // of how neither half of the toggle reaches one. Both clauses that offer it
-    // end in `:confirm$` or `:noconfirm$`, so a value that simply stops here
-    // matches neither, and the menu is one entry shorter rather than showing a
-    // switch for a row that never asks. See `needsConfirmation`.
-    ...(node.script.kind === 'docker-compose'
+    // The last axis, and absent altogether on a row whose file the tree draws as
+    // one item — which is the whole of how neither half of the toggle reaches
+    // one. Both clauses that offer it end in `:confirm$` or `:noconfirm$`, so a
+    // value that simply stops here matches neither, and the menu is one entry
+    // shorter rather than showing a switch for a row that never asks. It reaches
+    // a starred Dockerfile action, which is the one place such a row is still
+    // drawn. See `needsConfirmation`.
+    ...(isItemKind(node.script.kind)
       ? []
       : [needsConfirmation(node.script) ? 'confirm' : 'noconfirm']),
   ].join(':');

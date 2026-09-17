@@ -42,9 +42,9 @@ restart without ever going looking for a terminal tab.**
   them.
 - 🏗️ **[Dockerfiles, as one row each](#dockerfiles)** — every `Dockerfile`, `Dockerfile.dev` and
   `api.Dockerfile` in the workspace. **▶ on the file's own row builds it** and ☰ beside it holds the
-  rest — `run`, `push` and one build per `FROM … AS <stage>` — so a file is a line rather than a
-  folder, and the row spins while a build runs. The image is tagged after the folder it sits in, so a
-  build leaves something you can run rather than a dangling id.
+  rest — one build per `FROM … AS <stage>`, plus `run` and whatever else `dockerfileCommands` names —
+  so a file is a line rather than a folder, and the row spins while a build runs. The image is tagged
+  after the folder it sits in, so a build leaves something you can run rather than a dangling id.
 - 💻 **[Shell scripts, as tasks](#shell-scripts)** — `.sh`, `.bash`, `.zsh` and `.ksh`, and on Windows
   `.ps1`, `.bat` and `.cmd`, picked up from `scripts/`, `bin/` and the workspace root at any depth.
   Each project's scripts gather under one `shell` folder with a terminal icon, a row no category
@@ -259,9 +259,9 @@ would not stop stops the whole gesture — the warning about it is on screen, an
 removed. ▶ is the same care from the other side: a second `up` over a running one is never started.
 
 The item also **spins while any part of the file is running** — one `up: web` out of six services
-counts. It is the one item that does: every other heading is a file or a folder that *holds* tasks
-rather than being one, and a spinner on all of them would be a column of spinners in a monorepo with
-a single `dev` running.
+counts. It and a [Dockerfile](#dockerfiles) are the two items that do: every other heading is a file
+or a folder that *holds* tasks rather than being one, and a spinner on all of them would be a column
+of spinners in a monorepo with a single `dev` running.
 
 Two details are deliberate. **Nothing is ever run detached**: a `-d` command exits the moment it
 starts, which would leave the item idle with the containers still up and ■ with nothing to stop.
@@ -726,10 +726,12 @@ a restart. Like the stars and the renames, the folds live in the workspace's own
 per-workspace and per-machine and never reach `git status`.
 
 The one that starts shut is **hidden**, whose whole point is to be out of the way. A **compose file**
-is not on that list any more for a better reason: it does not fold at all. One file is seven rows
-where a `package.json` is seven scripts, and most of them — `build`, `logs`, `ps` — are things you
-go looking for rather than press, so the file is [a single item](#docker-compose) with its two
-buttons and a menu, and there is nothing left to open.
+and a **Dockerfile** are not on that list any more for a better reason: neither folds at all. One
+compose file is seven rows where a `package.json` is seven scripts, and most of them — `build`,
+`logs`, `ps` — are things you go looking for rather than press; a Dockerfile is the same case, where
+`build` is the row and the stages are variations on it. So each is a single item
+([compose](#docker-compose), [Dockerfile](#dockerfiles)) with its buttons and a menu, and there is
+nothing left to open.
 
 Every heading is read in the same two parts — **name, bullet, path**:
 
