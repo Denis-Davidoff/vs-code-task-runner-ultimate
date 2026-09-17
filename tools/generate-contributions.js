@@ -649,6 +649,8 @@ const MANIFEST_FILES = [
   'docker-compose.yaml',
   'compose.yml',
   'compose.yaml',
+  'Dockerfile',
+  'dockerfile',
 ];
 
 /*
@@ -661,6 +663,13 @@ const COMPOSE_GLOBS = [
   'docker-compose.*.yml',
   'docker-compose.*.yaml',
 ];
+
+/*
+ * The profile-named Dockerfiles, which are the same case as the compose files
+ * above and not a fixed list either; keep in step with DOCKERFILE_GLOBS in
+ * src/sources.ts. `Dockerfile` and `dockerfile` themselves are in MANIFEST_FILES.
+ */
+const DOCKERFILE_GLOBS = ['Dockerfile.*', 'dockerfile.*', '*.Dockerfile', '*.dockerfile'];
 
 /*
  * Shell scripts have no file name to wake on, so the conventional folders are
@@ -687,6 +696,7 @@ const SHELL_FOLDERS = [`**/scripts/**/${SHELL_FILES}`, `**/bin/**/${SHELL_FILES}
 manifest.activationEvents = [
   ...MANIFEST_FILES.map((file) => `workspaceContains:**/${file}`),
   ...COMPOSE_GLOBS.map((glob) => `workspaceContains:**/${glob}`),
+  ...DOCKERFILE_GLOBS.map((glob) => `workspaceContains:**/${glob}`),
   ...SHELL_FOLDERS.map((glob) => `workspaceContains:${glob}`),
   'onTaskType:taskRunnerUltimate',
   'onView:taskRunnerUltimate.tree',

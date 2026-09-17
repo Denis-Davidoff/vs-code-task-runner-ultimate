@@ -1,4 +1,4 @@
-import { JUST_RECIPE, MAKE_TARGET, SourceKind, yamlBlockKeys } from './sources';
+import { DOCKERFILE_STAGE, JUST_RECIPE, MAKE_TARGET, SourceKind, yamlBlockKeys } from './sources';
 
 /**
  * Where a task is written down in its manifest: a zero-based line, and the span
@@ -61,9 +61,41 @@ export function locateTask(text: string, kind: SourceKind, name: string): TaskLo
       return justRecipe(lines, name);
     case 'taskfile':
       return yamlKey(lines, 'tasks', name);
+    case 'dockerfile':
+      return dockerfileStage(lines, name);
     default:
       return loose(lines, name);
   }
+}
+
+// --- Dockerfile --------------------------------------------------------------
+
+/**
+ * The `FROM … AS <stage>` line a `build: <stage>` row was derived from.
+ *
+ * The one row in a Dockerfile group that points at anything: `build`, `run` and
+ * whatever `dockerfileCommands` adds are subcommands nobody wrote down, so those
+ * open the file at the top like cargo's and compose's do.
+ *
+ * The stage name is selected rather than the line, which is why the column is
+ * measured off the match: it is the word a rename would have to touch.
+ */
+function dockerfileStage(lines: string[], name: string): TaskLocation | undefined {
+  const at = name.indexOf('build: ');
+  if (at !== 0) {
+    return undefined;
+  }
+  const stage = name.slice('build: '.length);
+  for (let line = 0; line < lines.length; line++) {
+    const found = DOCKERFILE_STAGE.exec(lines[line]);
+    if (found?.[1] === stage) {
+      // `lastIndexOf` rather than `indexOf`: a stage is very often named after
+      // the image it is built from — `FROM builder AS builder` — and the first
+      // occurrence there is the wrong half of the line.
+      return { line, character: lines[line].lastIndexOf(stage), length: stage.length };
+    }
+  }
+  return undefined;
 }
 
 // --- JSON --------------------------------------------------------------------

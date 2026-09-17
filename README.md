@@ -32,14 +32,18 @@ restart without ever going looking for a terminal tab.**
   come first.
 - 🧩 **[Eleven ecosystems, one list](#what-gets-scanned)** — `package.json`, `deno.json`, `Cargo.toml`,
   `Makefile.toml`, `pyproject.toml`, `Pipfile`, `tox.ini`, `noxfile.py`, `Makefile`, `justfile`,
-  `Taskfile.yml`, `go.mod`, `composer.json`, `mise.toml`, `docker-compose.yml` and the shell scripts
-  every repository accumulates, so a mixed monorepo is still one list.
+  `Taskfile.yml`, `go.mod`, `composer.json`, `mise.toml`, `docker-compose.yml`, `Dockerfile` and the
+  shell scripts every repository accumulates, so a mixed monorepo is still one list.
 - 🐳 **[Docker Compose, as rows](#docker-compose)** — every compose file in the workspace, including
   the profile-named ones, with `up` fanned out per service and `down`, `build`, `logs` and `ps`
   beside it. **▶ and ■ live on the file's own heading**, so a stack goes up and comes down without
   opening it, and the heading spins while any part of it runs. **Check Containers** asks Docker what
   is really up — including stacks you started from a terminal or with `up -d` — and ■ then stops
   them.
+- 🏗️ **[Dockerfiles, as rows](#dockerfiles)** — every `Dockerfile`, `Dockerfile.dev` and
+  `api.Dockerfile` in the workspace, with `build` fanned out per `FROM … AS <stage>` and `run` beside
+  it. The image is tagged after the folder it sits in, so a build leaves something you can run rather
+  than a dangling id.
 - 💻 **[Shell scripts, as tasks](#shell-scripts)** — `.sh`, `.bash`, `.zsh` and `.ksh`, and on Windows
   `.ps1`, `.bat` and `.cmd`, picked up from `scripts/`, `bin/` and the workspace root at any depth.
   Each project's scripts gather under one `shell` folder with a terminal icon, a row no category
@@ -108,8 +112,8 @@ above it. Everything else names its own runner by the table it is declared in: a
 monorepo.
 
 - **Every task, one list** — [eleven ecosystems](#what-gets-scanned): Node, Rust, Python, Make, just,
-  go-task, Go, Composer, mise, Docker Compose and the `scripts/*.sh` every repository accumulates —
-  grouped per manifest, or [per ecosystem](#grouping-by-ecosystem), with `node_modules`, `target`,
+  go-task, Go, Composer, mise, Docker (compose files and Dockerfiles alike) and the `scripts/*.sh`
+  every repository accumulates — grouped per manifest, or [per ecosystem](#grouping-by-ecosystem), with `node_modules`, `target`,
   `.venv` and build output skipped.
 - **Searchable by command, not just by name** — type `vitest` and find the script that runs it.
 - **Running tasks included** — even ones this extension did not start: tasks from `tasks.json`, other
@@ -165,6 +169,7 @@ monorepo.
 | **PHP** | `composer.json` | `scripts` | `composer run-script <name>` |
 | **mise** | `mise.toml`, `.mise.toml` | `[tasks.*]` | `mise run <name>` |
 | **Docker** | `compose.yml`, `docker-compose.yml`, their `.yaml` spellings, and profile names like `docker-compose.dev.yml` | `services:` — see [below](#docker-compose) | `docker compose -f <file> up <service>`, … |
+| | `Dockerfile`, `Dockerfile.dev`, `api.Dockerfile` | the `FROM … AS <stage>` stages — see [below](#dockerfiles) | `docker build -f <file> --target <stage> -t <tag> .`, … |
 | **Shell** | `**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}`, the same under `**/bin/**/`, and `*.{sh,…}` in the root | the files themselves — see [below](#shell-scripts) | `bash ./scripts/deploy.sh`, `powershell -NoProfile -File ./bin/setup.ps1` |
 
 Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's files are never
@@ -322,6 +327,55 @@ that.
 This is the one thing in the extension that starts a process. Everything else reads the workspace
 through VS Code's own file API, which is what keeps it working over Remote SSH and in Dev Containers;
 the code for this lives in a file of its own, `src/containers.ts`, so the boundary is visible.
+
+### Dockerfiles
+
+A Dockerfile declares build stages, not tasks, so — like a compose file — its rows are the `docker`
+subcommands worth having on a list: `build`, and `run` by default, set by
+`taskRunnerUltimate.dockerfileCommands`.
+
+`build` is the one that fans out. Every named `FROM … AS <stage>` gets a row of its own that passes
+`--target`, so the intermediate stages of a multi-stage build are one click each rather than a
+command you have to remember:
+
+```text
+Dockerfile • apps/api
+  📦 build            docker build -f Dockerfile -t api .
+  📦 build: deps      docker build -f Dockerfile --target deps -t api:deps .
+  📦 build: builder   docker build -f Dockerfile --target builder -t api:builder .
+  ▶ run               docker run --rm -it api
+```
+
+A stage with no name is not a row: `--target` needs one. The bare `build` stays even when the last
+stage is named, because `docker build` with no target is what most people want and the menu reads the
+same whatever the file holds.
+
+**The tag.** Nothing in a Dockerfile says what the image should be called, and a `docker build` with
+no `-t` leaves a dangling image with an id for a name. So the folder is the name — the same thing
+compose does for a project that does not name itself — lowercased and reduced to what Docker accepts.
+The tag after the colon is what keeps the Dockerfiles of one folder apart: the profile from the file
+name, the stage being targeted, or both. A plain `Dockerfile` in `apps/api` builds `api`;
+`Dockerfile.dev` builds `api:dev`, and its `builder` stage builds `api:dev-builder`.
+
+**The context** is the directory the Dockerfile sits in, which is also the directory every row runs
+in. A Dockerfile kept in `docker/` and built from the repository root is a real layout, but nothing in
+the file says so — so the default is the honest one every other manifest here uses.
+
+**Which files count.** `Dockerfile` and `dockerfile`, plus both profile conventions:
+`Dockerfile.dev` and `dev.Dockerfile`, each a heading of its own named after its file. Unlike compose
+the name is the whole test — nothing except a Dockerfile is called one — but a file that matched the
+name and holds no `FROM` declares no rows, which is what keeps a `Dockerfile.md` explaining how to
+write one off the list.
+
+Commands are known by name: `build`, `run` (`--rm -it`, so a row you pressed four times does not
+leave four stopped containers behind) and `push`. Anything else in `dockerfileCommands` runs as
+`docker <name>` verbatim, with no `-f` and no tag appended — `builder prune` and `image ls` mean what
+they say. Nothing is ever run detached: `-d` and `--detach` are dropped, and the row is named by what
+it actually runs, so `run -d` is listed, and behaves, as plain `run`.
+
+`docker` is not configurable the way `taskRunnerUltimate.dockerCompose` is, because there is no
+second spelling of it: compose forked into a plugin and a standalone binary, and `docker build` did
+not.
 
 ### Shell scripts
 

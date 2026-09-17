@@ -71,7 +71,7 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, readText, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
+    exports.parsers = { parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, readText, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
   `,
     context,
   );
@@ -292,6 +292,114 @@ test('manifestKind recognises the profile-named compose files and only those', (
   assert.equal(kind('deploy.staging.yml'), undefined);
 });
 
+// --- Dockerfile --------------------------------------------------------------
+
+const DOCKERFILE = `# syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM node:20 AS deps
+RUN npm ci
+
+FROM deps AS builder
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+`;
+
+test('a Dockerfile offers build, the configured extras, and one build per named stage', async () => {
+  const { parseDockerfile } = harness();
+  const parsed = plain(await parseDockerfile(DOCKERFILE, 'Dockerfile', { path: '/repo/apps/api' }));
+
+  assert.deepEqual(
+    parsed.tasks.map((task) => task.name),
+    // `build` first whatever the setting says, then its stages, then the rest.
+    // The unnamed last stage is not a row: `--target` needs a name.
+    ['build', 'build: deps', 'build: builder', 'run'],
+  );
+  assert.deepEqual(parsed.tasks.map((task) => task.command), [
+    'docker build -f Dockerfile -t api .',
+    'docker build -f Dockerfile --target deps -t api:deps .',
+    'docker build -f Dockerfile --target builder -t api:builder .',
+    'docker run --rm -it api',
+  ]);
+  // A task name reaches a shell, so the words are carried as a vector.
+  assert.deepEqual(parsed.tasks[1].argv, [
+    'docker', 'build', '-f', 'Dockerfile', '--target', 'deps', '-t', 'api:deps', '.',
+  ]);
+  // Nothing in a Dockerfile names the project, so no heading is claimed from it.
+  assert.equal(parsed.packageName, undefined);
+});
+
+test('a profile in the file name qualifies the tag, stage and all', async () => {
+  const { parseDockerfile } = harness({ settings: { dockerfileCommands: ['run', 'push'] } });
+  const at = { path: '/repo/apps/api' };
+  for (const file of ['Dockerfile.dev', 'dev.Dockerfile']) {
+    const parsed = plain(await parseDockerfile(DOCKERFILE, file, at));
+    assert.deepEqual(
+      parsed.tasks.map((task) => task.command),
+      [
+        `docker build -f ${file} -t api:dev .`,
+        `docker build -f ${file} --target deps -t api:dev-deps .`,
+        `docker build -f ${file} --target builder -t api:dev-builder .`,
+        'docker run --rm -it api:dev',
+        'docker push api:dev',
+      ],
+      file,
+    );
+  }
+});
+
+test('the derived tag is a name Docker will take', async () => {
+  const { parseDockerfile } = harness({ settings: { dockerfileCommands: [] } });
+  const tag = async (folder, file = 'Dockerfile') =>
+    plain(await parseDockerfile('FROM scratch\n', file, { path: `/repo/${folder}` })).tasks[0]
+      .argv[5];
+  // The repository half is lower case only, which is the half Docker insists on.
+  assert.equal(await tag('MyApp'), 'myapp');
+  // Everything outside Docker's own alphabet becomes a dash, and a separator
+  // cannot lead: `docker build -t -web .` is a parse error, not an image.
+  assert.equal(await tag('@acme-web'), 'acme-web');
+  assert.equal(await tag('_edge_'), 'edge');
+  // A folder with nothing left in it still has to build something.
+  assert.equal(await tag('@@@'), 'image');
+  // The tag half keeps its case, since Docker allows it there.
+  assert.equal(await tag('api', 'Dockerfile.CI'), 'api:CI');
+});
+
+test('a command of the user\'s own runs verbatim, with no file and no image bolted on', async () => {
+  const { parseDockerfile } = harness({
+    settings: { dockerfileCommands: ['builder prune -f', 'run -d', 'build'] },
+  });
+  const parsed = plain(await parseDockerfile('FROM scratch\n', 'Dockerfile', cwd));
+  assert.deepEqual(parsed.tasks.map((task) => task.command), [
+    // `build` is the fixed row and listing it again does not repeat it.
+    'docker build -f Dockerfile -t repo .',
+    'docker builder prune -f',
+    // Detaching is dropped, and the row is named by what it actually runs — so
+    // `run -d` lands on `run`, which already knows what to do with the image.
+    'docker run --rm -it repo',
+  ]);
+});
+
+test('a file matched by name that builds nothing declares no tasks', async () => {
+  const { parseDockerfile } = harness();
+  const readme = '# Dockerfile.md\n\nHow to write one: start with `FROM`.\n';
+  // Read and understood, and empty — not undefined, which is what a file the
+  // scan could not make sense of comes back as.
+  assert.deepEqual(plain(await parseDockerfile(readme, 'Dockerfile.md', cwd)), { tasks: [] });
+});
+
+test('manifestKind recognises the Dockerfile conventions and only those', () => {
+  const { manifestKind } = harness();
+  const kind = (name) => manifestKind({ path: `/repo/${name}` });
+  for (const name of ['Dockerfile', 'dockerfile', 'Dockerfile.dev', 'api.Dockerfile', 'web.dockerfile']) {
+    assert.equal(kind(name), 'dockerfile', name);
+  }
+  // The word has to be the whole of one side of the dot.
+  assert.equal(kind('Dockerfileish'), undefined);
+  assert.equal(kind('.dockerignore'), undefined);
+  assert.equal(kind('docker-compose.yml'), 'docker-compose');
+});
+
 // --- the three lists that have to agree ---------------------------------------
 
 test('the scan, the manifest and the activation globs name the same extensions', () => {
@@ -328,6 +436,34 @@ test('the scan, the manifest and the activation globs name the same extensions',
     `workspaceContains:**/bin/**/${braced}`,
     `workspaceContains:${braced}`,
   ]);
+});
+
+test('the Dockerfile globs are the same three lists too', () => {
+  // Same pairing as the shell extensions above, and the same failure waiting:
+  // the scan finds a `Dockerfile.dev` the activation events never wake for, so
+  // a repository whose only manifest is one shows nothing until the view is
+  // opened by hand.
+  const read = (at) => fs.readFileSync(path.join(__dirname, at), 'utf8');
+  const globs = read('../src/sources.ts')
+    .match(/const DOCKERFILE_GLOBS: ReadonlyArray<string> = \[([^\]]*)\]/)[1]
+    .match(/'([^']+)'/g)
+    .map((quoted) => quoted.slice(1, -1));
+  assert.deepEqual(globs, ['Dockerfile.*', 'dockerfile.*', '*.Dockerfile', '*.dockerfile']);
+
+  assert.ok(
+    read('../tools/generate-contributions.js').includes(
+      `const DOCKERFILE_GLOBS = [${globs.map((glob) => `'${glob}'`).join(', ')}];`,
+    ),
+    'tools/generate-contributions.js must name the same Dockerfile globs as the scan',
+  );
+
+  const manifest = JSON.parse(read('../package.json'));
+  for (const name of ['Dockerfile', 'dockerfile', ...globs]) {
+    assert.ok(
+      manifest.activationEvents.includes(`workspaceContains:**/${name}`),
+      `package.json must wake on ${name}`,
+    );
+  }
 });
 
 // --- the shell scan ----------------------------------------------------------

@@ -23,6 +23,7 @@ export type SourceKind =
   | 'go'
   | 'mise'
   | 'docker-compose'
+  | 'dockerfile'
   | 'shell';
 
 /** What the `sources` setting switches on and off: a language or a task runner, not a file. */
@@ -78,6 +79,7 @@ const ECOSYSTEM_OF: Record<SourceKind, Ecosystem> = {
   go: 'go',
   mise: 'mise',
   'docker-compose': 'docker',
+  dockerfile: 'docker',
   shell: 'shell',
 };
 
@@ -126,6 +128,8 @@ const MANIFEST_KINDS: Record<string, SourceKind> = {
   'docker-compose.yaml': 'docker-compose',
   'compose.yml': 'docker-compose',
   'compose.yaml': 'docker-compose',
+  Dockerfile: 'dockerfile',
+  dockerfile: 'dockerfile',
 };
 
 /**
@@ -202,6 +206,53 @@ const COMPOSE_GLOBS: ReadonlyArray<string> = [
   'docker-compose.*.yaml',
 ];
 
+// --- Dockerfile names --------------------------------------------------------
+
+/**
+ * The two conventions for a Dockerfile that is not simply `Dockerfile`:
+ * `Dockerfile.dev` and `dev.Dockerfile`. Both are in the wild in roughly equal
+ * measure — the first is what Docker's own documentation uses, the second is
+ * what every editor's syntax highlighting recognises — so both are rows.
+ *
+ * Unlike compose, the name is the whole test and nothing inside the file has to
+ * agree with it: a YAML file says nothing about what it is, but nothing except
+ * a Dockerfile is called `Dockerfile`. `parseDockerfile` still insists on a
+ * `FROM`, which is a different question — whether the file has anything to
+ * build, not whether it is one.
+ *
+ * `Dockerfile` and `dockerfile` on their own are in `MANIFEST_KINDS` already,
+ * and the alternation here deliberately does not match them a second time: a
+ * name matched twice is a name whose profile would come back empty.
+ */
+const DOCKERFILE_NAME = /^(?:[Dd]ockerfile\.[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+\.[Dd]ockerfile)$/;
+
+/**
+ * The profile a Dockerfile's name carries — `dev` for both `Dockerfile.dev` and
+ * `dev.Dockerfile`, and nothing for a plain `Dockerfile`. It is what the image
+ * tag is qualified with, so two Dockerfiles in one folder do not build over each
+ * other; see `imageTag`.
+ */
+function dockerfileProfile(file: string): string | undefined {
+  const head = /^[Dd]ockerfile\.(.+)$/.exec(file);
+  const tail = /^(.+)\.[Dd]ockerfile$/.exec(file);
+  return head?.[1] ?? tail?.[1];
+}
+
+/**
+ * The globs that find the profile-named Dockerfiles above. The two bare names
+ * are in `MANIFEST_KINDS` and need none.
+ *
+ * `*.[Dd]ockerfile` is not narrowed any further on purpose: nothing else in a
+ * repository ends in that word, where `Dockerfile.*` needs no defending either
+ * — `manifestKind` turns away whatever these over-match.
+ */
+const DOCKERFILE_GLOBS: ReadonlyArray<string> = [
+  'Dockerfile.*',
+  'dockerfile.*',
+  '*.Dockerfile',
+  '*.dockerfile',
+];
+
 /**
  * The kind of manifest a path is, by its file name alone. The exact table first,
  * then the one convention that cannot be spelled out as a list of names.
@@ -213,6 +264,9 @@ function manifestKind(uri: vscode.Uri): SourceKind | undefined {
   }
   if (COMPOSE_NAME.test(name) && !COMPOSE_OVERRIDE_NAME.test(name)) {
     return 'docker-compose';
+  }
+  if (DOCKERFILE_NAME.test(name)) {
+    return 'dockerfile';
   }
   return undefined;
 }
@@ -232,7 +286,7 @@ function manifestGlob(enabled: ReadonlySet<Ecosystem>): string | undefined {
   const names = Object.keys(MANIFEST_KINDS).filter((name) => enabled.has(ECOSYSTEM_OF[MANIFEST_KINDS[name]]));
   // Compose is the one kind whose files are not a fixed list of names; see
   // `COMPOSE_GLOBS`. What those globs over-match, `manifestKind` turns away.
-  const patterns = enabled.has('docker') ? COMPOSE_GLOBS : [];
+  const patterns = enabled.has('docker') ? [...COMPOSE_GLOBS, ...DOCKERFILE_GLOBS] : [];
   const all = [...names, ...patterns];
   return all.length > 0 ? `**/{${all.join(',')}}` : undefined;
 }
@@ -321,6 +375,9 @@ export const WATCH_GLOB = `**/{${[
     // And the profile-named compose files, which no list of names can hold.
     ...COMPOSE_OVERRIDE_FILES,
     ...COMPOSE_GLOBS,
+    // The profile-named Dockerfiles, which are the same case: no list of names
+    // holds `Dockerfile.dev` and `dev.Dockerfile`.
+    ...DOCKERFILE_GLOBS,
     ...DETECTION_FILES.map(([file]) => file),
     ...PYTHON_LOCKS.map(([file]) => file),
   ]),
@@ -733,6 +790,8 @@ async function parseManifest(
       return parseMise(text);
     case 'docker-compose':
       return parseCompose(text, file, cwd);
+    case 'dockerfile':
+      return parseDockerfile(text, file, cwd);
     // `shell` never reaches here: its rows are built by `collectShellScripts`,
     // from files no `MANIFEST_KINDS` entry names.
     default:
@@ -1757,8 +1816,14 @@ const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['up', 'down', 'build', 
  * was never worth a spinner. `up` is deliberately not given `-d` for the
  * opposite reason — see `parseCompose`.
  */
-/** Whether an option makes `compose up` leave its containers behind. */
-function composeDetaches(word: string): boolean {
+/**
+ * Whether an option makes a container command leave its containers behind.
+ *
+ * Shared by compose and the Dockerfile rows: a detached row exits the moment it
+ * starts, so ■ has nothing to stop and the spinner lies. `--wait` is compose's
+ * alone — `docker run` has no such flag — and costs nothing to test for.
+ */
+function detaches(word: string): boolean {
   return (
     word === '-d' ||
     word === '--detach' ||
@@ -1874,7 +1939,7 @@ async function parseCompose(
     // truth only by accident — which is the one thing this setting promises
     // never happens, and splitting entries into words is what made `up -d`
     // reach the terminal at all.
-    const args = listed ?? words(entry).filter((word) => !composeDetaches(word));
+    const args = listed ?? words(entry).filter((word) => !detaches(word));
     if (args.length === 0) {
       continue;
     }
@@ -1906,6 +1971,178 @@ async function composeOverride(cwd: vscode.Uri): Promise<string | undefined> {
     }
   }
   return undefined;
+}
+
+// --- Dockerfile --------------------------------------------------------------
+
+/**
+ * A Dockerfile declares build stages, not tasks, so what a file offers is the
+ * handful of `docker` subcommands worth having on a list — the same shape cargo
+ * and compose take, and for the same reason.
+ *
+ * `build` is not here. It is the one action every Dockerfile has, added by
+ * `parseDockerfile` whatever the setting says, and listing it as a default would
+ * invite somebody to take it out of a list that no longer controls it.
+ */
+const DEFAULT_DOCKERFILE_COMMANDS: ReadonlyArray<string> = ['run'];
+
+/**
+ * What each command name stands for. Unlike compose there is no shared prefix
+ * past the program: `build` is the only one that reads the file at all, and the
+ * rest address the image the build produced — which is why this is a function of
+ * the file and its tag rather than the flat table `DOCKER_COMPOSE_COMMANDS` is.
+ *
+ * `run` is interactive on purpose. A container started from a VS Code terminal
+ * has a real tty, and `--rm` is what keeps a row you pressed four times from
+ * leaving four stopped containers behind.
+ */
+const DOCKERFILE_COMMANDS: Record<string, (at: { file: string; tag: string }) => string[]> = {
+  build: ({ file, tag }) => ['build', '-f', file, '-t', tag, '.'],
+  run: ({ tag }) => ['run', '--rm', '-it', tag],
+  push: ({ tag }) => ['push', tag],
+};
+
+/**
+ * `FROM node:20 AS builder`, which is the only line in a Dockerfile that names
+ * something a row could stand for.
+ *
+ * The image is matched lazily and with anything in front of it, because the
+ * flags come before it — `FROM --platform=$BUILDPLATFORM node:20 AS build` is
+ * ordinary in a cross-built image — and `AS` is anchored to the end so a stage
+ * called `as` in the image name cannot answer for it. Case-insensitive: the
+ * instructions are conventionally shouted and the parser does not care.
+ */
+export const DOCKERFILE_STAGE = /^\s*FROM\s+.*?\s+AS\s+([A-Za-z0-9][A-Za-z0-9_.-]*)\s*$/i;
+
+/** Whether the file has anything to build at all. */
+const DOCKERFILE_FROM = /^\s*FROM\s+\S/im;
+
+/**
+ * A name reduced to what Docker will accept in that half of a reference: the
+ * repository before the colon, which is lower case only, and the tag after it,
+ * which is not. Everything else becomes a dash, and a leading separator is
+ * dropped — Docker rejects both halves if they start with one.
+ */
+function dockerName(value: string, lower: boolean): string {
+  const cleaned = (lower ? value.toLowerCase() : value).replace(/[^A-Za-z0-9._-]+/g, '-');
+  return cleaned.replace(/^[._-]+/, '').replace(/[._-]+$/, '');
+}
+
+/**
+ * The image a row builds and runs.
+ *
+ * Nothing in a Dockerfile says what the image should be called, and a `docker
+ * build` with no `-t` leaves a dangling image with an id for a name — so the
+ * folder it sits in is the name, which is the same thing compose does for a
+ * project that does not name itself.
+ *
+ * The tag is what keeps the Dockerfiles of one folder apart: the profile from
+ * the file name, the stage being targeted, or both joined — so `Dockerfile.dev`
+ * targeting `builder` in `apps/api` builds `api:dev-builder`, and a plain
+ * `Dockerfile` with no target is `api`, which is `api:latest` to Docker.
+ */
+function imageTag(cwd: vscode.Uri, file: string, stage?: string): string {
+  const base = dockerName(path.posix.basename(cwd.path), true) || 'image';
+  const variant = dockerName([dockerfileProfile(file), stage].filter(Boolean).join('-'), false);
+  return variant ? `${base}:${variant}` : base;
+}
+
+/**
+ * The rows for one Dockerfile.
+ *
+ * `-f <file>` for the reason make, just and compose all name their own file:
+ * what the scan saw is not what the runner would pick, and `docker build` looks
+ * for `Dockerfile` in the context whatever else is beside it.
+ *
+ * The context is `.` — the directory the file sits in, which is the directory
+ * every row already runs in. A Dockerfile kept in `docker/` and built from the
+ * repository root is a real layout and not one any file says out loud, so the
+ * honest default is the one every other manifest here uses: the folder the file
+ * is in.
+ *
+ * `build` is the command that fans out: the bare action, plus one `build:
+ * <stage>` per named stage, which is `--target` and a tag of its own. The bare
+ * one stays even for a file whose last stage is named — `docker build` with no
+ * target is what most people want, and the menu reads the same whatever the file
+ * holds, which is the rule the compose rows already follow.
+ */
+function parseDockerfile(text: string, file: string, cwd: vscode.Uri): ParsedManifest | undefined {
+  // A file matched by name that builds nothing is not a row — a `Dockerfile.md`
+  // describing how to build one is matched by `DOCKERFILE_NAME` and has no
+  // `FROM` in it. It comes back empty rather than undefined so the scan records
+  // that the file was read and understood; see `emptyManifests`.
+  if (!DOCKERFILE_FROM.test(text)) {
+    return { tasks: [] };
+  }
+
+  // `build` is the Dockerfile's fixed action. The setting supplies the rest and
+  // may repeat it without duplicating the row.
+  const commands = [
+    'build',
+    ...settingList('dockerfileCommands', DEFAULT_DOCKERFILE_COMMANDS).filter(
+      (command) => command !== 'build',
+    ),
+  ];
+
+  const stages: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const stage = DOCKERFILE_STAGE.exec(line);
+    // A stage may be named twice in a file that was edited badly, and a name
+    // listed twice is a row whose key the scan would drop anyway.
+    if (stage && !stages.includes(stage[1])) {
+      stages.push(stage[1]);
+    }
+  }
+
+  const tasks: RawTask[] = [];
+  const push = (name: string, args: string[]) => {
+    const argv = ['docker', ...args];
+    tasks.push({ name, command: argv.join(' '), argv });
+  };
+
+  const seen = new Set<string>();
+  for (const entry of commands) {
+    // Split into words and named by what is left, so a request to detach is both
+    // dropped and forgotten: a detached `run` exits at once, leaving the
+    // container up, the square with nothing to stop and the spinner telling the
+    // truth only by accident — and a row still labelled `run -d` would promise
+    // what the terminal never got. A known name has no flags on it, so it comes
+    // back through this unchanged.
+    const name = words(entry)
+      .filter((word) => !detaches(word))
+      .join(' ');
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    // Looked up after the stripping rather than before it, which is what lands
+    // `run -d` back on `run` — where the image that the bare word knows nothing
+    // about is waiting.
+    //
+    // A command that is nobody's but the user's gets no `-f` and no tag:
+    // `docker builder prune` and `docker image ls` are the sort of thing written
+    // here, and appending this file's image to one of them would be an argument
+    // nobody asked for. A command that wants the image can name it — the tag is
+    // the folder, and the setting says so.
+    const listed = known(DOCKERFILE_COMMANDS, name);
+    push(name, listed ? listed({ file, tag: imageTag(cwd, file) }) : words(name));
+    if (name === 'build') {
+      for (const stage of stages) {
+        push(`build: ${stage}`, [
+          'build',
+          '-f',
+          file,
+          '--target',
+          stage,
+          '-t',
+          imageTag(cwd, file, stage),
+          '.',
+        ]);
+      }
+    }
+  }
+
+  return { tasks };
 }
 
 // --- shell scripts -----------------------------------------------------------

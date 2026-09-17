@@ -188,6 +188,7 @@ const ECOSYSTEMS = {
   cargo: 'rust',
   make: 'make',
   'docker-compose': 'docker',
+  dockerfile: 'docker',
   shell: 'shell',
 };
 
@@ -668,6 +669,38 @@ test('flat mode draws compose and script folders inside the project they serve',
   assert.equal(folder.ref, undefined);
   assert.equal(treeItemFor(folder).contextValue, 'group:eco');
   assert.equal(treeItemFor(folder).iconPath.id, 'terminal-bash');
+});
+
+test('flat mode draws a Dockerfile inside the project it ships', () => {
+  const { buildTreeRoots } = harness({ settings: { grouping: 'flat' } });
+  const BUILD = script('/repo/Dockerfile', 'build', 'dockerfile');
+  const DEV = script('/repo/Dockerfile.dev', 'build', 'dockerfile');
+  const roots = buildTreeRoots([ROOT, BUILD, DEV]);
+  // The package.json is the only heading; both Dockerfiles describe how it is
+  // shipped rather than what it is, so they go in with it.
+  assert.deepEqual(ids(roots), ['group:file:///repo/package.json']);
+
+  const inside = roots[0].children;
+  assert.deepEqual(
+    [...inside].map((node) => (node.kind === 'group' ? node.place : `script:${node.script.name}`)),
+    // Each named by its own file. A Dockerfile names nothing inside it, so the
+    // folder would otherwise have been both of these headings.
+    ['script:dev', 'Dockerfile', 'Dockerfile.dev'],
+  );
+  // And unlike a compose file, a Dockerfile opens: its rows are the actions.
+  assert.deepEqual([...inside[1].children].map((node) => node.script.name), ['build']);
+});
+
+test('a Dockerfile beside a package.json does not rename the project after its file', () => {
+  // The rule `crowdedFolders` exists for: two manifests in one folder make the
+  // heading lead with the file name, and a Dockerfile must not count as the
+  // second one.
+  const { buildTreeRoots } = harness();
+  const roots = buildTreeRoots([ROOT, script('/repo/Dockerfile', 'build', 'dockerfile')]);
+  // The folder, as an unnamed package.json always reads — not `package.json`,
+  // which is what a folder the scan thought was crowded would have fallen back to.
+  assert.deepEqual([...roots].map((node) => node.place), ['repo']);
+  assert.equal(roots[0].children.at(-1).place, 'Dockerfile');
 });
 
 test('one folder behind the row leaves the row that folder', () => {

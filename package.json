@@ -88,10 +88,16 @@
     "workspaceContains:**/docker-compose.yaml",
     "workspaceContains:**/compose.yml",
     "workspaceContains:**/compose.yaml",
+    "workspaceContains:**/Dockerfile",
+    "workspaceContains:**/dockerfile",
     "workspaceContains:**/compose.*.yml",
     "workspaceContains:**/compose.*.yaml",
     "workspaceContains:**/docker-compose.*.yml",
     "workspaceContains:**/docker-compose.*.yaml",
+    "workspaceContains:**/Dockerfile.*",
+    "workspaceContains:**/dockerfile.*",
+    "workspaceContains:**/*.Dockerfile",
+    "workspaceContains:**/*.dockerfile",
     "workspaceContains:**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
     "workspaceContains:**/bin/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
     "workspaceContains:*.{sh,bash,zsh,ksh,ps1,bat,cmd}",
@@ -854,7 +860,7 @@
               "go.mod — the standard go subcommands.",
               "composer.json (scripts).",
               "mise.toml and .mise.toml ([tasks]).",
-              "docker-compose.yml, compose.yml and their .yaml spellings — the compose subcommands.",
+              "docker-compose.yml, compose.yml and their .yaml spellings — the compose subcommands — plus Dockerfile, Dockerfile.<name> and <name>.Dockerfile.",
               "Shell scripts (.sh, .bash, .zsh, .ksh, .ps1, .bat, .cmd) under scripts/, bin/ and the workspace root."
             ]
           },
@@ -942,6 +948,17 @@
             "type": "string"
           },
           "markdownDescription": "Compose subcommands listed for every compose file, since a compose file declares services rather than tasks. Known names (`up`, `down`, `build`, `logs`, `ps`, `start`, `stop`, `restart`, `pull`, `config`) get their usual flags — `logs` is followed, so the row keeps running — and anything else runs as `docker compose <name>`.\n\n`up` is special: it lists a bare row for the whole file plus one `up: <service>` row per service, whenever the file declares more than one.\n\nNothing here is ever run detached. A detached row would exit the moment it started, leaving the containers up and Stop with nothing to stop, so `-d`, `--detach` and `--wait` (which implies detached mode) are dropped from anything written here and the row is named by what it actually runs — `up -d` is listed, and behaves, as plain `up`.\n\nEvery row passes `-f <file>`. For the four names compose picks by itself — `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml` — a second `-f` is added for the first of compose’s own four override names beside it (`compose.override.yaml`, `compose.override.yml`, `docker-compose.override.yaml`, `docker-compose.override.yml`), which is the merge compose would have done. A profile-named file such as `docker-compose.dev.yml` gets none: that merge is something compose does to the file it chose for itself. No file with `.override.` in its name is ever a heading of its own.\n\nProfile-named compose files (`docker-compose.dev.yml`, `compose.prod.yaml`) are found too, and each is a heading of its own. One of those is only believed once it shows a `services:` or `include:` block, since nothing inside a YAML file otherwise says that it is compose."
+        },
+        "taskRunnerUltimate.dockerfileCommands": {
+          "type": "array",
+          "default": [
+            "run"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Extra Docker actions offered from each Dockerfile’s context menu. `build` is always there and does not need to be listed here.\n\nKnown names are `build` (`docker build -f <file> -t <tag> .`), `run` (`docker run --rm -it <tag>`) and `push` (`docker push <tag>`). Anything else runs as `docker <name>` verbatim — no `-f` and no tag are appended, so `builder prune` and `image ls` mean what they say.\n\nThe `<tag>` is derived, since a Dockerfile names no image: the folder the file sits in, lowercased, qualified by the name’s own profile and by the stage being targeted. `Dockerfile.dev` in `apps/api` builds `api:dev`, and its `builder` stage builds `api:dev-builder`.\n\nA separate `build` action is offered for every named `FROM … AS <stage>`, passing `--target`. The build context is the directory the Dockerfile is in.\n\nNothing here is ever run detached: `-d` and `--detach` are dropped from anything written here."
         },
         "taskRunnerUltimate.shellScripts": {
           "type": "array",
