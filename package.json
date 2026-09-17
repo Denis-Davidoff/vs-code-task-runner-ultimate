@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Run all your monorepo's tasks and scripts from a single list: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.7.8",
+  "version": "0.7.10",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -214,9 +214,15 @@
       },
       {
         "command": "taskRunnerUltimate.stopStack",
-        "title": "Stop Containers",
+        "title": "Compose Down",
         "category": "Task & Script Explorer",
         "icon": "$(debug-stop)"
+      },
+      {
+        "command": "taskRunnerUltimate.composeActions",
+        "title": "Compose Commands…",
+        "category": "Task & Script Explorer",
+        "icon": "$(menu)"
       },
       {
         "command": "taskRunnerUltimate.restartGroup",
@@ -454,12 +460,12 @@
         {
           "command": "taskRunnerUltimate.runGroup",
           "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:(up|down)$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?$/"
         },
         {
           "command": "taskRunnerUltimate.stopStack",
           "group": "inline@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:up$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.runItemMenu",
@@ -474,12 +480,17 @@
         {
           "command": "taskRunnerUltimate.runGroup",
           "group": "0_actions@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:(up|down)$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?$/"
         },
         {
           "command": "taskRunnerUltimate.stopStack",
           "group": "0_actions@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package:up$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?(:(hidden|carried))?(:running)?$/"
+        },
+        {
+          "command": "taskRunnerUltimate.composeActions",
+          "group": "0_actions@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.openScript",
@@ -489,7 +500,7 @@
         {
           "command": "taskRunnerUltimate.openManifest",
           "group": "0_open@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:(hidden|carried))?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
@@ -534,32 +545,32 @@
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:(hidden|carried))?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
           "submenu": "taskRunnerUltimate.color",
           "group": "2_modify@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group|compose)/"
         },
         {
           "command": "taskRunnerUltimate.pickIcon",
           "group": "2_modify@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group|compose)/"
         },
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?:hidden(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?:hidden(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.hideGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:package(:(up|down))?:hidden(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?:hidden(:running)?$/"
         }
       ],
       "taskRunnerUltimate.color": [
@@ -679,6 +690,10 @@
         },
         {
           "command": "taskRunnerUltimate.stopStack",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.composeActions",
           "when": "false"
         },
         {
@@ -937,8 +952,6 @@
         "taskRunnerUltimate.dockerComposeCommands": {
           "type": "array",
           "default": [
-            "up",
-            "down",
             "build",
             "logs",
             "ps"
@@ -947,7 +960,7 @@
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Compose subcommands listed for every compose file, since a compose file declares services rather than tasks. Known names (`up`, `down`, `build`, `logs`, `ps`, `start`, `stop`, `restart`, `pull`, `config`) get their usual flags — `logs` is followed, so the row keeps running — and anything else runs as `docker compose <name>`.\n\n`up` is special: it lists a bare row for the whole file plus one `up: <service>` row per service, whenever the file declares more than one.\n\nNothing here is ever run detached. A detached row would exit the moment it started, leaving the containers up and Stop with nothing to stop, so `-d`, `--detach` and `--wait` (which implies detached mode) are dropped from anything written here and the row is named by what it actually runs — `up -d` is listed, and behaves, as plain `up`.\n\nEvery row passes `-f <file>`. For the four names compose picks by itself — `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml` — a second `-f` is added for the first of compose’s own four override names beside it (`compose.override.yaml`, `compose.override.yml`, `docker-compose.override.yaml`, `docker-compose.override.yml`), which is the merge compose would have done. A profile-named file such as `docker-compose.dev.yml` gets none: that merge is something compose does to the file it chose for itself. No file with `.override.` in its name is ever a heading of its own.\n\nProfile-named compose files (`docker-compose.dev.yml`, `compose.prod.yaml`) are found too, and each is a heading of its own. One of those is only believed once it shows a `services:` or `include:` block, since nothing inside a YAML file otherwise says that it is compose."
+          "markdownDescription": "Extra Compose actions offered from each compose file’s context menu. `up` and `down` are always available as the file’s inline buttons and do not need to be listed here. Known names (`build`, `logs`, `ps`, `start`, `stop`, `restart`, `pull`, `config`) get their usual flags — `logs` is followed — and anything else runs as `docker compose <name>`. A separate `up` action is offered for every declared service.\n\nNothing here is ever run detached. `-d`, `--detach` and `--wait` (which implies detached mode) are dropped from anything written here.\n\nEvery action passes `-f <file>`. For the four names compose picks by itself — `compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml` — a second `-f` is added for the first of compose’s own four override names beside it (`compose.override.yaml`, `compose.override.yml`, `docker-compose.override.yaml`, `docker-compose.override.yml`). No file with `.override.` in its name is ever shown on its own."
         },
         "taskRunnerUltimate.dockerfileCommands": {
           "type": "array",

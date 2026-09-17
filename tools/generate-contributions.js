@@ -308,10 +308,12 @@ manifest.contributes.commands = [
   // the gesture the rows inside it already answer to.
   { command: 'taskRunnerUltimate.hideGroup', title: 'Hide Package', category: 'Task & Script Explorer', icon: '$(eye-closed)' },
   { command: 'taskRunnerUltimate.stopGroup', title: 'Stop All in Package', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
-  // The two a compose heading answers to, which no other heading has: a compose
-  // file is a stack, and its `up` row is the one row that stands for the file.
+  // The three a compose item answers to, which no other row has: a compose file
+  // is a stack rather than a folder of tasks, so it is a leaf with ▶ and ■ of
+  // its own and a menu holding everything else compose can be asked for.
   { command: 'taskRunnerUltimate.runGroup', title: 'Compose Up', category: 'Task & Script Explorer', icon: '$(play)' },
-  { command: 'taskRunnerUltimate.stopStack', title: 'Stop Containers', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.stopStack', title: 'Compose Down', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.composeActions', title: 'Compose Commands…', category: 'Task & Script Explorer', icon: '$(menu)' },
   { command: 'taskRunnerUltimate.restartGroup', title: 'Restart All in Package', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
   { command: 'taskRunnerUltimate.showGroup', title: 'Show Package', category: 'Task & Script Explorer', icon: '$(eye)' },
   { command: 'taskRunnerUltimate.openScript', title: 'Go to Script Definition', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
@@ -360,21 +362,16 @@ const inTree = 'view =~ /^taskRunnerUltimate\\.(tree|explorer)$/';
 // manifest preserves actions for all of those states without letting similarly
 // prefixed context values slip through. Neither eye is offered on a carried row:
 // it is already in the pile, and it was never put there in its own right, so it
-// matches `PACKAGE_ROW` below and neither `PACKAGE` nor `HIDDEN_PACKAGE`.
-// A compose heading carries one segment more than every other package row: `up`
-// or `down`, which is what puts ▶ and ■ on the file itself — see `treeItemFor`.
-// Every pattern that matches a package row therefore allows it, and the two
-// patterns below it read it.
+// matches `PACKAGE_ROW` below and neither `VISIBLE` nor `HIDDEN`.
+// A compose row carries one segment more than every other row read off a file:
+// `up` or `down`, which is what puts ▶ and ■ on the file itself — see
+// `treeItemFor`. Every pattern that matches such a row therefore allows it, and
+// the compose patterns further down read it.
 const STACK = '(:(up|down))?';
-const PACKAGE = `/^group:package${STACK}(:running)?$/`;
-const HIDDEN_PACKAGE = `/^group:package${STACK}:hidden(:running)?$/`;
-// A compose file nobody has put away: idle, whichever way its containers are, so
-// ▶ is offered on it the way it is on the `up` row inside — pressing it on a
-// stack that is already up re-attaches, or starts the services that are missing.
-const COMPOSE = '/^group:package:(up|down)$/';
-// The same file with its containers up and no run of ours behind them, which is
-// the one case a heading's ■ is not `stopGroup`.
-const COMPOSE_UP = '/^group:package:up$/';
+// Hiding and bringing back reach every heading the tree drew from a file, the
+// compose rows included: the pile is where a row goes, whatever its row does.
+const VISIBLE = `/^(group:package|compose)${STACK}(:running)?$/`;
+const HIDDEN = `/^(group:package|compose)${STACK}:hidden(:running)?$/`;
 // An ecosystem parent holds groups rather than rows, but it still has things
 // running under it, so it gets the stop-all and restart-all buttons too.
 const PUT_AWAY = '(:(hidden|carried))?';
@@ -385,6 +382,22 @@ const RUNNABLE = '/^script:(idle|up):/';
 const STOPPABLE = '/^(script:(running|up):|foreignTask$)/';
 const RUNNING_PACKAGE = `/^group:(package${STACK}${PUT_AWAY}|eco):running$/`;
 const PACKAGE_ROW = `group:package${STACK}${PUT_AWAY}(:running)?`;
+// Every row the tree read off a file, whichever kind: the two actions that are
+// about the manifest rather than the task — opening it and renaming it — reach
+// all of them.
+const NAMED_ROW = `(group:package|compose)${STACK}${PUT_AWAY}(:running)?`;
+// A compose file is a leaf rather than a folder — `getChildren` returns nothing
+// for it — so every action it has must be on the row itself. There is no way in
+// by opening it, which is why these patterns allow the put-away segments too: a
+// stack whose row is sitting in the pile is still a stack somebody has to be
+// able to take down.
+const COMPOSE_ROW = `compose${STACK}${PUT_AWAY}`;
+const COMPOSE = `/^${COMPOSE_ROW}(:running)?$/`;
+// ▶ is the one that is not offered on a put-away row, for the same reason no
+// other heading in the pile carries a run-all: what is in there is out of the
+// way, and taking it out again is the click that comes first. `:running` is
+// absent as well — see `runGroup`, which refuses a second `up` over the first.
+const COMPOSE_IDLE = `/^compose${STACK}$/`;
 const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];
@@ -441,12 +454,14 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ ${STOPPABLE}` },
     { command: 'taskRunnerUltimate.restartGroup', group: 'inline@2', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
     { command: 'taskRunnerUltimate.stopGroup', group: 'inline@3', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
-    // A compose file is run and stopped from its own heading, without opening
-    // it: ▶ brings the stack up, and ■ takes it down when Docker says it is up
-    // and nothing of ours is running it. The two are never on the row together —
-    // a run of ours puts `stopGroup` in the same slot instead.
-    { command: 'taskRunnerUltimate.runGroup', group: 'inline@1', when: `${inTree} && viewItem =~ ${COMPOSE}` },
-    { command: 'taskRunnerUltimate.stopStack', group: 'inline@3', when: `${inTree} && viewItem =~ ${COMPOSE_UP}` },
+    // A compose file is run and stopped from the row itself, because the row is
+    // all there is: ▶ brings the stack up and ■ takes it down, whichever way
+    // Docker last answered. ■ stays on the row while our own `up` runs — it is
+    // the one button that ends it, and `stopGroup` is not offered here because
+    // ending the run without removing the containers is not what ■ on a stack
+    // means.
+    { command: 'taskRunnerUltimate.runGroup', group: 'inline@1', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
+    { command: 'taskRunnerUltimate.stopStack', group: 'inline@3', when: `${inTree} && viewItem =~ ${COMPOSE}` },
     // Non-inline groups are what the right-click menu shows.
     //
     // The two gestures the row itself answers to, named in the menu so they are
@@ -465,9 +480,13 @@ manifest.contributes.menus = {
     // stack down from the heading.
     { command: 'taskRunnerUltimate.runItemMenu', group: '0_actions@1', when: `${inTree} && viewItem =~ ${RUNNABLE}` },
     { command: 'taskRunnerUltimate.stopItemMenu', group: '0_actions@2', when: `${inTree} && viewItem =~ ${STOPPABLE}` },
-    // The heading's own two, named where the inline glyphs only imply them.
-    { command: 'taskRunnerUltimate.runGroup', group: '0_actions@1', when: `${inTree} && viewItem =~ ${COMPOSE}` },
-    { command: 'taskRunnerUltimate.stopStack', group: '0_actions@2', when: `${inTree} && viewItem =~ ${COMPOSE_UP}` },
+    // The row's own two, named where the inline glyphs only imply them, and the
+    // menu that holds everything else compose can be asked for — the extra
+    // subcommands and one `up` per declared service. That third entry is on
+    // every compose row, put away or not: a leaf has no inside to look in.
+    { command: 'taskRunnerUltimate.runGroup', group: '0_actions@1', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
+    { command: 'taskRunnerUltimate.stopStack', group: '0_actions@2', when: `${inTree} && viewItem =~ ${COMPOSE}` },
+    { command: 'taskRunnerUltimate.composeActions', group: '0_actions@3', when: `${inTree} && viewItem =~ ${COMPOSE}` },
     //
     // Opening the file is the one action here that is about the manifest rather
     // than the task, and it is deliberately not an inline button: a row already
@@ -478,7 +497,7 @@ manifest.contributes.menus = {
     // The same action on a package heading, which is a manifest and has no line
     // of its own to open at. Two commands rather than one because the label of a
     // menu entry is the command's, and a heading is not promising a task.
-    { command: 'taskRunnerUltimate.openManifest', group: '0_open@1', when: `${inTree} && viewItem =~ /^${PACKAGE_ROW}$/` },
+    { command: 'taskRunnerUltimate.openManifest', group: '0_open@1', when: `${inTree} && viewItem =~ /^${NAMED_ROW}$/` },
     // Only a running task has a terminal to show, which is the same set of rows
     // that has a ■ button — ours and the foreign ones alike.
     { command: 'taskRunnerUltimate.showTerminal', group: '0_open@2', when: `${inTree} && viewItem =~ /^(script:running:|foreignTask$)/` },
@@ -492,13 +511,18 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },
     // Under the star and above the rename: turning the prompt on is the same kind
     // of decision about a row as starring it, taken once and left alone.
+    //
+    // Both clauses end at the axis, and that anchor is what keeps the toggle off
+    // a compose row: `treeItemFor` leaves the segment off one entirely, so
+    // neither half matches and a file that never asks is never offered a switch
+    // for it either.
     { command: 'taskRunnerUltimate.enableConfirmation', group: '1_favorites@2', when: `${inTree} && viewItem =~ /^script:.+:noconfirm$/` },
     { command: 'taskRunnerUltimate.disableConfirmation', group: '1_favorites@2', when: `${inTree} && viewItem =~ /^script:.+:confirm$/` },
     { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^script:/` },
     // The same command on a package heading. FAVORITES and the foreign-task
     // group are labels of ours rather than names read off disk, and carry the
     // plain `group` value, so neither matches.
-    { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^${PACKAGE_ROW}$/` },
+    { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^${NAMED_ROW}$/` },
     // Colour reaches further than a rename does: every row the tree draws itself
     // takes one — tasks, package headings, FAVORITES and OTHER TASKS. A rename
     // needs a name on disk to restore, which the last two do not have; a colour
@@ -510,16 +534,16 @@ manifest.contributes.menus = {
     // menu is one submenu described two ways rather than two submenus. The two
     // `editTitle` lines above get away with it because a command is its own
     // action; a submenu is not.
-    { submenu: COLOUR_SUBMENU, group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group)/` },
-    { command: 'taskRunnerUltimate.pickIcon', group: '2_modify@3', when: `${inTree} && viewItem =~ /^(script|group)/` },
+    { submenu: COLOUR_SUBMENU, group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group|compose)/` },
+    { command: 'taskRunnerUltimate.pickIcon', group: '2_modify@3', when: `${inTree} && viewItem =~ /^(script|group|compose)/` },
     // Bringing a group back is the one of the two that keeps its button: a row
     // under HIDDEN is there to be taken out again, and an eye in its own column is
     // one click where putting it away was a menu you went looking for.
-    { command: 'taskRunnerUltimate.showGroup', group: 'inline@1', when: `${inTree} && viewItem =~ ${HIDDEN_PACKAGE}` },
+    { command: 'taskRunnerUltimate.showGroup', group: 'inline@1', when: `${inTree} && viewItem =~ ${HIDDEN}` },
     // Both in the right-click menu as well, findable without a hover and readable
     // with a name on them.
-    { command: 'taskRunnerUltimate.hideGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${PACKAGE}` },
-    { command: 'taskRunnerUltimate.showGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${HIDDEN_PACKAGE}` },
+    { command: 'taskRunnerUltimate.hideGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${VISIBLE}` },
+    { command: 'taskRunnerUltimate.showGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${HIDDEN}` },
   ],
   // The palette itself, in one group, with the way back to the default in a
   // second so the menu draws a separator above it.
@@ -548,6 +572,7 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.restartGroup', when: 'false' },
     { command: 'taskRunnerUltimate.runGroup', when: 'false' },
     { command: 'taskRunnerUltimate.stopStack', when: 'false' },
+    { command: 'taskRunnerUltimate.composeActions', when: 'false' },
     { command: 'taskRunnerUltimate.openScript', when: 'false' },
     { command: 'taskRunnerUltimate.openManifest', when: 'false' },
     { command: 'taskRunnerUltimate.showTerminal', when: 'false' },

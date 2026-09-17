@@ -189,10 +189,10 @@ test('parseCompose lists the default commands and fans `up` out over the service
   assert.ok(!parsed.tasks.some((task) => task.argv.includes('-d')));
 });
 
-test('parseCompose leaves `up` alone when the file declares one service', async () => {
+test('parseCompose offers `up` for a file and for its only service', async () => {
   const { parseCompose } = harness();
   const parsed = await parseCompose('services:\n  web:\n    image: nginx\n', 'compose.yaml', cwd);
-  assert.deepEqual(plain(parsed.tasks.map((task) => task.name)), ['up', 'down', 'build', 'logs', 'ps']);
+  assert.deepEqual(plain(parsed.tasks.map((task) => task.name)), ['up', 'up: web', 'down', 'build', 'logs', 'ps']);
   assert.equal(parsed.packageName, undefined);
 });
 
@@ -218,6 +218,10 @@ test('parseCompose honours the command list and the v1 spelling', async () => {
   assert.deepEqual(
     plain(parsed.tasks.map((task) => task.argv)),
     [
+      ['docker-compose', '-f', 'compose.yml', 'up'],
+      ['docker-compose', '-f', 'compose.yml', 'up', 'web'],
+      ['docker-compose', '-f', 'compose.yml', 'up', 'db'],
+      ['docker-compose', '-f', 'compose.yml', 'down'],
       ['docker-compose', '-f', 'compose.yml', 'restart'],
       // An unknown name runs as itself.
       ['docker-compose', '-f', 'compose.yml', 'top'],
@@ -225,11 +229,10 @@ test('parseCompose honours the command list and the v1 spelling', async () => {
   );
 });
 
-test('parseCompose returns nothing at all for an empty command list', async () => {
+test('parseCompose keeps the fixed up and down actions for an empty extra-command list', async () => {
   const { parseCompose } = harness({ settings: { dockerComposeCommands: [] } });
-  // Not `{ tasks: [] }`: that lands in `emptyManifests`, and `pruneStaleRefs`
-  // would delete every star and colour filed against the file.
-  assert.equal(await parseCompose(COMPOSE, 'docker-compose.yml', cwd), undefined);
+  const parsed = await parseCompose(COMPOSE, 'docker-compose.yml', cwd);
+  assert.deepEqual(plain(parsed.tasks.map((task) => task.name)), ['up', 'up: web', 'up: db', 'down']);
 });
 
 test('the override is matched by compose order, not by the base file extension', async () => {
@@ -855,7 +858,7 @@ test('a compose command of your own is never run detached', async () => {
   // and all, so the mark and the ■ still know what it is.
   assert.deepEqual(
     parsed.tasks.map((task) => task.name),
-    ['up', 'up: web', 'up: db'],
+    ['up', 'up: web', 'up: db', 'down'],
   );
   assert.equal(parsed.tasks[0].argv.includes('-d'), false);
   assert.equal(parsed.tasks[0].argv.at(-1), 'up');
@@ -864,14 +867,14 @@ test('a compose command of your own is never run detached', async () => {
 test('a detached spelling does not become a second copy of `up`', async () => {
   const { parseCompose } = harness({ settings: { dockerComposeCommands: ['up', 'up --detach'] } });
   const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
-  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up', 'up: web', 'up: db']);
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up', 'up: web', 'up: db', 'down']);
 });
 
 test('a compose command of your own keeps the flags that are not a detach', async () => {
   const { parseCompose } = harness({ settings: { dockerComposeCommands: ['up --build'] } });
   const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
-  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up --build']);
-  assert.deepEqual(parsed.tasks[0].argv.slice(-2), ['up', '--build']);
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up', 'up: web', 'up: db', 'down', 'up --build']);
+  assert.deepEqual(parsed.tasks.at(-1).argv.slice(-2), ['up', '--build']);
 });
 
 test('compose options that imply detach are removed too', async () => {
@@ -879,7 +882,7 @@ test('compose options that imply detach are removed too', async () => {
     settings: { dockerComposeCommands: ['up --wait', 'up --detach=true'] },
   });
   const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
-  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up', 'up: web', 'up: db']);
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['up', 'up: web', 'up: db', 'down']);
   assert.ok(!parsed.tasks.some((task) => task.argv.some((word) => word.startsWith('--wait'))));
   assert.ok(!parsed.tasks.some((task) => task.argv.some((word) => word.startsWith('--detach'))));
 });

@@ -126,8 +126,9 @@ monorepo.
   stop it. Nothing running is ever a single click away from being killed.
 - **Show Terminal** — click a running row, or right-click it, to go to its output without stopping
   or restarting anything.
-- **A compose file runs from its own heading** — ▶ brings the stack up and ■ takes it down, without
-  opening the file to find the `up` row.
+- **A compose file is one item, not a folder** — ▶ brings the stack up, ■ takes it down, and
+  **Compose Commands…** in the right-click menu holds the rest: one `up` per service, plus `build`,
+  `logs` and `ps`.
 - **Add to Terminal** — right-click a shell row and a new terminal opens with its command line
   *typed but not run*, so a script can be given the arguments the tree has no way to ask for.
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
@@ -224,51 +225,49 @@ pins it, and `none` hides them entirely.
 
 ### Docker Compose
 
-A compose file declares services, not tasks, so its rows are the subcommands worth having on a list —
-`up`, `down`, `build`, `logs` and `ps` by default, set by `taskRunnerUltimate.dockerComposeCommands`.
-Known names get their usual flags, anything else runs as `docker compose <name>`.
-
-`up` is the one that fans out. A file with several services gets a bare `up` row for the whole stack
-plus one `up: <service>` row each, which is eleven rows for six services rather than the thirty a
-full commands × services grid would be:
+A compose file declares services, not tasks, so it is not a folder of rows the way a `package.json`
+is. It is **one item**, and the item *is* the stack:
 
 ```
-docker-compose.yml • services/stack
-  ▶ up              docker compose -f docker-compose.yml up
-  ▶ up: web         docker compose -f docker-compose.yml up web
-  ▶ up: db          docker compose -f docker-compose.yml up db
-  🗑 down            docker compose -f docker-compose.yml down
-  📦 build          docker compose -f docker-compose.yml build
+🖥 docker-compose.yml • services/stack        ▶  ■
 ```
 
-The **heading itself carries ▶ and ■**, so a stack goes up and comes down without the file being
-opened at all:
+▶ is `docker compose up` for the whole file and ■ is `docker compose down`. Neither needs the file
+opened, because there is nothing to open: the row is a leaf. Everything else compose can be asked
+for lives behind **Compose Commands…** in the right-click menu — one `up` entry per declared
+service, and then the extra subcommands from `taskRunnerUltimate.dockerComposeCommands`, which is
+`build`, `logs` and `ps` out of the box:
 
 ```
-▸ 🖥 docker-compose.yml • services/stack        ▶
+Compose command for docker-compose.yml
+  ▶ Up web      docker compose -f docker-compose.yml up web
+  ▶ Up db       docker compose -f docker-compose.yml up db
+  build         docker compose -f docker-compose.yml build
+  logs          docker compose -f docker-compose.yml logs -f
+  ps            docker compose -f docker-compose.yml ps
 ```
 
-▶ runs that file's bare `up` — the whole stack, the same row and the same confirmation as pressing ▶
-inside. ■ appears once the containers are known to be up: while a run of *this* window is behind them
-it stops that run, and otherwise it runs `docker compose stop` for the file, exactly as the ■ on the
-`up` row does. While the stack is up both are on the row — ▶ re-attaches or starts what is missing,
-exactly as it does on the `up` row inside — and the two squares are the ones that never appear
-together: a run of ours puts Stop All in Package in that slot instead. A file whose commands were
-narrowed to a list without `up` gets neither button; there is then no such thing as bringing it up.
+`up` and `down` are not in that setting and cannot be taken out of it: they are the two buttons, and
+a list that could remove them would be a stack with no way up. Known names get their usual flags,
+anything else runs as `docker compose <name>`.
 
-The heading also **spins while any part of the file is running** — one `up: web` out of six services
-counts — so a compose file, which starts folded, still says it is busy without being opened. It is
-the one heading that does: every other one is a file or a folder that *holds* tasks rather than being
-one, and a spinner on all of them would be a column of spinners in a monorepo with a single `dev`
-running.
+■ does two things in order, and the order is the point: it ends whatever of *this window's* tasks
+the file has running, and only once every one of them has actually gone does it run `down`. A
+`down` racing a live `up` is the stack being removed and raised again by turns, so a task that
+would not stop stops the whole gesture — the warning about it is on screen, and nothing has been
+removed. ▶ is the same care from the other side: a second `up` over a running one is never started.
 
-Two details are deliberate. **Nothing is ever run detached**: a `-d` row exits the moment it starts,
-which would leave the row idle with the containers still up and the ■ button with nothing to stop.
-A `-d`, `--detach` or `--wait` (which implies detached mode) written into
-`dockerComposeCommands` is dropped rather than honoured, and the row is named by what it actually
-runs — so `up -d` is listed, and behaves, as plain `up`. And `logs`
-is always followed (`logs -f`) for the same reason. If you want a detached `up`, that is a terminal
-command, not a row that lies about its own state.
+The item also **spins while any part of the file is running** — one `up: web` out of six services
+counts. It is the one item that does: every other heading is a file or a folder that *holds* tasks
+rather than being one, and a spinner on all of them would be a column of spinners in a monorepo with
+a single `dev` running.
+
+Two details are deliberate. **Nothing is ever run detached**: a `-d` command exits the moment it
+starts, which would leave the item idle with the containers still up and ■ with nothing to stop.
+A `-d`, `--detach` or `--wait` (which implies detached mode) written into `dockerComposeCommands` is
+dropped rather than honoured, and the entry is named by what it actually runs — so `up -d` is
+listed, and behaves, as plain `up`. And `logs` is always followed (`logs -f`) for the same reason. If
+you want a detached `up`, that is a terminal command, not a row that lies about its own state.
 
 **Which files count.** The four names compose picks for itself — `compose.yaml`, `compose.yml`,
 `docker-compose.yaml`, `docker-compose.yml` — are compose files by name alone. Beyond those, the
@@ -304,7 +303,9 @@ compose file — `--format json`, and if the runner turns out not to have that f
 binary does not) the same question again as `ps --services --filter status=running`, which v1 does
 understand — and marks the rows whose containers are up — the `up: <service>` row for each running
 service, and the bare `up` row whenever anything in that file is up. A marked row keeps its own icon,
-takes the running colour, and reads `up ·` before its command.
+takes the running colour, and reads `up ·` before its command. Those rows are the ones in
+[the dropdown](#in-the-dropdown) and in the starred list: in the tree a compose file is a single item,
+and ▶ and ■ sit on it whichever way Docker last answered.
 
 It is a question you ask, not a background poll: that would mean a process per compose file on a
 timer, in every workspace, for something most of them never need. The answer is refreshed on its own
@@ -318,11 +319,12 @@ When Docker cannot answer — not installed, daemon down, the call times out aft
 rows keep whatever they last said rather than claiming everything stopped. "I could not ask" is not
 "your stack is down".
 
-■ on a row marked this way — and on the file's heading, which stands for the whole file — runs
-`docker compose stop` for that file or service, as an ordinary task with its own terminal. The task belongs to the row you pressed, so that row spins while its own stop
-runs and settles when the re-check comes back. `stop` and not `down`, because the square promises a
-stop: `down` would also delete the containers and their networks, and the `down` row is there for
-that.
+■ on a row marked this way runs `docker compose stop` for that file or service, as an ordinary task
+with its own terminal. The task belongs to the row you pressed, so that row spins while its own stop
+runs and settles when the re-check comes back. `stop` and not `down`, because the square on a *row*
+promises a stop: `down` would also delete the containers and their networks. The ■ on the compose
+item in the tree is the other promise and says so in its name — **Compose Down** — because there the
+square is the whole stack coming down, containers and networks with it.
 
 This is the one thing in the extension that starts a process. Everything else reads the workspace
 through VS Code's own file API, which is what keeps it working over Remote SSH and in Dev Containers;
@@ -521,8 +523,6 @@ acme
   ▶ dev
   ▶ build
   🖥 docker-compose.yml
-     ▶ up
-     ▶ up: web
   💻 shell [3]
      ▶ deploy.sh     scripts
      ▶ lint.sh       tools/ci
@@ -595,7 +595,6 @@ Rust (1)
     ▶ run
 Docker (1)
   docker-compose.yml
-    ▶ up
 Shell (2)
   apps/web/scripts
     ▶ deploy.sh
@@ -657,15 +656,15 @@ well.
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
 `justfile` side by side gets three, all in the same folder.
 
-Every group starts expanded bar two, and one you fold shut stays shut — through a repaint and across
+Every group starts expanded bar one, and one you fold shut stays shut — through a repaint and across
 a restart. Like the stars and the renames, the folds live in the workspace's own storage, so they are
 per-workspace and per-machine and never reach `git status`.
 
-The two that start shut are **hidden**, whose whole point is to be out of the way, and a **compose
-file**: one file is seven rows where a `package.json` is seven scripts, and most of them — `build`,
-`logs`, `ps` — are rows you go looking for rather than press. Shut, the heading is one line saying
-which stack lives here, which is what a heading is for. Open one and it stays open, the same way a
-fold stays shut.
+The one that starts shut is **hidden**, whose whole point is to be out of the way. A **compose file**
+is not on that list any more for a better reason: it does not fold at all. One file is seven rows
+where a `package.json` is seven scripts, and most of them — `build`, `logs`, `ps` — are things you
+go looking for rather than press, so the file is [a single item](#docker-compose) with its two
+buttons and a menu, and there is nothing left to open.
 
 Every heading is read in the same two parts — **name, bullet, path**:
 
@@ -854,8 +853,12 @@ heading. Those are the deliberate gesture the flag exists to make you perform, a
 there would turn one decision into ten.
 
 The flag is a task at a time, and only tasks — a package heading runs nothing itself, and a task
-under OTHER TASKS belongs to whoever started it. [The menu](#the-menu) clears the lot with **Reset
-all confirmations**.
+under OTHER TASKS belongs to whoever started it. [Compose files](#docker-compose) are out as well,
+and for a reason of their own: one is a single item in the tree rather than a folder of rows, so
+there would be nowhere to put the toggle and no way back off once it was on. ▶ and ■ on a stack are
+already the deliberate gesture the flag is for. A flag an older version left on a compose row is
+dropped the next time the workspace is scanned, rather than asking with no switch to answer it with.
+[The menu](#the-menu) clears the lot with **Reset all confirmations**.
 
 ### Reordering rows
 
@@ -999,13 +1002,14 @@ live where there is a row to invoke them on:
 | Stop (Double-Click) | a double click on a running row, and right-click; ■ inline on hover stops on one press |
 | Add to Favorites | ☆ inline on hover, and right-click |
 | Remove from Favorites | ★ inline on hover, and right-click |
-| Enable Confirmation | right-click only, on a script row — one half of a toggle, shown while the row starts and stops straight away |
+| Enable Confirmation | right-click only, on a script row — one half of a toggle, shown while the row starts and stops straight away. Never on a [compose item](#docker-compose), which does not ask |
 | Disable Confirmation | right-click only, on a script row — the other half, shown while the row [asks first](#asking-before-a-task-starts-or-stops) |
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
 | Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; OTHER TASKS names no file and does not offer it |
 | Show Terminal | a click on a running row, and right-click — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
-| Compose Up | ▶ inline on hover and right-click, on a [compose heading](#docker-compose) only — the file's own bare `up`. A heading of a manifest has no single row that stands for the file; a compose file has exactly one |
-| Stop Containers | ■ inline on hover and right-click, on a compose heading whose containers Docker [reported up](#knowing-what-is-actually-up) with no run of ours behind them. While one of ours is running, the ■ in that slot is Stop All in Package instead |
+| Compose Up | ▶ inline on hover and right-click, on a [compose item](#docker-compose) only — the file's own bare `up`. Not offered while one of ours is already running it, and not on a row sitting in the hidden pile |
+| Compose Down | ■ inline on hover and right-click, on a compose item — it ends whatever of ours the file has running and then runs `docker compose down`, and does neither if something refuses to stop |
+| Compose Commands… | right-click only, on a compose item — the picker holding one `up` per declared service and the extra subcommands from [`dockerComposeCommands`](#settings) |
 | Add to Terminal | right-click only, on a [shell row](#shell-scripts) — a new terminal with the command line typed into it and not run, which is where a script takes arguments nobody wrote down. A manifest task says its own arguments in the manifest, so the entry is not offered there |
 | Rename… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
@@ -1168,7 +1172,7 @@ gets to choose for the machine that opens it. Those three are set in your own se
 | `goCommands` | `run`, `build`, `test`, `vet` | The go subcommands every module gets. |
 | `pythonRunner` | `auto` | How `[project.scripts]` entry points are entered — see [Python](#python). `none` hides them. |
 | `dockerCompose` | `docker compose` | The compose command — the v2 plugin, or the standalone `docker-compose`. See [Docker Compose](#docker-compose). |
-| `dockerComposeCommands` | `up`, `down`, `build`, `logs`, `ps` | The compose subcommands every compose file gets. `up` also fans out over the services. |
+| `dockerComposeCommands` | `build`, `logs`, `ps` | The **extra** compose subcommands, offered from a compose item's **Compose Commands…** picker. `up` and `down` are the item's two buttons and are not listed here; the picker also carries one `up` per declared service. |
 | `shellScripts` | `**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}`, the same under `**/bin/**/`, and the bare `*.{sh,…}` | Where [shell scripts](#shell-scripts) are looked for, as globs matched against each file's path relative to its workspace folder. |
 | `shellRunner` | `bash` | What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through. Empty runs the path on its own. |
 | `shellRunners` | `powershell -NoProfile -File` for `.ps1`, nothing for `.bat` and `.cmd` | What each extension is run through, keyed by extension. One that is not named here falls back to `shellRunner`. |
