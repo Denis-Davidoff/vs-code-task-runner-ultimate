@@ -330,6 +330,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.runGroup', (node?: TreeNode) => runGroup(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.stopStack', (node?: TreeNode) => stopStack(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.composeActions', (node?: TreeNode) => composeActions(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.buildImage', (node?: TreeNode) => buildImage(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.dockerfileActions', (node?: TreeNode) =>
+      dockerfileActions(node),
+    ),
+    // ■ and ↻ on a Dockerfile row are the group's own, under names that say what
+    // the row is: a Dockerfile is drawn as one line, so "all in package" is a
+    // tooltip about rows the user cannot see.
+    vscode.commands.registerCommand('taskRunnerUltimate.stopDockerfile', (node?: TreeNode) => stopGroup(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.restartDockerfile', (node?: TreeNode) =>
+      restartGroup(node),
+    ),
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
     // One command per colour: a submenu entry is a command, and there is no way
     // to hand it an argument from contributes.menus. The list is the palette's,
@@ -3047,6 +3058,24 @@ function startsOpen(node: TreeNode): boolean {
   return node.id !== HIDDEN_GROUP_ID && node.source !== 'docker-compose';
 }
 
+/**
+ * Whether a heading is drawn as one row rather than as a folder of rows.
+ *
+ * Two manifests are the thing being run rather than a list of things to run. A
+ * compose file *is* the stack, and a Dockerfile *is* the image: `build` is the
+ * one action every Dockerfile has, and the rest — `run`, `push`, one `build:
+ * <stage>` per named stage — are the variations on it, not siblings of it. Drawn
+ * as a folder, a `Dockerfile` cost a fold and a row of its own to say a word its
+ * heading had already said.
+ *
+ * So both come back with no children at all (see `getChildren`), and what the
+ * rows underneath used to offer is on the heading itself: the bare action on ▶,
+ * the rest behind the menu button beside it.
+ */
+function isFileItem(node: TreeNode): boolean {
+  return node.kind === 'group' && (node.source === 'docker-compose' || node.source === 'dockerfile');
+}
+
 function isCollapsed(node: TreeNode): boolean {
   const ref = collapseRef(node);
   if (ref === undefined) {
@@ -3097,7 +3126,7 @@ function createTree(): vscode.Disposable[] {
       if (!node) {
         return buildTreeRoots(await listScripts());
       }
-      return node.kind === 'group' && node.source !== 'docker-compose' ? node.children : [];
+      return node.kind === 'group' && !isFileItem(node) ? node.children : [];
     },
   };
 
@@ -3719,7 +3748,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // touched shows everything it found, and one you have shows it as you left it.
     const item = new vscode.TreeItem(
       heading,
-      node.source === 'docker-compose'
+      isFileItem(node)
         ? vscode.TreeItemCollapsibleState.None
         : isCollapsed(node)
           ? vscode.TreeItemCollapsibleState.Collapsed
@@ -3776,15 +3805,16 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // cmd. So it wears the terminal the Shell ecosystem row wears, and follows
     // `groupIcons` like every other heading: `uniform` puts the stack back on it.
     const stock = node.source === 'shell' && typeIcons() ? ECOSYSTEMS.shell.icon : node.icon;
-    if (alive && node.source === 'docker-compose') {
-      // A compose file is the one heading that *is* the thing being run — the
-      // stack, which is why ▶ and ■ sit on the row — so it spins while any part
-      // of it runs, the way a task row does. Any part: one `up: web` of six
-      // services is the stack being up as far as this row is concerned, and the
-      // row is folded shut most of the time, which is exactly when a heading
-      // that cannot say it is busy is a heading you have to open to find out.
+    if (alive && isFileItem(node)) {
+      // A compose file and a Dockerfile are the two headings that *are* the thing
+      // being run — the stack and the image, which is why ▶ sits on the row — so
+      // each spins while any part of it runs, the way a task row does. Any part:
+      // one `up: web` of six services is the stack being up as far as that row is
+      // concerned, and a `build: deps` is this image being built. Neither row has
+      // anything underneath it to show a spinner instead, which is exactly when a
+      // heading that cannot say it is busy is a heading you cannot ask.
       //
-      // Only compose. Every other heading is a file or a folder that *holds*
+      // Only these two. Every other heading is a file or a folder that *holds*
       // tasks rather than being one, and a spinner on all of them would be a
       // column of them in a monorepo where one `dev` is running.
       //
@@ -3829,7 +3859,18 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // Hide has nothing left to do, and it was never put there on its own, so
     // Show has nothing to bring back — see `carried` on the node.
     const put = node.carried ? ':carried' : node.hidden ? ':hidden' : '';
-    const state = `${node.source === 'docker-compose' ? 'compose' : 'group:package'}${stacked}${put}`;
+    // A Dockerfile takes a head of its own for the same reason compose has one:
+    // the row is a file that is run rather than a package that holds rows, so the
+    // package's menu — Run/Stop on a script, the confirmation toggle — is not the
+    // menu it wants. It carries no `stacked` segment: `composeUpNode` answers for
+    // compose alone, and nothing asks Docker whether an image exists.
+    const head =
+      node.source === 'docker-compose'
+        ? 'compose'
+        : node.source === 'dockerfile'
+          ? 'dockerfile'
+          : 'group:package';
+    const state = `${head}${stacked}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
@@ -4585,27 +4626,88 @@ function composeUpNode(node: TreeNode | undefined): (TreeNode & { kind: 'script'
   );
 }
 
+/** ▶ on a compose item: the file's own bare `up`, confirmation included. */
+async function runGroup(node: TreeNode | undefined): Promise<void> {
+  await runLead(composeUpNode(node));
+}
+
 /**
- * ▶ on a compose item: the file's own bare `up`, confirmation included.
+ * ▶ on a row that stands for a file: its one bare action, whatever that file's
+ * bare action is — `up` for compose, `build` for a Dockerfile.
  *
  * A run already up is not started a second time. The `when` clause on the button
  * says the same thing — ▶ is not drawn on a row with something running under
- * it — but a context value is what the tree was last told, and a second `up`
- * over the first would overwrite the handle in `running` with the newer one:
- * the first task would then be a terminal nothing in here can stop, ■ and Stop
- * All included. So the map itself has the last word, and the answer to a press
- * that finds it already running is its terminal rather than another process.
+ * it — but a context value is what the tree was last told, and a second start
+ * over the first would overwrite the handle in `running` with the newer one: the
+ * first task would then be a terminal nothing in here can stop, ■ and Stop All
+ * included. So the map itself has the last word, and the answer to a press that
+ * finds it already running is its terminal rather than another process.
  */
-async function runGroup(node: TreeNode | undefined): Promise<void> {
-  const up = composeUpNode(node);
-  if (!up) {
+async function runLead(lead: (TreeNode & { kind: 'script' }) | undefined): Promise<void> {
+  if (!lead) {
     return;
   }
-  if (running.has(up.script.key)) {
-    await showTerminal(up);
+  if (running.has(lead.script.key)) {
+    await showTerminal(lead);
     return;
   }
-  await runNode(up, false);
+  await runNode(lead, false);
+}
+
+/**
+ * The bare `build` of a Dockerfile — no `--target`, the whole file.
+ *
+ * It is the action every Dockerfile has: `parseDockerfile` puts it there whatever
+ * `dockerfileCommands` says, which is why ▶ on the row can be relied on to have
+ * something to press. The stage builds are `build: <stage>` and are behind the
+ * menu with the rest.
+ */
+function dockerfileBuildNode(node: TreeNode | undefined): (TreeNode & { kind: 'script' }) | undefined {
+  if (node?.kind !== 'group' || node.source !== 'dockerfile') {
+    return undefined;
+  }
+  return node.children.find(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name === 'build',
+  );
+}
+
+/** ▶ on a Dockerfile row: build the image the file describes. */
+async function buildImage(node: TreeNode | undefined): Promise<void> {
+  await runLead(dockerfileBuildNode(node));
+}
+
+/**
+ * Everything a Dockerfile offers past the bare `build` — one `build: <stage>` per
+ * named stage, and whatever `dockerfileCommands` adds: `run`, `push` and the
+ * rest. The same menu compose keeps behind ☰, for the same reason: the row is one
+ * line, and these are the variations on the action the row already runs.
+ */
+async function dockerfileActions(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'group' || node.source !== 'dockerfile') {
+    return;
+  }
+  const actions = node.children.filter(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name !== 'build',
+  );
+  if (actions.length === 0) {
+    void vscode.window.showInformationMessage('No additional Docker commands are configured.');
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(
+    actions.map((action) => ({
+      label: action.script.name.startsWith('build: ')
+        ? `$(play) Build ${action.script.name.slice(7)}`
+        : action.script.name,
+      description: action.script.command,
+      action,
+    })),
+    { placeHolder: `Docker command for ${node.label}` },
+  );
+  if (picked) {
+    await runNode(picked.action, true);
+  }
 }
 
 /**

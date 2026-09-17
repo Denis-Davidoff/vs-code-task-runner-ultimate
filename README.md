@@ -40,10 +40,11 @@ restart without ever going looking for a terminal tab.**
   opening it, and the heading spins while any part of it runs. **Check Containers** asks Docker what
   is really up — including stacks you started from a terminal or with `up -d` — and ■ then stops
   them.
-- 🏗️ **[Dockerfiles, as rows](#dockerfiles)** — every `Dockerfile`, `Dockerfile.dev` and
-  `api.Dockerfile` in the workspace, with `build` fanned out per `FROM … AS <stage>` and `run` beside
-  it. The image is tagged after the folder it sits in, so a build leaves something you can run rather
-  than a dangling id.
+- 🏗️ **[Dockerfiles, as one row each](#dockerfiles)** — every `Dockerfile`, `Dockerfile.dev` and
+  `api.Dockerfile` in the workspace. **▶ on the file's own row builds it** and ☰ beside it holds the
+  rest — `run`, `push` and one build per `FROM … AS <stage>` — so a file is a line rather than a
+  folder, and the row spins while a build runs. The image is tagged after the folder it sits in, so a
+  build leaves something you can run rather than a dangling id.
 - 💻 **[Shell scripts, as tasks](#shell-scripts)** — `.sh`, `.bash`, `.zsh` and `.ksh`, and on Windows
   `.ps1`, `.bat` and `.cmd`, picked up from `scripts/`, `bin/` and the workspace root at any depth.
   Each project's scripts gather under one `shell` folder with a terminal icon, a row no category
@@ -170,7 +171,7 @@ monorepo.
 | **PHP** | `composer.json` | `scripts` | `composer run-script <name>` |
 | **mise** | `mise.toml`, `.mise.toml` | `[tasks.*]` | `mise run <name>` |
 | **Docker** | `compose.yml`, `docker-compose.yml`, their `.yaml` spellings, and profile names like `docker-compose.dev.yml` | `services:` — see [below](#docker-compose) | `docker compose -f <file> up <service>`, … |
-| | `Dockerfile`, `Dockerfile.dev`, `api.Dockerfile` | the `FROM … AS <stage>` stages — see [below](#dockerfiles) | `docker build -f <file> --target <stage> -t <tag> .`, … |
+| | `Dockerfile`, `Dockerfile.dev`, `api.Dockerfile` | one row per file, with the `FROM … AS <stage>` stages behind ☰ — see [below](#dockerfiles) | `docker build -f <file> --target <stage> -t <tag> .`, … |
 | **Shell** | `**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}`, the same under `**/bin/**/`, and `*.{sh,…}` in the root | the files themselves — see [below](#shell-scripts) | `bash ./scripts/deploy.sh`, `powershell -NoProfile -File ./bin/setup.ps1` |
 
 Turn any of them off with `taskRunnerUltimate.sources` — a removed ecosystem's files are never
@@ -332,23 +333,25 @@ the code for this lives in a file of its own, `src/containers.ts`, so the bounda
 
 ### Dockerfiles
 
-A Dockerfile declares build stages, not tasks, so — like a compose file — its rows are the `docker`
-subcommands worth having on a list: `build`, and `run` by default, set by
+A Dockerfile declares build stages, not tasks, so — like a compose file — its actions are the
+`docker` subcommands worth having on a list: `build`, and `run` by default, set by
 `taskRunnerUltimate.dockerfileCommands`.
 
-`build` is the one that fans out. Every named `FROM … AS <stage>` gets a row of its own that passes
+And like a compose file it is **one row rather than a folder**: a Dockerfile *is* the image, so the
+file itself is what you press. `build` is on ▶, and everything else is behind the ☰ beside it —
+which is where the fan-out goes. Every named `FROM … AS <stage>` gets an entry of its own that passes
 `--target`, so the intermediate stages of a multi-stage build are one click each rather than a
 command you have to remember:
 
 ```text
-Dockerfile • apps/api
-  📦 build            docker build -f Dockerfile -t api .
-  📦 build: deps      docker build -f Dockerfile --target deps -t api/deps .
-  📦 build: builder   docker build -f Dockerfile --target builder -t api/builder .
-  ▶ run               docker run --rm -it api
+🐳 Dockerfile • apps/api                     ▶ ☰
+     ↳ ☰  build: deps      docker build -f Dockerfile --target deps -t api/deps .
+        ☰  build: builder  docker build -f Dockerfile --target builder -t api/builder .
+        ☰  run             docker run --rm -it api
 ```
 
-A stage with no name is not a row: `--target` needs one. The bare `build` stays even when the last
+The row spins while any of them runs, and ■ beside it ends whatever it started. A stage with no name
+is not an entry: `--target` needs one. The bare `build` stays even when the last
 stage is named, because `docker build` with no target is what most people want and the menu reads the
 same whatever the file holds.
 
