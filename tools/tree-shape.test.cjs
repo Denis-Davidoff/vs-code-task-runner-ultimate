@@ -146,7 +146,10 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
     QuickPickItemKind: { Separator: -1 },
-    Uri: { from: (parts) => ({ ...parts, toString: () => `${parts.scheme}:${parts.path}` }) },
+    Uri: {
+      from: (parts) => ({ ...parts, toString: () => `${parts.scheme}:${parts.path}` }),
+      joinPath: (base, ...rest) => uri([base.path, ...rest].join('/')),
+    },
   };
 
   const memento = {
@@ -207,15 +210,18 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     compiled +
       `
     storage = memento;
+    // Set by activate in the real thing; the swatches in the colour picker are
+    // files inside the extension, and this is where it keeps them.
+    extensionUri = extUri;
     keyForTask = () => undefined;
     repaint = () => {};
     confirmScript = async () => true;
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async () => ${stops};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, SCAN_SETTINGS };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, PALETTE, SCAN_SETTINGS };
   `,
-    Object.assign(context, { memento }),
+    Object.assign(context, { memento, extUri: uri('/ext') }),
   );
   return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked };
 }
@@ -648,6 +654,69 @@ test('a painted heading keeps both its colour and its file icon', () => {
   const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
   assert.deepEqual({ ...row.iconPath }, { themeFile: true });
   assert.equal(row.resourceUri.path.split('/')[1], 'taskRunnerUltimate.palette.teal');
+});
+
+test('the colour picker draws a swatch for every colour and files what was picked', async () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  // Index 0 is Default, so this lands on the third colour of the palette.
+  const h = harness({ pick: 3 });
+  await h.pickColor({ kind: 'script', script: dev });
+
+  const [{ items, options }] = h.quickPicks;
+  assert.equal(options.title, 'Change Colour');
+  assert.deepEqual(
+    [...items].map((item) => item.label),
+    ['$(discard) Default', ...h.PALETTE.map((name) => name[0].toUpperCase() + name.slice(1))],
+  );
+  // A file per colour and per theme, which is the only kind of icon a quick pick
+  // draws in colour at all.
+  assert.deepEqual(
+    [items[1].iconPath.dark.path, items[1].iconPath.light.path],
+    ['/ext/media/swatch-red-dark.svg', '/ext/media/swatch-red-light.svg'],
+  );
+  assert.equal(h.memento.data.colors['file:///repo/package.json::dev'], h.PALETTE[2]);
+});
+
+test('the colour picker takes a colour back off', async () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const h = harness({ pick: 0, stored: { colors: { 'file:///repo/package.json::dev': 'green' } } });
+  await h.pickColor({ kind: 'script', script: dev });
+  // Deleted rather than stored as a default, which is what keeps the count in
+  // the menu honest about how much there is to undo.
+  assert.equal('file:///repo/package.json::dev' in h.memento.data.colors, false);
+  assert.equal(h.quickPicks[0].items[0].description, undefined);
+});
+
+test('the palette, the theme colours and the swatch files all say the same thing', () => {
+  // Three lists that used to be kept in step by hand. The generator writes two of
+  // them now, and this is what catches a colour added to the code and nowhere else.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const { PALETTE } = harness({});
+  const declared = manifest.contributes.colors
+    .filter((entry) => entry.id.startsWith('taskRunnerUltimate.palette.'))
+    .map((entry) => entry.id.slice('taskRunnerUltimate.palette.'.length));
+  assert.deepEqual(declared, [...PALETTE]);
+
+  for (const name of PALETTE) {
+    for (const theme of ['dark', 'light']) {
+      const at = path.join(__dirname, '..', 'media', `swatch-${name}-${theme}.svg`);
+      assert.equal(fs.existsSync(at), true, `missing swatch for ${name} ${theme}`);
+      // The swatch is the shade the theme colour declares, or the list shows one
+      // colour and the row takes another.
+      const fill = fs.readFileSync(at, 'utf8').match(/fill="(#[0-9A-Fa-f]{6})"/)[1];
+      const entry = manifest.contributes.colors.find(
+        (colour) => colour.id === `taskRunnerUltimate.palette.${name}`,
+      );
+      assert.equal(fill, entry.defaults[theme], `${name} ${theme} swatch does not match the palette`);
+    }
+  }
+});
+
+test('nothing is left pointing at the colour submenu that no longer exists', () => {
+  // An id left in contributes.submenus draws an empty `Colour ▸` in every menu.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  assert.equal(manifest.contributes.submenus, undefined);
+  assert.equal(JSON.stringify(manifest.contributes.menus).includes('submenu'), false);
 });
 
 test('an icon picked by hand stands in for the theme\'s', () => {
@@ -1822,6 +1891,7 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
     ['dockerfileActions', '0_actions@4'],
     ['openManifest', '0_open@1'],
     ['editTitle', '2_modify@1'],
+    ['pickColor', '2_modify@2'],
     ['pickIcon', '2_modify@3'],
   ]) {
     assert.equal(takes(command, group, 'dockerfile:hidden'), true, `${command} ${group} hidden`);

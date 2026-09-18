@@ -328,58 +328,89 @@
       },
       {
         "command": "taskRunnerUltimate.setColor.red",
-        "title": "🔴 Red",
+        "title": "Paint Red",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.orange",
-        "title": "🟠 Orange",
+        "title": "Paint Orange",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.yellow",
-        "title": "🟡 Yellow",
+        "title": "Paint Yellow",
+        "category": "Task & Script Explorer"
+      },
+      {
+        "command": "taskRunnerUltimate.setColor.lime",
+        "title": "Paint Lime",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.green",
-        "title": "🟢 Green",
+        "title": "Paint Green",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.teal",
-        "title": "💠 Teal",
+        "title": "Paint Teal",
+        "category": "Task & Script Explorer"
+      },
+      {
+        "command": "taskRunnerUltimate.setColor.cyan",
+        "title": "Paint Cyan",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.blue",
-        "title": "🔵 Blue",
+        "title": "Paint Blue",
+        "category": "Task & Script Explorer"
+      },
+      {
+        "command": "taskRunnerUltimate.setColor.indigo",
+        "title": "Paint Indigo",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.purple",
-        "title": "🟣 Purple",
+        "title": "Paint Purple",
+        "category": "Task & Script Explorer"
+      },
+      {
+        "command": "taskRunnerUltimate.setColor.magenta",
+        "title": "Paint Magenta",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.pink",
-        "title": "🌸 Pink",
+        "title": "Paint Pink",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.brown",
-        "title": "🟤 Brown",
+        "title": "Paint Brown",
+        "category": "Task & Script Explorer"
+      },
+      {
+        "command": "taskRunnerUltimate.setColor.slate",
+        "title": "Paint Slate",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.setColor.gray",
-        "title": "⚪ Gray",
+        "title": "Paint Gray",
         "category": "Task & Script Explorer"
       },
       {
         "command": "taskRunnerUltimate.clearColor",
         "title": "Default",
         "category": "Task & Script Explorer"
+      },
+      {
+        "command": "taskRunnerUltimate.pickColor",
+        "title": "Change Colour…",
+        "category": "Task & Script Explorer",
+        "icon": "$(symbol-color)"
       },
       {
         "command": "taskRunnerUltimate.pickIcon",
@@ -425,13 +456,6 @@
         "title": "Restart All Running Tasks",
         "category": "Task & Script Explorer",
         "icon": "$(debug-restart)"
-      }
-    ],
-    "submenus": [
-      {
-        "id": "taskRunnerUltimate.color",
-        "label": "Colour",
-        "icon": "$(symbol-color)"
       }
     ],
     "menus": {
@@ -678,7 +702,7 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?$/"
         },
         {
-          "submenu": "taskRunnerUltimate.color",
+          "command": "taskRunnerUltimate.pickColor",
           "group": "2_modify@2",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group|compose|dockerfile)/"
         },
@@ -701,52 +725,6 @@
           "command": "taskRunnerUltimate.showGroup",
           "group": "2_modify@4",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose|dockerfile)(:(up|down|building))?:hidden(:running)?$/"
-        }
-      ],
-      "taskRunnerUltimate.color": [
-        {
-          "command": "taskRunnerUltimate.setColor.red",
-          "group": "1_palette@1"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.orange",
-          "group": "1_palette@2"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.yellow",
-          "group": "1_palette@3"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.green",
-          "group": "1_palette@4"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.teal",
-          "group": "1_palette@5"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.blue",
-          "group": "1_palette@6"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.purple",
-          "group": "1_palette@7"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.pink",
-          "group": "1_palette@8"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.brown",
-          "group": "1_palette@9"
-        },
-        {
-          "command": "taskRunnerUltimate.setColor.gray",
-          "group": "1_palette@10"
-        },
-        {
-          "command": "taskRunnerUltimate.clearColor",
-          "group": "2_reset@1"
         }
       ],
       "commandPalette": [
@@ -899,6 +877,10 @@
           "when": "false"
         },
         {
+          "command": "taskRunnerUltimate.setColor.lime",
+          "when": "false"
+        },
+        {
           "command": "taskRunnerUltimate.setColor.green",
           "when": "false"
         },
@@ -907,11 +889,23 @@
           "when": "false"
         },
         {
+          "command": "taskRunnerUltimate.setColor.cyan",
+          "when": "false"
+        },
+        {
           "command": "taskRunnerUltimate.setColor.blue",
           "when": "false"
         },
         {
+          "command": "taskRunnerUltimate.setColor.indigo",
+          "when": "false"
+        },
+        {
           "command": "taskRunnerUltimate.setColor.purple",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.setColor.magenta",
           "when": "false"
         },
         {
@@ -920,6 +914,10 @@
         },
         {
           "command": "taskRunnerUltimate.setColor.brown",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.setColor.slate",
           "when": "false"
         },
         {
@@ -1376,6 +1374,16 @@
         }
       },
       {
+        "id": "taskRunnerUltimate.palette.lime",
+        "description": "Colour a task or package heading can be painted with from its context menu: Lime.",
+        "defaults": {
+          "dark": "#A8CC52",
+          "light": "#5E7A00",
+          "highContrast": "#C6E37A",
+          "highContrastLight": "#3F5200"
+        }
+      },
+      {
         "id": "taskRunnerUltimate.palette.green",
         "description": "Colour a task or package heading can be painted with from its context menu: Green.",
         "defaults": {
@@ -1396,6 +1404,16 @@
         }
       },
       {
+        "id": "taskRunnerUltimate.palette.cyan",
+        "description": "Colour a task or package heading can be painted with from its context menu: Cyan.",
+        "defaults": {
+          "dark": "#4ABFD9",
+          "light": "#0E7490",
+          "highContrast": "#84DCEF",
+          "highContrastLight": "#04566E"
+        }
+      },
+      {
         "id": "taskRunnerUltimate.palette.blue",
         "description": "Colour a task or package heading can be painted with from its context menu: Blue.",
         "defaults": {
@@ -1406,6 +1424,16 @@
         }
       },
       {
+        "id": "taskRunnerUltimate.palette.indigo",
+        "description": "Colour a task or package heading can be painted with from its context menu: Indigo.",
+        "defaults": {
+          "dark": "#8C8CF0",
+          "light": "#4343C4",
+          "highContrast": "#B0B0FF",
+          "highContrastLight": "#2B2B96"
+        }
+      },
+      {
         "id": "taskRunnerUltimate.palette.purple",
         "description": "Colour a task or package heading can be painted with from its context menu: Purple.",
         "defaults": {
@@ -1413,6 +1441,16 @@
           "light": "#652D90",
           "highContrast": "#C8A2E0",
           "highContrastLight": "#4B1D6E"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.palette.magenta",
+        "description": "Colour a task or package heading can be painted with from its context menu: Magenta.",
+        "defaults": {
+          "dark": "#DE73C8",
+          "light": "#A3007A",
+          "highContrast": "#F29BE0",
+          "highContrastLight": "#75005A"
         }
       },
       {
@@ -1433,6 +1471,16 @@
           "light": "#8A5A2B",
           "highContrast": "#D8AE86",
           "highContrastLight": "#633D17"
+        }
+      },
+      {
+        "id": "taskRunnerUltimate.palette.slate",
+        "description": "Colour a task or package heading can be painted with from its context menu: Slate.",
+        "defaults": {
+          "dark": "#98A7BA",
+          "light": "#4F5B6B",
+          "highContrast": "#BDC9D8",
+          "highContrastLight": "#36404D"
         }
       },
       {

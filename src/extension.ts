@@ -285,6 +285,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // `ExtensionContext.extension` is stable API as of VS Code 1.62, well under the
   // 1.85 this extension asks for, so there is no id spelled out anywhere here.
   extensionId = context.extension.id;
+  extensionUri = context.extensionUri;
 
   for (const exec of vscode.tasks.taskExecutions) {
     const key = keyForTask(exec.task);
@@ -382,9 +383,10 @@ export function activate(context: vscode.ExtensionContext): void {
       restartGroup(node),
     ),
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
-    // One command per colour: a submenu entry is a command, and there is no way
-    // to hand it an argument from contributes.menus. The list is the palette's,
-    // so the two can never drift apart.
+    // One command per colour, though the menu points at none of them any more:
+    // the picker below is a list, and a list needs one command for all fifteen.
+    // These stay registered because somebody's keybinding may name one, and the
+    // list is the palette's, so the two can never drift apart.
     ...PALETTE.map((name) =>
       vscode.commands.registerCommand(`taskRunnerUltimate.setColor.${name}`, (node?: TreeNode) =>
         setNodeColor(node, name),
@@ -393,8 +395,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.clearColor', (node?: TreeNode) =>
       setNodeColor(node, undefined),
     ),
-    // One command for every icon, unlike the colours: an icon picker is a list
-    // of thirty, which is a quick pick's size and three columns past a submenu's.
+    vscode.commands.registerCommand('taskRunnerUltimate.pickColor', (node?: TreeNode) => pickColor(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.pickIcon', (node?: TreeNode) => pickIcon(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.checkContainers', () => checkContainers(true)),
     // Two commands for one button: each names the mode it puts the tree in, and
@@ -826,6 +827,8 @@ const CONFIRM_KEY = 'confirmations';
 let storage: vscode.Memento | undefined;
 /** This extension's `publisher.name`, for the query that filters the settings editor. */
 let extensionId: string | undefined;
+/** Where this extension's own files live, which is where the palette swatches are. */
+let extensionUri: vscode.Uri | undefined;
 
 /**
  * Storage identity of a workspace folder. Its name, which is what the workspace
@@ -1290,7 +1293,29 @@ async function renameRef(
  * also what lets a name this build no longer offers be ignored rather than
  * handed to `ThemeColor` as a colour nothing declares.
  */
-const PALETTE = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'brown', 'gray'] as const;
+/**
+ * The colours a row can be painted, in the order the picker lists them: around
+ * the wheel from red, with the two neutrals last. Kept in step with the PALETTE
+ * in `tools/generate-contributions.js`, which is where the shades themselves are
+ * declared and where the swatch files and `contributes.colors` are made from them.
+ */
+const PALETTE = [
+  'red',
+  'orange',
+  'yellow',
+  'lime',
+  'green',
+  'teal',
+  'cyan',
+  'blue',
+  'indigo',
+  'purple',
+  'magenta',
+  'pink',
+  'brown',
+  'slate',
+  'gray',
+] as const;
 
 type PaletteName = (typeof PALETTE)[number];
 
@@ -1342,6 +1367,68 @@ function colorRef(node: TreeNode): string | undefined {
 function nodeColor(node: TreeNode): string | undefined {
   const name = storedColor(colorRef(node));
   return name ? paletteColor(name) : undefined;
+}
+
+/**
+ * The swatch a colour is drawn with in the picker, as a pair the workbench picks
+ * between. A file rather than a `ThemeIcon` carrying the palette colour itself,
+ * because VS Code turns a `ThemeIcon` into a bare codicon on the way into a quick
+ * pick and drops the colour doing it — only URI icons are drawn in colour there.
+ *
+ * The cost of that is one thing worth knowing: a swatch is the shade the palette
+ * ships, so a colour overridden in `workbench.colorCustomizations` is painted on
+ * the row as the override and drawn here as the original.
+ */
+function swatch(name: PaletteName): { light: vscode.Uri; dark: vscode.Uri } | undefined {
+  return extensionUri
+    ? {
+        light: vscode.Uri.joinPath(extensionUri, 'media', `swatch-${name}-light.svg`),
+        dark: vscode.Uri.joinPath(extensionUri, 'media', `swatch-${name}-dark.svg`),
+      }
+    : undefined;
+}
+
+/**
+ * The colour picker, on the same rows the icons are and now in the same shape.
+ *
+ * It was a submenu of one command per colour until the palette outgrew it: a
+ * platform menu draws no icons, so every swatch had to be spelled as a character
+ * in the label, and Unicode has no coloured circle for teal, pink, grey or any of
+ * the five this list gained. A quick pick draws a real one, which is what lets
+ * fifteen colours be told apart by eye rather than read.
+ */
+async function pickColor(node: TreeNode | undefined): Promise<void> {
+  const ref = node ? colorRef(node) : undefined;
+  if (!ref) {
+    return;
+  }
+  const current = storedColor(ref);
+
+  interface ColourItem extends vscode.QuickPickItem {
+    name?: PaletteName;
+  }
+  const items: ColourItem[] = [
+    {
+      label: '$(discard) Default',
+      description: current ? undefined : 'current',
+      detail: 'The colour its category or kind gives it.',
+    },
+    ...PALETTE.map((name): ColourItem => ({
+      label: name.charAt(0).toUpperCase() + name.slice(1),
+      description: name === current ? 'current' : undefined,
+      iconPath: swatch(name),
+      name,
+    })),
+  ];
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Change Colour',
+    placeHolder: 'Pick a colour for this row — shown in this list only',
+  });
+  if (picked) {
+    // `undefined` on the Default row, which is what takes the colour back off.
+    await setNodeColor(node, picked.name);
+  }
 }
 
 /**
