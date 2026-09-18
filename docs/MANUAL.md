@@ -1026,6 +1026,12 @@ are the reason it is done that way:
 A pack the workbench has no rule for — an icon whose pack you uninstalled — falls back to that pack's
 plain file icon rather than to an empty square.
 
+One place the top half of the list does not appear: a remote window. Over Remote SSH, in a dev
+container or in WSL, this extension runs on the remote machine while icon packs are installed on the
+local one, and nothing in the VS Code API lets the remote side read a file out of a local extension.
+The section is simply absent there and the list is the icon font alone. Rows already wearing a pack
+icon are unaffected — they name their icon and the workbench draws it, which it does on either side.
+
 The running spinner still wins over any icon, picked or not: while a task is alive, "this one is
 busy" is the one thing the icon is being asked.
 

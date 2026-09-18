@@ -397,9 +397,12 @@ manifest.contributes.commands = [
   // bar, and the tree is contributed into that side bar as well as its own.
   { command: 'taskRunnerUltimate.revealInExplorerView', title: 'Reveal in Explorer View', category: 'Task & Script Explorer', icon: '$(list-tree)' },
   // One command per colour still, though nothing in the menus points at them any
-  // more: the picker is a quick pick and needs none of them. They stay because a
-  // command id is a promise — somebody's keybinding says `setColor.green`, and a
-  // keybinding that stops working is a worse trade than fifteen ids nobody reads.
+  // more: the picker is a quick pick and needs none of them. They stay so that a
+  // keybinding somebody already wrote against `setColor.green` does not start
+  // failing with "command not found" — it will not paint anything either, since a
+  // command invoked from a keybinding is handed no row, which is why they are
+  // hidden from the palette below. Registered so as not to break, not because
+  // they work.
   ...PALETTE.map(({ name }) => ({
     command: colourCommand(name),
     title: `Paint ${titleCase(name)}`,
@@ -757,6 +760,11 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.revealInExplorerView', when: 'false' },
     ...PALETTE.map(({ name }) => ({ command: colourCommand(name), when: 'false' })),
     { command: CLEAR_COLOUR, when: 'false' },
+    // Both pickers, for the reason given above: neither can do anything without
+    // the row it was invoked from. The colour one is a command rather than a
+    // submenu now, and a submenu was never offered in the palette at all — so
+    // this line is what the submenu used to get for free.
+    { command: 'taskRunnerUltimate.pickColor', when: 'false' },
     { command: 'taskRunnerUltimate.pickIcon', when: 'false' },
   ],
 };

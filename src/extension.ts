@@ -385,8 +385,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
     // One command per colour, though the menu points at none of them any more:
     // the picker below is a list, and a list needs one command for all fifteen.
-    // These stay registered because somebody's keybinding may name one, and the
-    // list is the palette's, so the two can never drift apart.
+    //
+    // They stay registered so that a keybinding somebody already wrote against
+    // `setColor.green` does not start failing with "command not found". It will
+    // not paint anything either — a command invoked from a keybinding is handed
+    // no row, and `setNodeColor` has nothing to file a colour against — which is
+    // why they are hidden from the command palette too. Registered so as not to
+    // break, not because they work.
     ...PALETTE.map((name) =>
       vscode.commands.registerCommand(`taskRunnerUltimate.setColor.${name}`, (node?: TreeNode) =>
         setNodeColor(node, name),
@@ -1283,21 +1288,19 @@ async function renameRef(
 // --- row colours -------------------------------------------------------------
 
 /**
- * The ten colours a row can be painted, in the order the submenu offers them:
- * around the wheel from red, then the two quiet ones — brown and grey — last,
- * which is where a row being turned down rather than picked out belongs.
+ * The colours a row can be painted, in the order the picker lists them: around
+ * the wheel from red, with the two neutrals last, which is where a row being
+ * turned down rather than picked out belongs.
+ *
+ * Kept in step with the PALETTE in `tools/generate-contributions.js`, which is
+ * where the shades themselves are declared and where the swatch files and the
+ * `contributes.colors` entries are made from them.
  *
  * The store keeps these names rather than the theme colour ids behind them. A
  * name is what the user picked, and the id it maps to stays ours to move; a
  * store full of ids is one that goes blank the day one of them is renamed. It is
  * also what lets a name this build no longer offers be ignored rather than
  * handed to `ThemeColor` as a colour nothing declares.
- */
-/**
- * The colours a row can be painted, in the order the picker lists them: around
- * the wheel from red, with the two neutrals last. Kept in step with the PALETTE
- * in `tools/generate-contributions.js`, which is where the shades themselves are
- * declared and where the swatch files and `contributes.colors` are made from them.
  */
 const PALETTE = [
   'red',
@@ -5698,8 +5701,8 @@ function buildItems(saved: ScriptEntry[]): Item[] {
  * same way the tree's starred rows do — listed away from a package heading, the
  * row has to answer that itself.
  *
- * The icon is written into the label as `$(id)` rather than passed as `iconPath`,
- * which looks like the worse of the two and is not:
+ * A codicon is written into the label as `$(id)` rather than passed as
+ * `iconPath`, which looks like the worse of the two and is not:
  *
  * - `iconPath` puts the icon in the row's own 16px slot, which carries
  *   `padding-right: 6px`. A codicon lands centred in the content box while
@@ -5712,8 +5715,14 @@ function buildItems(saved: ScriptEntry[]): Item[] {
  *   icons are drawn in colour there, and a pre-rendered SVG cannot resolve a
  *   theme colour id, least of all one a user put in `categories`.
  *
- * So `iconPath` costs the spinner and buys nothing. In the label the codicon is
- * an inline span sized to the glyph, and it spins true.
+ * So for a codicon `iconPath` costs the spinner and buys nothing. In the label it
+ * is an inline span sized to the glyph, and it spins true.
+ *
+ * An icon out of the file icon theme is the one exception, and it is the same
+ * sentence read the other way: it is a picture, not a glyph in the font, so the
+ * label cannot carry it and `iconPath` is the only way in. Such a row never
+ * spins — the spinner wins over a picked icon — so the cost above is not one it
+ * can pay, and being a URI icon it is the one kind drawn in colour here.
  */
 function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
   const isRunning = running.has(script.key);

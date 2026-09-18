@@ -929,6 +929,10 @@
           "when": "false"
         },
         {
+          "command": "taskRunnerUltimate.pickColor",
+          "when": "false"
+        },
+        {
           "command": "taskRunnerUltimate.pickIcon",
           "when": "false"
         }

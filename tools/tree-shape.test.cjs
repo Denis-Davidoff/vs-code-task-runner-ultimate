@@ -33,6 +33,19 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
   const warnings = [];
   const hints = [];
   const quickPicks = [];
+  /**
+   * The one pack the stubbed catalogue offers. Spelled the way `iconsFrom` spells
+   * one, because what the picker files is built out of these two fields — and the
+   * string it builds is the only thing that has to survive the trip back.
+   */
+  const pack = {
+    id: 'test-pack',
+    variant: 'dark',
+    label: 'Test Pack',
+    base: { path: '/pack' },
+    icons: [{ key: '_rust', name: 'Rust', kind: 'file', specimen: 'icon.rs', hint: '*.rs', art: 'rust.svg' }],
+    art: new Map([['file:icon.rs', 'rust.svg']]),
+  };
   const copied = [];
   const invoked = [];
   const vscode = {
@@ -175,14 +188,14 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
           ? path
           : name === './iconTheme'
             ? {
-                // The catalogue is a file on disk in the real thing; the tree
-                // only ever asks it for a picture to put in the dropdown, and
-                // answers without one are the ordinary case (a pack drawing from
-                // a font has none).
+                // The catalogue is a file on disk in the real thing. Here it is
+                // one pack of one icon, which is enough to walk the whole path
+                // the picker takes: the icon is listed, picked, filed, and read
+                // back onto the row by the code that draws it.
                 forgetIconPack: () => {},
-                iconPack: async () => undefined,
-                // One pack, one picture in it. A pack drawing from a font has
-                // none for any name, which is the other answer worth having.
+                iconPack: async () => pack,
+                // A pack drawing from a font has no picture for any name, which
+                // is the other answer worth having.
                 packArt: (kind, name) =>
                   kind === 'file' && name === 'icon.rs' ? { fsPath: '/pack/rust.svg' } : undefined,
               }
@@ -219,7 +232,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async () => ${stops};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, PALETTE, SCAN_SETTINGS };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS };
   `,
     Object.assign(context, { memento, extUri: uri('/ext') }),
   );
@@ -712,6 +725,32 @@ test('the palette, the theme colours and the swatch files all say the same thing
   }
 });
 
+test('only the commands that work without a row are offered in the palette', () => {
+  // A command invoked from the palette is handed no row, so every command that
+  // needs one returns silently there — a visible entry that does nothing. The
+  // rule is old; what is new is that the colour picker is a command rather than a
+  // submenu, and a submenu was never offered in the palette at all.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const hidden = new Set(
+    manifest.contributes.menus.commandPalette
+      .filter((entry) => entry.when === 'false')
+      .map((entry) => entry.command),
+  );
+  const visible = manifest.contributes.commands
+    .map((command) => command.command.replace('taskRunnerUltimate.', ''))
+    .filter((command) => !hidden.has(`taskRunnerUltimate.${command}`));
+  assert.deepEqual(visible.sort(), [
+    'checkContainers',
+    'groupByEcosystem',
+    'groupFlat',
+    'menu',
+    'refresh',
+    'restartAll',
+    'show',
+    'stopAll',
+  ]);
+});
+
 test('nothing is left pointing at the colour submenu that no longer exists', () => {
   // An id left in contributes.submenus draws an empty `Colour ▸` in every menu.
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
@@ -723,6 +762,55 @@ test('an icon picked by hand stands in for the theme\'s', () => {
   const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'rocket' } } });
   const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
   assert.equal(row.iconPath.id, 'rocket');
+});
+
+test('an icon picked out of the pack reaches the store and comes back onto the row', async () => {
+  // The seam this feature rests on: the picker writes one string, the row reads
+  // it back, and nothing else in the codebase knows what that string looks like.
+  // Both halves are exercised here, in that order, so neither can be changed
+  // alone.
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  // 0 is Default, 1 the separator naming the pack, 2 the one icon in it.
+  const h = harness({ pick: 2 });
+  await h.pickIcon({ kind: 'script', script: dev });
+
+  const [{ items, options }] = h.quickPicks;
+  assert.equal(options.title, 'Change Icon');
+  // Typing filters on the name beside the icon as well, which is the half worth
+  // typing — `*.rs` rather than `Rust`.
+  assert.equal(options.matchOnDescription, true);
+  assert.equal(items[1].label, 'Test Pack');
+  assert.deepEqual(
+    [items[2].label, items[2].description, items[2].iconPath.path],
+    ['Rust', '*.rs', '/pack/rust.svg'],
+  );
+
+  // Filed as the name that reaches the icon, never as anything belonging to the
+  // pack it came from.
+  assert.equal(h.memento.data.icons['file:///repo/package.json::dev'], 'file:icon.rs');
+
+  // And read back by the code that draws the row, which is the half a test that
+  // seeds the store by hand never checks.
+  const row = h.treeItemFor({ kind: 'script', script: dev });
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
+  assert.deepEqual(row.resourceUri.path.split('/').slice(1), ['-', 'icon.rs']);
+
+  // The same string is what finds the picture for the dropdown.
+  assert.deepEqual({ ...h.scriptItem(dev, false).iconPath }, { fsPath: '/pack/rust.svg' });
+});
+
+test('the icon already on a row is marked in the pack list, and Default takes it off', async () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const held = { icons: { 'file:///repo/package.json::dev': 'file:icon.rs' } };
+  const h = harness({ pick: 2, stored: held });
+  await h.pickIcon({ kind: 'script', script: dev });
+  const [{ items }] = h.quickPicks;
+  assert.equal(items[0].description, undefined);
+  assert.equal(items[2].description, '*.rs · current');
+
+  const off = harness({ pick: 0, stored: held });
+  await off.pickIcon({ kind: 'script', script: dev });
+  assert.equal('file:///repo/package.json::dev' in off.memento.data.icons, false);
 });
 
 test('an icon picked out of the icon pack is worn as a name, not as a glyph', () => {
