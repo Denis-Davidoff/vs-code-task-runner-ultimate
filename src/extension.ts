@@ -298,6 +298,25 @@ export function activate(context: vscode.ExtensionContext): void {
     // "the task" and "the manifest" are two different things to promise.
     vscode.commands.registerCommand('taskRunnerUltimate.openScript', (node?: TreeNode) => openManifest(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.openManifest', (node?: TreeNode) => openManifest(node)),
+    // The file behind the row rather than the task in it. The three reveal ids
+    // are one action: a menu entry takes its label from the command, and the
+    // file manager it opens has a different name on each platform — see the
+    // `when` clauses, which offer each id on its own platform alone.
+    vscode.commands.registerCommand('taskRunnerUltimate.copyRelativePath', (node?: TreeNode) =>
+      copyPathOf(node, true),
+    ),
+    vscode.commands.registerCommand('taskRunnerUltimate.copyPath', (node?: TreeNode) =>
+      copyPathOf(node, false),
+    ),
+    ...['mac', 'windows', 'linux'].map((platform) =>
+      vscode.commands.registerCommand(
+        `taskRunnerUltimate.revealFileInOS.${platform}`,
+        (node?: TreeNode) => revealFile(node, false),
+      ),
+    ),
+    vscode.commands.registerCommand('taskRunnerUltimate.revealInExplorerView', (node?: TreeNode) =>
+      revealFile(node, true),
+    ),
     vscode.commands.registerCommand('taskRunnerUltimate.showTerminal', (node?: TreeNode) => showTerminal(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.addToTerminal', (node?: TreeNode) =>
       addToTerminal(node),
@@ -1103,6 +1122,78 @@ async function openManifest(node: TreeNode | undefined): Promise<void> {
   // from; centring it puts the task in the middle of the file you are now
   // reading, with its neighbours around it.
   editor.revealRange(selection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+}
+
+/**
+ * The file or folder a row stands for, which is what the four path actions act
+ * on. A heading is its manifest, or — for the shell groups, which are a folder
+ * of loose scripts and no one file — the directory it stands for, the same two
+ * `openManifest` chooses between. A shell row is the script file it runs.
+ *
+ * A manifest task has no path of its own: it is a line in a file its siblings
+ * share, and `script.manifest` would answer for the group rather than the row.
+ * The `when` clauses keep those rows out of the menu — see `PATH_ROW` in
+ * `tools/generate-contributions.js` — and this answers `undefined` for them so a
+ * keybinding aimed at one is a no-op rather than four rows' worth of the same
+ * package.json on the clipboard.
+ */
+function fileBehind(node: TreeNode | undefined): vscode.Uri | undefined {
+  if (node?.kind === 'group') {
+    return node.manifest ?? node.directory;
+  }
+  return node?.kind === 'script' ? node.script.file : undefined;
+}
+
+/**
+ * Puts the row's path on the clipboard, relative to the workspace or whole.
+ * `asRelativePath` names the workspace folder as well when there is more than
+ * one open, which is what makes the relative half of the pair unambiguous in the
+ * multi-root case that produces most of these rows.
+ */
+async function copyPathOf(node: TreeNode | undefined, relative: boolean): Promise<void> {
+  const file = fileBehind(node);
+  if (!file) {
+    return;
+  }
+  await vscode.env.clipboard.writeText(relative ? relativePathOf(file) : file.fsPath);
+}
+
+/**
+ * The row's path with the workspace cut off the front — and its own name when
+ * there is nothing to cut.
+ *
+ * `asRelativePath` hands the input straight back when it cannot place it, and a
+ * folder that *is* a workspace root is exactly that case: it resolves the parent
+ * of the URI and finds no folder above it. That is reachable by default rather
+ * than at the edges — `shellScripts` picks up a script sitting at the root of the
+ * project, and the heading for those is the root itself — and copying the
+ * absolute path there would silently make this entry the one below it.
+ *
+ * The same fallback `manifestRef` takes above and the shell scan takes for a
+ * group's `location`, for the same reason both do: the name of the folder is what
+ * that row is called everywhere else, so it is what a paste of it should say.
+ */
+function relativePathOf(file: vscode.Uri): string {
+  const cut = vscode.workspace.asRelativePath(file);
+  return cut === file.fsPath || cut === file.path ? path.posix.basename(file.path) : cut;
+}
+
+/**
+ * Shows the row's file where the user asked for it: `revealFileInOS` is Finder,
+ * File Explorer or the desktop's file manager, `revealInExplorer` the workbench's
+ * own side bar. Both are the workbench's commands rather than ours, so both
+ * behave here exactly as they do from the Explorer's context menu — a directory
+ * included, which is what a shell group hands them.
+ */
+async function revealFile(node: TreeNode | undefined, inWorkbench: boolean): Promise<void> {
+  const file = fileBehind(node);
+  if (!file) {
+    return;
+  }
+  await vscode.commands.executeCommand(
+    inWorkbench ? 'revealInExplorer' : 'revealFileInOS',
+    file,
+  );
 }
 
 /** Why a rename is display-only, said in the terms of the row it was invoked on. */
