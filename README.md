@@ -230,7 +230,7 @@ A compose file declares services, not tasks, so it is not a folder of rows the w
 is. It is **one item**, and the item *is* the stack:
 
 ```
-🖥 docker-compose.yml • services/stack        ▶  ■
+🖥 docker-compose.yml • services/stack        ■  ▶
 ```
 
 ▶ is `docker compose up` for the whole file and ■ is `docker compose down`. Neither needs the file

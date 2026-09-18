@@ -1556,7 +1556,7 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
     );
 
   for (const [command, group] of [
-    ['dockerfileActions', 'inline@4'],
+    ['dockerfileActions', 'inline@5'],
     ['buildImage', '0_actions@1'],
     ['dockerfileActions', '0_actions@4'],
     ['openManifest', '0_open@1'],
@@ -1567,10 +1567,10 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
     assert.equal(takes(command, group, 'dockerfile:carried'), true, `${command} ${group} carried`);
   }
 
-  // ▶ is the exception, and only inline: it shares `inline@1` with the eye that
-  // brings a hidden row back, and a row cannot hold two buttons in one slot. The
-  // menu has no eye, so there it reaches a hidden row too.
-  const [play] = when('buildImage', 'inline@1');
+  // ▶ is the exception, and only inline: a row in the pile is taken out before it
+  // is built, which is the eye's click rather than ▶'s. The menu has no eye, so
+  // there it reaches a hidden row too.
+  const [play] = when('buildImage', 'inline@4');
   const [, pattern] = play.match(/viewItem =~ \/(.+)\/$/);
   assert.equal(new RegExp(pattern).test('dockerfile:hidden'), false);
   assert.equal(new RegExp(pattern).test('dockerfile:carried'), true);
@@ -1579,6 +1579,42 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
   // And restart is named in the menu as well as drawn inline — a hover-only
   // glyph is a gesture with no name anywhere in the UI.
   assert.equal(takes('restartDockerfile', '0_actions@2', 'dockerfile:running'), true);
+});
+
+test('▶ is drawn after ■ on the rows that keep both, the way every other row draws it last', () => {
+  // A script row is either idle or running, so ▶ and ■ never share it and the
+  // rightmost button is whichever one the row is currently offering. A compose
+  // or Dockerfile row can hold several at once, and the order they are
+  // contributed in is the order they are drawn in — so ▶ takes the slot after ■
+  // and before ☰, and lands in the same column as it does everywhere else.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const drawn = (value) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => (entry.group || '').startsWith('inline@'))
+      .filter((entry) => new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]).test(value))
+      .sort((a, b) => Number(a.group.slice(7)) - Number(b.group.slice(7)))
+      .map((entry) => entry.command.replace('taskRunnerUltimate.', ''));
+
+  // A stack Docker reports as up, with no run of ours behind it: ■ takes it
+  // down, ▶ runs `up` again over it.
+  assert.deepEqual(drawn('compose:up'), ['stopStack', 'runGroup']);
+  // A Dockerfile with something of ours alive under it — a `run` container, say
+  // — is the whole set at once: restart, stop, rebuild, and the rest in ☰.
+  assert.deepEqual(drawn('dockerfile:running'), [
+    'restartDockerfile',
+    'stopDockerfile',
+    'buildImage',
+    'dockerfileActions',
+  ]);
+  // Its own build running is the one thing that takes ▶ away; ■ and ☰ stay.
+  assert.deepEqual(drawn('dockerfile:building:running'), [
+    'restartDockerfile',
+    'stopDockerfile',
+    'dockerfileActions',
+  ]);
+  // In the pile it is the eye that comes first, and it has the row's left-hand
+  // slot to itself — ▶ is not offered there at all.
+  assert.deepEqual(drawn('dockerfile:hidden'), ['showGroup', 'dockerfileActions']);
 });
 
 test('▶ survives a container of the same file, and stands down only for its own build', () => {
@@ -1592,7 +1628,7 @@ test('▶ survives a container of the same file, and stands down only for its ow
     );
     return new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]);
   };
-  const inline = clause('buildImage', 'inline@1');
+  const inline = clause('buildImage', 'inline@4');
   const menu = clause('buildImage', '0_actions@1');
 
   const h = harness({ settings: { grouping: 'flat' } });

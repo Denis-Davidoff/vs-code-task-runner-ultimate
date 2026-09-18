@@ -373,7 +373,8 @@ const inTree = 'view =~ /^taskRunnerUltimate\\.(tree|explorer)$/';
 // manifest preserves actions for all of those states without letting similarly
 // prefixed context values slip through. Neither eye is offered on a carried row:
 // it is already in the pile, and it was never put there in its own right, so it
-// matches `PACKAGE_ROW` below and neither `VISIBLE` nor `HIDDEN`.
+// matches neither `VISIBLE` nor `HIDDEN`, only the patterns that allow
+// `PUT_AWAY`.
 // A compose row carries one segment more than every other row read off a file:
 // `up` or `down`, which is what puts ▶ and ■ on the file itself — see
 // `treeItemFor`. Every pattern that matches such a row therefore allows it, and
@@ -387,20 +388,27 @@ const STATE = '(:(up|down|building))?';
 // — see `treeItemFor`. It is what ▶ refuses, where `:running` (anything at all
 // under the row, a `run` container included) is not.
 const BUILDING = '(:building)?';
+// The two ways a row leaves the tree for the pile, spelled once each: every
+// pattern below builds its put-away slot out of these rather than writing the
+// segment again, so a rename here reaches all of them at once.
+const HIDDEN_SEG = 'hidden';
+const CARRIED_SEG = 'carried';
 // Hiding and bringing back reach every heading the tree drew from a file, the
 // compose rows included: the pile is where a row goes, whatever its row does.
 const VISIBLE = `/^(group:package|compose|dockerfile)${STATE}(:running)?$/`;
-const HIDDEN = `/^(group:package|compose|dockerfile)${STATE}:hidden(:running)?$/`;
+const HIDDEN = `/^(group:package|compose|dockerfile)${STATE}:${HIDDEN_SEG}(:running)?$/`;
 // An ecosystem parent holds groups rather than rows, but it still has things
 // running under it, so it gets the stop-all and restart-all buttons too.
-const PUT_AWAY = '(:(hidden|carried))?';
+const PUT_AWAY = `(:(${HIDDEN_SEG}|${CARRIED_SEG}))?`;
+// The half of `PUT_AWAY` a row keeps when it is in the pile only because its
+// project is — the slot the buttons that refuse a hidden row still allow.
+const CARRIED = `(:${CARRIED_SEG})?`;
 // The rows a run starts and the rows a stop ends, each written once: the button
 // on the row and the entry in the right-click menu are one action in two places,
 // and a pair that drifted apart is a row whose menu denies what its button does.
 const RUNNABLE = '/^script:(idle|up):/';
 const STOPPABLE = '/^(script:(running|up):|foreignTask$)/';
 const RUNNING_PACKAGE = `/^group:(package${STACK}${PUT_AWAY}|eco):running$/`;
-const PACKAGE_ROW = `group:package${STACK}${PUT_AWAY}(:running)?`;
 // Every row the tree read off a file, whichever kind: the two actions that are
 // about the manifest rather than the task — opening it and renaming it — reach
 // all of them.
@@ -416,6 +424,8 @@ const COMPOSE = `/^${COMPOSE_ROW}(:running)?$/`;
 // other heading in the pile carries a run-all: what is in there is out of the
 // way, and taking it out again is the click that comes first. `:running` is
 // absent as well — see `runGroup`, which refuses a second `up` over the first.
+// It sits in the last slot before ☰ rather than the first, so ▶ lands in the
+// same column on every kind of row — see the `inline@` numbers below.
 const COMPOSE_IDLE = `/^compose${STACK}$/`;
 // A Dockerfile row is a leaf on the same terms, with `BUILDING` where compose
 // has `STACK`: nothing asks Docker whether an image exists, but the row does
@@ -424,11 +434,13 @@ const DOCKERFILE_ROW = `dockerfile${BUILDING}${PUT_AWAY}`;
 const DOCKERFILE = `/^${DOCKERFILE_ROW}(:running)?$/`;
 const DOCKERFILE_RUNNING = `/^${DOCKERFILE_ROW}:running$/`;
 // ▶ is off only while the build itself runs — `:building`, which this omits —
-// and off a hidden row because that is where the eye that brings it back sits:
-// both are `inline@1`, and a row cannot hold two. It stays on a row whose
-// container is up, which is the middle of the edit-build-restart loop and the
-// place a vanishing ▶ hurt most. A carried row keeps it: no eye is offered there.
-const DOCKERFILE_IDLE = '/^dockerfile(:carried)?(:running)?$/';
+// and off a hidden row, which is put away for the same reason a compose stack in
+// the pile has no ▶: the click that comes first is the eye that takes it out. It
+// stays on a row whose container is up, which is the middle of the
+// edit-build-restart loop and the place a vanishing ▶ hurt most. A carried row
+// keeps it: it is in the pile only because its project is, and no eye is offered
+// there to take it out with.
+const DOCKERFILE_IDLE = `/^dockerfile${CARRIED}(:running)?$/`;
 // The same, for the menu, which has no eye to make room for.
 const DOCKERFILE_BUILDABLE = `/^dockerfile${PUT_AWAY}(:running)?$/`;
 const toolbarEntries = (when) => [
@@ -493,16 +505,25 @@ manifest.contributes.menus = {
     // the one button that ends it, and `stopGroup` is not offered here because
     // ending the run without removing the containers is not what ■ on a stack
     // means.
-    { command: 'taskRunnerUltimate.runGroup', group: 'inline@1', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
+    //
+    // ▶ is contributed after ■ so the two never swap columns: a stack is either
+    // idle or up, so only one of them is ever drawn, and pinning ▶ to the last
+    // slot puts it where the same button sits on a Dockerfile row.
     { command: 'taskRunnerUltimate.stopStack', group: 'inline@3', when: `${inTree} && viewItem =~ ${COMPOSE}` },
+    { command: 'taskRunnerUltimate.runGroup', group: 'inline@4', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
     // The same four on a Dockerfile row. ☰ is inline here where compose keeps it
     // in the menu alone: a compose file's extras are `logs`, `ps` and `restart`
     // — things you go looking for — where a Dockerfile's are `run`, `push` and
     // the stage builds, which are the other half of what the row is for.
-    { command: 'taskRunnerUltimate.buildImage', group: 'inline@1', when: `${inTree} && viewItem =~ ${DOCKERFILE_IDLE}` },
+    //
+    // Unlike every other row, this one can draw ▶ and ↻ at once: a rebuild is
+    // offered while the container it built is up. ▶ therefore cannot share the
+    // run/restart column, and it takes the slot after ■ instead — the last one
+    // before ☰, which is where a compose row draws it too.
     { command: 'taskRunnerUltimate.restartDockerfile', group: 'inline@2', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
     { command: 'taskRunnerUltimate.stopDockerfile', group: 'inline@3', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
-    { command: 'taskRunnerUltimate.dockerfileActions', group: 'inline@4', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
+    { command: 'taskRunnerUltimate.buildImage', group: 'inline@4', when: `${inTree} && viewItem =~ ${DOCKERFILE_IDLE}` },
+    { command: 'taskRunnerUltimate.dockerfileActions', group: 'inline@5', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
     // Non-inline groups are what the right-click menu shows.
     //
     // The two gestures the row itself answers to, named in the menu so they are

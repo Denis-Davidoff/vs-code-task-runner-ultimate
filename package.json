@@ -482,19 +482,14 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(package(:(up|down))?(:(hidden|carried))?|eco):running$/"
         },
         {
-          "command": "taskRunnerUltimate.runGroup",
-          "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?$/"
-        },
-        {
           "command": "taskRunnerUltimate.stopStack",
           "group": "inline@3",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
-          "command": "taskRunnerUltimate.buildImage",
-          "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:carried)?(:running)?$/"
+          "command": "taskRunnerUltimate.runGroup",
+          "group": "inline@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?$/"
         },
         {
           "command": "taskRunnerUltimate.restartDockerfile",
@@ -507,8 +502,13 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?:running$/"
         },
         {
-          "command": "taskRunnerUltimate.dockerfileActions",
+          "command": "taskRunnerUltimate.buildImage",
           "group": "inline@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:carried)?(:running)?$/"
+        },
+        {
+          "command": "taskRunnerUltimate.dockerfileActions",
+          "group": "inline@5",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?(:running)?$/"
         },
         {
