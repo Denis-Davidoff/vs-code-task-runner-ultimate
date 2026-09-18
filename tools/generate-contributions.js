@@ -342,7 +342,10 @@ manifest.contributes.commands = [
   // the label of a menu entry is the command's, a command's title is a constant
   // in this file, and the file manager it opens is called something different on
   // each of the three platforms. Each id is offered on its own platform alone —
-  // see the `when` clauses — so a row still shows exactly one of them.
+  // see the `when` clauses — so a row still shows exactly one of them. The
+  // platform keys are the window's own: they answer for the machine the
+  // workbench is drawn on, not for the one the extension host runs on, which is
+  // what makes the WSL case below a Windows entry.
   { command: 'taskRunnerUltimate.revealFileInOS.mac', title: 'Reveal in Finder', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
   { command: 'taskRunnerUltimate.revealFileInOS.windows', title: 'Reveal in File Explorer', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
   { command: 'taskRunnerUltimate.revealFileInOS.linux', title: 'Open Containing Folder', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
@@ -456,7 +459,9 @@ const DOCKERFILE_RUNNING = `/^${DOCKERFILE_ROW}:running$/`;
 // stays on a row whose container is up, which is the middle of the
 // edit-build-restart loop and the place a vanishing ▶ hurt most. A carried row
 // keeps it: it is in the pile only because its project is, and no eye is offered
-// there to take it out with.
+// there to take it out with — which is where this parts company with
+// `COMPOSE_IDLE`, whose ▶ a carried row does not keep. The two rules have always
+// disagreed on that one state; only the Dockerfile's was written down.
 const DOCKERFILE_IDLE = `/^dockerfile${CARRIED}(:running)?$/`;
 // The same, for the menu, which has no eye standing in the way.
 const DOCKERFILE_BUILDABLE = `/^dockerfile${PUT_AWAY}(:running)?$/`;
@@ -468,6 +473,9 @@ const DOCKERFILE_BUILDABLE = `/^dockerfile${PUT_AWAY}(:running)?$/`;
 // same thing on every row of the group. `:shell:` is the fourth axis of a script
 // row's context value, the same one Add to Terminal is keyed on.
 const PATH_ROW = `/^(${NAMED_ROW}|script:.+:shell:.+)$/`;
+// No remote connection: the window is showing files on the machine it is running
+// on. Empty is the workbench's own value for a local window.
+const LOCAL = "remoteName == ''";
 const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];
@@ -531,10 +539,12 @@ manifest.contributes.menus = {
     // ending the run without removing the containers is not what ■ on a stack
     // means.
     //
-    // ▶ is contributed last so the two never swap columns: a stack is either idle
-    // or up, so only one of them is ever drawn, and inline actions are drawn
-    // right-aligned — the last slot is the right edge of the row, which is where
-    // a Dockerfile draws ▶ too.
+    // ▶ is contributed last so that ■ never changes column. ■ is on every compose
+    // row and ▶ only on one nothing of ours is running, so the pair drawn is
+    // `■ ▶` or `■` alone — and since inline actions are drawn right-aligned, the
+    // last slot is the right edge of the row, which is where a Dockerfile draws
+    // ▶ too. Contributing ▶ first is what made ■ jump a column the moment a row
+    // started.
     { command: 'taskRunnerUltimate.stopStack', group: 'inline@3', when: `${inTree} && viewItem =~ ${COMPOSE}` },
     { command: 'taskRunnerUltimate.runGroup', group: 'inline@4', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
     // The same four on a Dockerfile row. ☰ is inline here where compose keeps it
@@ -613,9 +623,18 @@ manifest.contributes.menus = {
     // the star, which is the first of the ones that change the row.
     { command: 'taskRunnerUltimate.copyRelativePath', group: '0_path@1', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
     { command: 'taskRunnerUltimate.copyPath', group: '0_path@2', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
-    { command: 'taskRunnerUltimate.revealFileInOS.mac', group: '0_path@3', when: `${inTree} && isMac && viewItem =~ ${PATH_ROW}` },
-    { command: 'taskRunnerUltimate.revealFileInOS.windows', group: '0_path@3', when: `${inTree} && isWindows && viewItem =~ ${PATH_ROW}` },
-    { command: 'taskRunnerUltimate.revealFileInOS.linux', group: '0_path@3', when: `${inTree} && isLinux && viewItem =~ ${PATH_ROW}` },
+    // Not offered over a remote connection, because there it does nothing: the
+    // workbench's `revealFileInOS` reveals a `file:` URI, and the file behind a
+    // row in a Remote SSH, Dev Container or Codespaces window is a
+    // `vscode-remote:` one on a machine the local Finder cannot see. The one
+    // exception is WSL, whose paths the workbench rewrites to `\\wsl$\<distro>`
+    // and does open — any distro, since the segment `remoteName` reports is the
+    // authority's kind, `wsl`, and the distro rides behind it as `wsl+Ubuntu`.
+    // Reveal in Explorer View below needs no such guard: the side bar shows a
+    // remote file as readily as a local one.
+    { command: 'taskRunnerUltimate.revealFileInOS.mac', group: '0_path@3', when: `${inTree} && isMac && ${LOCAL} && viewItem =~ ${PATH_ROW}` },
+    { command: 'taskRunnerUltimate.revealFileInOS.windows', group: '0_path@3', when: `${inTree} && isWindows && (${LOCAL} || remoteName == 'wsl') && viewItem =~ ${PATH_ROW}` },
+    { command: 'taskRunnerUltimate.revealFileInOS.linux', group: '0_path@3', when: `${inTree} && isLinux && ${LOCAL} && viewItem =~ ${PATH_ROW}` },
     { command: 'taskRunnerUltimate.revealInExplorerView', group: '0_path@4', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
     { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav:/` },
     { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },

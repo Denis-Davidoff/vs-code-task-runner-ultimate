@@ -1155,9 +1155,27 @@ async function copyPathOf(node: TreeNode | undefined, relative: boolean): Promis
   if (!file) {
     return;
   }
-  await vscode.env.clipboard.writeText(
-    relative ? vscode.workspace.asRelativePath(file) : file.fsPath,
-  );
+  await vscode.env.clipboard.writeText(relative ? relativePathOf(file) : file.fsPath);
+}
+
+/**
+ * The row's path with the workspace cut off the front — and its own name when
+ * there is nothing to cut.
+ *
+ * `asRelativePath` hands the input straight back when it cannot place it, and a
+ * folder that *is* a workspace root is exactly that case: it resolves the parent
+ * of the URI and finds no folder above it. That is reachable by default rather
+ * than at the edges — `shellScripts` picks up a script sitting at the root of the
+ * project, and the heading for those is the root itself — and copying the
+ * absolute path there would silently make this entry the one below it.
+ *
+ * The same fallback `manifestRef` takes above and the shell scan takes for a
+ * group's `location`, for the same reason both do: the name of the folder is what
+ * that row is called everywhere else, so it is what a paste of it should say.
+ */
+function relativePathOf(file: vscode.Uri): string {
+  const cut = vscode.workspace.asRelativePath(file);
+  return cut === file.fsPath || cut === file.path ? path.posix.basename(file.path) : cut;
 }
 
 /**

@@ -135,9 +135,9 @@ monorepo.
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
   at the line the task is on, wherever a task has one to point at; on a heading, **Open Manifest
   File** opens the file itself, and on a shell row it opens the script.
-- **The file behind the row** — right-click a heading or a shell row for **Copy Relative Path**,
-  **Copy Path**, **Reveal in Finder** and **Reveal in Explorer View**, on the manifest the heading
-  names, the folder a script group stands for, or the script itself.
+- **The file behind the row** — right-click a heading that names one, or a shell row, for **Copy
+  Relative Path**, **Copy Path**, **Reveal in Finder** and **Reveal in Explorer View**, on the
+  manifest the heading names, the folder a script group stands for, or the script itself.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
 - **Favorites** — star the two or three tasks you actually run and they pin to the very top of the
   tree, above everything, without leaving the manifest they belong to.
@@ -1082,12 +1082,12 @@ live where there is a row to invoke them on:
 | Compose Down | ■ inline on hover and right-click, on a compose item — it ends whatever of ours the file has running and then runs `docker compose down`, and does neither if something refuses to stop |
 | Compose Commands… | right-click only, on a compose item — the picker holding one `up` per declared service and the extra subcommands from [`dockerComposeCommands`](#settings) |
 | Add to Terminal | right-click only, on a [shell row](#shell-scripts) — a new terminal with the command line typed into it and not run, which is where a script takes arguments nobody wrote down. A manifest task says its own arguments in the manifest, so the entry is not offered there |
-| Copy Relative Path | right-click only, on the rows that are a file or a folder — a heading's manifest, the directory a [shell group](#shell-scripts) stands for, or a shell row's own script. Relative to the workspace root, and named with its folder when more than one is open |
+| Copy Relative Path | right-click only, on the rows that are a file or a folder — a heading's manifest, the directory a [shell group](#shell-scripts) stands for, or a shell row's own script. Relative to the workspace root, and named with its folder when more than one is open; a folder that *is* the root copies its own name, which is the one path there is nothing to cut off. The rows that name no file — FAVORITES, OTHER TASKS, an ecosystem parent and the aggregated `shell [N]` heading — do not offer any of the four |
 | Copy Path | the same rows, the whole path. A manifest task is not one of them: an npm script is a line in a file its siblings share, so every row of the group would copy the same `package.json` |
-| Reveal in Finder | the same rows, in the platform's file manager — **Reveal in File Explorer** on Windows, **Open Containing Folder** on Linux, since the workbench calls it something different on each |
-| Reveal in Explorer View | the same rows, in VS Code's own Explorer side bar rather than the desktop's |
+| Reveal in Finder | the same rows, in the platform's file manager — **Reveal in File Explorer** on Windows, **Open Containing Folder** on Linux, since the workbench calls it something different on each. Not offered over a remote connection, where the file is on the other machine and the workbench opens nothing; WSL is the exception it makes, and the one remote that keeps the entry |
+| Reveal in Explorer View | the same rows, in VS Code's own Explorer side bar rather than the desktop's — which is why this one is offered in a remote window too |
 | Rename… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
-| Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
+| Colour ▸ | right-click only, on every row the tree draws itself — eleven entries, kept in a submenu so they cost the menu one line rather than eleven |
 
 All of them are deliberately hidden from the command palette, which has no row to hand them. The
 palette keeps the eight that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,

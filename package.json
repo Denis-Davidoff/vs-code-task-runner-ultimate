@@ -630,17 +630,17 @@
         {
           "command": "taskRunnerUltimate.revealFileInOS.mac",
           "group": "0_path@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isMac && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isMac && remoteName == '' && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
         },
         {
           "command": "taskRunnerUltimate.revealFileInOS.windows",
           "group": "0_path@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isWindows && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isWindows && (remoteName == '' || remoteName == 'wsl') && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
         },
         {
           "command": "taskRunnerUltimate.revealFileInOS.linux",
           "group": "0_path@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isLinux && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isLinux && remoteName == '' && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
         },
         {
           "command": "taskRunnerUltimate.revealInExplorerView",

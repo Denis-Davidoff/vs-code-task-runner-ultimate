@@ -1465,6 +1465,27 @@ test('the path actions act on the file a row stands for, whichever shape the row
   assert.deepEqual(h.copied, ['scripts/deploy.sh']);
 });
 
+test('a script folder that is the workspace root copies its name, not the absolute path', async () => {
+  // `shellScripts` picks up a script sitting at the root of the project by
+  // default, and the heading for those is the root itself. `asRelativePath` hands
+  // such a URI straight back — it looks for a workspace folder *above* the root
+  // and finds none — so the relative half of the pair would have pasted the
+  // absolute path, byte for byte what the entry below it copies.
+  const h = harness({ settings: { grouping: 'flat' } });
+  const root = shell('/repo', 'build.sh');
+  const heading = h.buildTreeRoots([root])[0];
+
+  await h.copyPathOf(heading, true);
+  await h.copyPathOf(heading, false);
+  assert.deepEqual(h.copied, ['repo', '/repo']);
+
+  // The row inside it still has a workspace to be relative to.
+  h.copied.length = 0;
+  const [row] = [...heading.children];
+  await h.copyPathOf(row, true);
+  assert.deepEqual(h.copied, ['build.sh']);
+});
+
 test('a manifest task has no path of its own, and the menu never offers it one', async () => {
   // An npm script is a line in a file its siblings share: copying
   // `web/package.json` off it would be the same four entries on every row of the
@@ -1531,6 +1552,16 @@ test('the OS reveal is offered under one name per platform, and one at a time', 
       (item) => item.command === `taskRunnerUltimate.revealFileInOS.${platform}`,
     );
     assert.match(entry.when, new RegExp(`&& ${key} &&`), platform);
+    // And none of the three is offered over a remote connection, where the
+    // workbench reveals nothing: the file is on the other machine. WSL is the
+    // exception the workbench itself makes — it rewrites those paths to
+    // `\\wsl$\<distro>` — and so it is the one remote a Windows window keeps.
+    assert.match(entry.when, /remoteName == ''/, platform);
+    assert.equal(
+      /remoteName == 'wsl'/.test(entry.when),
+      platform === 'windows',
+      `${platform} offers WSL`,
+    );
     // And none of the three is reachable from the palette, where there is no row
     // to act on.
     assert.equal(
@@ -1541,6 +1572,13 @@ test('the OS reveal is offered under one name per platform, and one at a time', 
       platform,
     );
   }
+
+  // The side bar shows a remote file as readily as a local one, so the reveal
+  // that lands there is the one entry of the four that keeps every window.
+  const [view] = manifest.contributes.menus['view/item/context'].filter(
+    (item) => item.command === 'taskRunnerUltimate.revealInExplorerView',
+  );
+  assert.equal(/remoteName/.test(view.when), false);
 });
 
 function dockerfile(manifest = '/repo/Dockerfile') {
@@ -1702,13 +1740,12 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
   assert.equal(takes('restartDockerfile', '0_actions@2', 'dockerfile:running'), true);
 });
 
-test('▶ is the last inline action on every row that offers it, which is the right edge of the row', () => {
+test('▶ is the last inline action on the rows read off a file, which is the right edge of the row', () => {
   // Inline actions are drawn right-aligned and in contribution order, so the
   // last slot a row fills is the button against its right edge — and that is the
-  // column the eye goes to first. A script row is either idle or running, so ▶
-  // and ■ never share it and whichever one it offers is already last. A compose
-  // or Dockerfile row can hold several at once, so ▶ is contributed after all of
-  // them, ☰ included, to land in the same column as on the rows that hold one.
+  // column the eye goes to first. A compose or Dockerfile row can hold several
+  // buttons at once, so ▶ is contributed after all of them, ☰ included, to land
+  // in the column an ordinary script row puts it in by holding only one.
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
   const drawn = (value) =>
     manifest.contributes.menus['view/item/context']
@@ -1738,21 +1775,30 @@ test('▶ is the last inline action on every row that offers it, which is the ri
   // slot to itself — ▶ is not offered there at all.
   assert.deepEqual(drawn('dockerfile:hidden'), ['showGroup', 'dockerfileActions']);
 
-  // The point of the numbers above, stated once as the rule they exist for:
-  // wherever ▶ is offered it is the last action drawn, and a row that has no ▶
-  // to draw — a script of ours that is already running — ends in ■ instead.
-  // Relative order within one row is not enough on its own: compose and
-  // Dockerfile could agree with each other and still sit a column in.
-  for (const [value, play] of [
+  // The point of the numbers above, stated once as the rule they exist for: on a
+  // row the tree read off a file, ▶ is the last action drawn, and a row with no ▶
+  // to draw ends in ■ instead. Relative order within one row is not enough on its
+  // own: compose and Dockerfile could agree with each other and still sit a
+  // column in from the script rows.
+  for (const [value, last] of [
     ['compose', 'runGroup'],
     ['compose:up', 'runGroup'],
     ['dockerfile', 'buildImage'],
     ['dockerfile:running', 'buildImage'],
-    ['script:idle:fav:noconfirm', 'runItem'],
-    ['script:running:fav:noconfirm', 'stopItem'],
+    ['script:idle:fav:task:noconfirm', 'runItem'],
+    ['script:running:fav:task:noconfirm', 'stopItem'],
   ]) {
-    assert.equal(drawn(value).at(-1), play, `${value} draws ${play} flush right`);
+    assert.equal(drawn(value).at(-1), last, `${value} draws ${last} flush right`);
   }
+
+  // And the one row the rule does not reach, written down rather than left for
+  // the next reordering to trip over: `script:up:` is a compose service Docker
+  // reports as up with no run of ours behind it — see the clauses for `RUNNABLE`
+  // and `STOPPABLE` — and it is the single row that draws ▶ and ■ at once, ▶
+  // first. It predates this ordering and is left as it is: the pair belongs to
+  // the script rows, where moving ▶ behind ■ would move it on every row of every
+  // manifest to settle one state of one kind of row.
+  assert.deepEqual(drawn('script:up:fav:task'), ['removeFavorite', 'runItem', 'stopItem']);
 });
 
 test('▶ survives a container of the same file, and stands down only for its own build', () => {
