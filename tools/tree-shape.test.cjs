@@ -672,13 +672,16 @@ test('a folder icon from the pack asks for a folder', () => {
   assert.equal(row.resourceUri.path.split('/').pop(), 'src');
 });
 
-test('a pack icon on an unpainted heading leaves the colour slot empty', () => {
-  // The URI is borrowed for the file name in it. A row that was never painted
-  // must come back out of the decoration provider as plainly as one with no URI
-  // at all, which is what the sentinel in the colour slot is for.
+test('a pack icon on a heading leaves the shared title colour alone', () => {
+  // A heading always carries a colour — its own or the one every heading shares
+  // — so the name for the icon has to ride alongside it rather than in its slot.
+  // The sentinel is a task row's problem, and is pinned there instead.
   const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'file:Dockerfile' } } });
   const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
-  assert.equal(row.resourceUri.path.split('/')[1], 'taskRunnerUltimate.sourceTitleForeground');
+  assert.deepEqual(row.resourceUri.path.split('/').slice(1), [
+    'taskRunnerUltimate.sourceTitleForeground',
+    'Dockerfile',
+  ]);
 });
 
 test('a painted heading wearing a pack icon keeps its colour', () => {

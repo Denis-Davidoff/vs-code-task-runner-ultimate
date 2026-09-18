@@ -46,9 +46,19 @@ export interface PackIcon {
   readonly art?: string;
 }
 
+/**
+ * Which set of associations a pack is read through. A theme file carries a base
+ * set and optional `light`, `highContrast` and `highContrastLight` blocks that
+ * override it, and the workbench picks between them by the *colour* theme — so
+ * the same pack is a different catalogue in a light theme than in a dark one.
+ */
+type Variant = 'dark' | 'light' | 'hcDark' | 'hcLight';
+
 export interface IconPack {
   /** The value of `workbench.iconTheme` this was read for. */
   readonly id: string;
+  /** The colour-theme variant it was read through. */
+  readonly variant: Variant;
   /** The pack's own name, for the separator the icons sit under. */
   readonly label: string;
   /** The folder the theme file sits in; `art` is relative to this. */
@@ -64,11 +74,20 @@ export interface IconPack {
  * picker opens — and it only ever changes when the pack does, which is what
  * `forgetIconPack` is called for.
  */
-let cached: { id: string; pack: IconPack | undefined } | undefined;
+let cached: { id: string; variant: Variant; pack: IconPack | undefined } | undefined;
 
-/** Drops the catalogue: the icon theme changed, or the extension providing it did. */
+/**
+ * Bumped by every invalidation, so a read that was already in flight when one
+ * happened knows not to write its answer down. Without it an icon pack updated
+ * mid-read puts the *previous* catalogue back into the cache after it was
+ * dropped, and `packArt` then serves images from a folder that no longer exists.
+ */
+let generation = 0;
+
+/** Drops the catalogue: the icon theme changed, the colour theme did, or the extension providing either. */
 export function forgetIconPack(): void {
   cached = undefined;
+  generation += 1;
 }
 
 /**
@@ -81,12 +100,37 @@ export async function iconPack(): Promise<IconPack | undefined> {
   if (!id) {
     return undefined;
   }
-  if (cached?.id === id) {
+  const variant = activeVariant();
+  if (cached?.id === id && cached.variant === variant) {
     return cached.pack;
   }
-  const pack = await readPack(id);
-  cached = { id, pack };
+  const token = generation;
+  const pack = await readPack(id, variant);
+  // Written down only if nothing was invalidated while this was reading. The
+  // answer still goes back to the caller that asked for it — it is the *cache*
+  // that must not end up holding a pack somebody already said was gone.
+  if (token === generation) {
+    cached = { id, variant, pack };
+  }
   return pack;
+}
+
+/**
+ * The variant the workbench would resolve icons through right now. A missing
+ * enum member on an older build compares false rather than throwing, which
+ * leaves the base set — the same answer that build would give anyway.
+ */
+function activeVariant(): Variant {
+  switch (vscode.window.activeColorTheme?.kind) {
+    case vscode.ColorThemeKind.Light:
+      return 'light';
+    case vscode.ColorThemeKind.HighContrast:
+      return 'hcDark';
+    case vscode.ColorThemeKind.HighContrastLight:
+      return 'hcLight';
+    default:
+      return 'dark';
+  }
 }
 
 /**
@@ -109,7 +153,7 @@ export function packArt(kind: 'file' | 'folder', specimen: string): vscode.Uri |
 /** A megabyte and a half is the largest pack on the marketplace; this is room over it. */
 const MAX_THEME_BYTES = 8 * 1024 * 1024;
 
-async function readPack(id: string): Promise<IconPack | undefined> {
+async function readPack(id: string, variant: Variant): Promise<IconPack | undefined> {
   for (const extension of vscode.extensions.all) {
     const themes = extension.packageJSON?.contributes?.iconThemes;
     if (!Array.isArray(themes)) {
@@ -137,12 +181,13 @@ async function readPack(id: string): Promise<IconPack | undefined> {
           return undefined;
         }
       }
-      const icons = iconsFrom(parsed, languageSpecimens());
+      const icons = iconsFrom(parsed, languageSpecimens(), variant);
       if (icons.length === 0) {
         return undefined;
       }
       return {
         id,
+        variant,
         label: nameOf(theme.label, extension.packageJSON?.displayName, id),
         // The paths inside a theme file are relative to the file, and reach out
         // of its folder often enough (`../../icons/x.svg`) that the join has to
@@ -177,6 +222,14 @@ function nameOf(...candidates: unknown[]): string {
 
 async function readText(uri: vscode.Uri): Promise<string | undefined> {
   try {
+    // Asked of the file system first, so a huge file is never pulled into the
+    // extension host only to be thrown away — the same two-stage guard, and for
+    // the same reason, as the manifest reader in `sources.ts`. The check after
+    // the read stays: the file can grow between the two calls.
+    const info = await vscode.workspace.fs.stat(uri);
+    if (info.size > MAX_THEME_BYTES) {
+      return undefined;
+    }
     const bytes = await vscode.workspace.fs.readFile(uri);
     if (bytes.byteLength > MAX_THEME_BYTES) {
       return undefined;
@@ -228,13 +281,20 @@ function pickString(values: unknown): string | undefined {
     : undefined;
 }
 
-/** The shape of a theme file, as much of it as the catalogue reads. */
-interface ThemeFile {
-  iconDefinitions?: Record<string, { iconPath?: string; fontCharacter?: string } | undefined>;
+/** The association maps of a theme file — the base set, and each override block. */
+interface Associations {
   fileNames?: Record<string, string>;
   fileExtensions?: Record<string, string>;
   languageIds?: Record<string, string>;
   folderNames?: Record<string, string>;
+}
+
+/** The shape of a theme file, as much of it as the catalogue reads. */
+interface ThemeFile extends Associations {
+  iconDefinitions?: Record<string, { iconPath?: string; fontCharacter?: string } | undefined>;
+  light?: Associations;
+  highContrast?: Associations;
+  highContrastLight?: Associations;
 }
 
 /**
@@ -254,16 +314,23 @@ interface ThemeFile {
 export function iconsFrom(
   theme: unknown,
   languages: ReadonlyMap<string, string> = new Map(),
+  variant: Variant = 'dark',
 ): PackIcon[] {
   const spec = (theme ?? {}) as ThemeFile;
   const defs = spec.iconDefinitions;
   if (!defs || typeof defs !== 'object') {
     return [];
   }
-  const fileNames = lowered(spec.fileNames);
-  const fileExtensions = lowered(spec.fileExtensions);
-  const folderNames = lowered(spec.folderNames);
-  const languageIds = entries(spec.languageIds);
+  // The override block for this colour theme, laid over the base set the way the
+  // workbench lays it over: an association the block does not mention keeps the
+  // base icon, and one it does mention replaces it. Reading the base set alone
+  // would offer icons a light theme never draws, and preview each overridden one
+  // as the dark artwork of an icon the row will not wear.
+  const over = overrides(spec, variant);
+  const fileNames = lowered(spec.fileNames, over?.fileNames);
+  const fileExtensions = lowered(spec.fileExtensions, over?.fileExtensions);
+  const folderNames = lowered(spec.folderNames, over?.folderNames);
+  const languageIds = entries({ ...spec.languageIds, ...over?.languageIds });
 
   /**
    * Every name that reaches a definition, before any of them is chosen. The
@@ -272,7 +339,10 @@ export function iconsFrom(
    */
   const candidates = new Map<string, Candidate[]>();
   const offer = (key: string, candidate: Candidate): void => {
-    if (!defs[key]) {
+    // `hasOwn`, not a truthiness test: `constructor` and `toString` are on every
+    // object, and a theme naming one of them would otherwise put a definition in
+    // the catalogue that has no icon behind it at all.
+    if (!Object.prototype.hasOwnProperty.call(defs, key) || !defs[key]) {
       return;
     }
     const list = candidates.get(key);
@@ -287,6 +357,13 @@ export function iconsFrom(
     offer(key, { kind: 'folder', specimen: name, hint: `${name}/`, rank: 0 });
   }
   for (const [extension, key] of fileExtensions) {
+    // An association qualified by a parent folder cannot be reached by a bare
+    // file name, and `icon.src/js` names a file called `js` inside a folder
+    // called `icon.src` — which our own resolver would accept and the workbench
+    // would not. Such keys are left to the passes that can spell them.
+    if (extension.includes('/')) {
+      continue;
+    }
     const specimen = `icon.${extension}`;
     // `icon.ts` would be the wrong specimen for the `ts` icon if the pack also
     // had a rule for a file *called* `icon.ts`. Vanishingly unlikely, and the
@@ -408,16 +485,44 @@ function entries(map: Record<string, string> | undefined): Array<[string, string
     : [];
 }
 
-/** The name maps of a theme are matched case-insensitively, so they are held that way. */
-function lowered(map: Record<string, string> | undefined): Map<string, string> {
+/**
+ * The name maps of a theme are matched case-insensitively, so they are held that
+ * way — the override block last, since what it names is what the workbench draws.
+ */
+function lowered(
+  base: Record<string, string> | undefined,
+  over?: Record<string, string>,
+): Map<string, string> {
   const out = new Map<string, string>();
-  for (const [name, key] of entries(map)) {
+  for (const [name, key] of entries(base)) {
     const lower = name.toLowerCase();
     if (!out.has(lower)) {
       out.set(lower, key);
     }
   }
+  for (const [name, key] of entries(over)) {
+    out.set(name.toLowerCase(), key);
+  }
   return out;
+}
+
+/**
+ * The block that stands in front of the base set for this colour theme. A high
+ * contrast theme falls back to the ordinary light or dark block when the pack
+ * carries no block of its own — which is what the workbench does with it, and
+ * what nearly every pack expects, since almost none ship one.
+ */
+function overrides(spec: ThemeFile, variant: Variant): Associations | undefined {
+  switch (variant) {
+    case 'light':
+      return spec.light;
+    case 'hcDark':
+      return spec.highContrast;
+    case 'hcLight':
+      return spec.highContrastLight ?? spec.light;
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -432,6 +537,12 @@ function prettyName(key: string, kind: 'file' | 'folder'): string {
   if (kind === 'folder') {
     name = name.replace(/^folder[-_]/, '');
   }
+  // The variant marker a pack puts in the key of its light artwork is not part
+  // of the name of the thing: in a light theme every second entry would open
+  // with the word `Light`, which sorts them all under one letter and says only
+  // what the whole list already is. Matched as a whole word, so `lighthouse`
+  // and `highlight` keep theirs.
+  name = name.replace(/^light[-_]/, '').replace(/[-_]light$/, '');
   name = name.replace(/[-_]+/g, ' ').trim();
   return name ? name.charAt(0).toUpperCase() + name.slice(1) : key;
 }

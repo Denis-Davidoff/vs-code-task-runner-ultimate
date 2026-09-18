@@ -245,6 +245,26 @@ function repaint(): void {
 }
 
 /**
+ * The catalogue is no longer the one on screen: a different pack, a changed one,
+ * or a colour theme that draws the other half of it.
+ *
+ * Dropping it is half the answer. The dropdown draws its pack icons as pictures
+ * — a quick pick row has no resource for the workbench to resolve one against —
+ * and it reads them out of the catalogue *synchronously*, on every render. So a
+ * list left open across an invalidation would lose every one of them at the next
+ * keystroke. It is read again here, and the list repainted once it is back.
+ *
+ * The tree needs none of this: its rows name an icon rather than holding one,
+ * and the workbench redraws them itself.
+ */
+function iconPackChanged(): void {
+  forgetIconPack();
+  if (activePicker) {
+    void iconPack().then(() => activePicker?.refresh());
+  }
+}
+
+/**
  * Whether a `.go` file sits beside a `go.mod` — the only Go files whose contents
  * decide anything, since `go run .` is about the module root and nothing below it.
  */
@@ -496,13 +516,17 @@ export function activate(context: vscode.ExtensionContext): void {
       // setting carries, and the rows that already wear one are redrawn by the
       // workbench itself — they name an icon rather than holding one.
       if (event.affectsConfiguration('workbench.iconTheme')) {
-        forgetIconPack();
+        iconPackChanged();
       }
     }),
     // A pack installed, updated or uninstalled is the other half of the same
     // answer: the catalogue was read out of an extension folder, and that folder
     // is what just changed.
-    vscode.extensions.onDidChange(() => forgetIconPack()),
+    vscode.extensions.onDidChange(() => iconPackChanged()),
+    // And the colour theme decides which of a pack's two sets of icons is the
+    // one being drawn — a pack with light artwork is a different catalogue under
+    // a light theme, so the one held here is no longer the one on screen.
+    vscode.window.onDidChangeActiveColorTheme(() => iconPackChanged()),
   );
 
   clearStaleBadges();
@@ -3893,14 +3917,13 @@ function parentRows(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] {
 }
 
 /**
- * The resource a coloured row points at: the colour first, then something that
- * tells this row from the others. Nothing of it is on screen — the row carries
- * its own label, description and tooltip — so the path is free to be an identity
- * for the decoration cache rather than a path anyone reads.
- */
-/**
  * The URI a row borrows to be two things at once: a resource a decoration can be
  * hung on, and a name a file icon theme can be matched against.
+ *
+ * Nothing of it is on screen — the row carries its own label, description and
+ * tooltip — but the path is not free to be any identity that tells this row from
+ * the others: its last segment is read, by the workbench, to decide which icon
+ * the row wears.
  *
  * The colour is the first segment and the name is the rest, which is why a row
  * that wants only the name passes `NO_TINT` — a path cannot have an empty first
