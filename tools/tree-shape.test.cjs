@@ -33,10 +33,16 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
   const warnings = [];
   const hints = [];
   const quickPicks = [];
+  const copied = [];
+  const invoked = [];
   const vscode = {
     // The workbench's own answer for "what shell does a new terminal open in",
     // which is what decides how a typed command line is quoted.
-    env: { shell: shellPath },
+    env: {
+      shell: shellPath,
+      // What the two copy actions write, in the order they wrote it.
+      clipboard: { writeText: (text) => (copied.push(text), Promise.resolve()) },
+    },
     window: {
       // Enough of a terminal to answer the two questions Add to Terminal asks of
       // one: where it opened, and what was typed into it without being run.
@@ -78,8 +84,15 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
       // plain URI string and keeps the expectations below readable.
       getWorkspaceFolder: () => undefined,
       workspaceFolders: undefined,
+      // The real one cuts the workspace root off the front, and names the folder
+      // as well when more than one is open. Every path in this file is under
+      // `/repo`, so cutting that is the whole of what it has to do here.
+      asRelativePath: (target) => (target.fsPath ?? target).replace(/^\/repo\//, ''),
     },
-    commands: { executeCommand: async () => {} },
+    // Which workbench commands were asked for, and with what. `revealFileInOS`
+    // and `revealInExplorer` are the workbench's, not ours, so what the reveal
+    // actions can be held to is that they hand the right file to the right one.
+    commands: { executeCommand: async (command, ...args) => void invoked.push({ command, args }) },
     tasks: {
       taskExecutions: executions,
       executeTask: async (task) => (launched.push(task), { task, terminate() {} }),
@@ -187,11 +200,11 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async () => ${stops};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, SCAN_SETTINGS };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, SCAN_SETTINGS };
   `,
     Object.assign(context, { memento }),
   );
-  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks };
+  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -1422,6 +1435,114 @@ test('a compose item can still run down when its internal up action is absent', 
  * A Dockerfile as `parseDockerfile` builds one: the bare `build`, one build per
  * named stage, and the `run` the setting adds by default.
  */
+// --- the file behind a row ---------------------------------------------------
+
+test('the path actions act on the file a row stands for, whichever shape the row is', async () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const heading = (rows) => h.buildTreeRoots(rows)[0];
+
+  // A manifest heading is its manifest.
+  await h.copyPathOf(heading([WEB]), true);
+  await h.copyPathOf(heading([WEB]), false);
+  assert.deepEqual(h.copied, ['web/package.json', '/repo/web/package.json']);
+
+  // A Dockerfile and a compose file are leaves, and the file *is* the row.
+  h.copied.length = 0;
+  await h.copyPathOf(heading(dockerfile('/repo/api/Dockerfile')), true);
+  assert.deepEqual(h.copied, ['api/Dockerfile']);
+
+  // A folder of loose scripts has no manifest to name, so the heading stands for
+  // the directory — the same thing Open Manifest reveals for it.
+  h.copied.length = 0;
+  const scripts = shell('/repo/scripts', 'deploy.sh');
+  await h.copyPathOf(heading([scripts]), true);
+  assert.deepEqual(h.copied, ['scripts']);
+
+  // And the row under it is the script itself, not the folder it is grouped in.
+  h.copied.length = 0;
+  const [row] = [...h.buildTreeRoots([scripts])[0].children];
+  await h.copyPathOf(row, true);
+  assert.deepEqual(h.copied, ['scripts/deploy.sh']);
+});
+
+test('a manifest task has no path of its own, and the menu never offers it one', async () => {
+  // An npm script is a line in a file its siblings share: copying
+  // `web/package.json` off it would be the same four entries on every row of the
+  // group, saying the group's path rather than the row's.
+  const h = harness({ settings: { grouping: 'flat' } });
+  const [task] = [...h.buildTreeRoots([WEB])[0].children];
+  assert.equal(h.fileBehind(task), undefined);
+  await h.copyPathOf(task, true);
+  await h.revealFile(task, false);
+  assert.deepEqual(h.copied, []);
+  assert.deepEqual(h.invoked, []);
+
+  // Which is the same answer the `when` clauses give: the entries are on the
+  // rows that are a file or a folder, and on no others.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const [entry] = manifest.contributes.menus['view/item/context'].filter(
+    (item) => item.command === 'taskRunnerUltimate.copyRelativePath',
+  );
+  const takes = new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]);
+  for (const value of ['group:package', 'group:package:hidden:running', 'compose:up', 'dockerfile', 'dockerfile:building:running', 'script:idle:nofav:shell:noconfirm']) {
+    assert.equal(takes.test(value), true, value);
+  }
+  for (const value of ['script:idle:nofav:task:noconfirm', 'script:running:fav:task:confirm', 'group', 'group:eco:running', 'foreignTask']) {
+    assert.equal(takes.test(value), false, value);
+  }
+});
+
+test('reveal hands the file to the workbench command the entry names', async () => {
+  // Neither reveal is ours: one is Finder or its equivalent, the other the side
+  // bar, and both are the workbench's own commands — so what there is to hold
+  // them to is which one they call, and with what.
+  const h = harness({ settings: { grouping: 'flat' } });
+  const heading = h.buildTreeRoots(dockerfile())[0];
+
+  await h.revealFile(heading, false);
+  await h.revealFile(heading, true);
+  assert.deepEqual(
+    h.invoked.map(({ command, args }) => [command, args[0].fsPath]),
+    [
+      ['revealFileInOS', '/repo/Dockerfile'],
+      ['revealInExplorer', '/repo/Dockerfile'],
+    ],
+  );
+});
+
+test('the OS reveal is offered under one name per platform, and one at a time', () => {
+  // A command's title is a constant in the manifest and the file manager has a
+  // different name on each platform, so the one action is three ids — each
+  // fenced off behind its own platform key, or a mac would show all three.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const titles = Object.fromEntries(
+    manifest.contributes.commands
+      .filter((entry) => entry.command.startsWith('taskRunnerUltimate.revealFileInOS.'))
+      .map((entry) => [entry.command.replace('taskRunnerUltimate.revealFileInOS.', ''), entry.title]),
+  );
+  assert.deepEqual(titles, {
+    mac: 'Reveal in Finder',
+    windows: 'Reveal in File Explorer',
+    linux: 'Open Containing Folder',
+  });
+
+  for (const [platform, key] of [['mac', 'isMac'], ['windows', 'isWindows'], ['linux', 'isLinux']]) {
+    const [entry] = manifest.contributes.menus['view/item/context'].filter(
+      (item) => item.command === `taskRunnerUltimate.revealFileInOS.${platform}`,
+    );
+    assert.match(entry.when, new RegExp(`&& ${key} &&`), platform);
+    // And none of the three is reachable from the palette, where there is no row
+    // to act on.
+    assert.equal(
+      manifest.contributes.menus.commandPalette.some(
+        (item) => item.command === `taskRunnerUltimate.revealFileInOS.${platform}` && item.when === 'false',
+      ),
+      true,
+      platform,
+    );
+  }
+});
+
 function dockerfile(manifest = '/repo/Dockerfile') {
   const file = manifest.replace(/^.*\//, '');
   return ['build', 'build: deps', 'run'].map((name) => ({
@@ -1556,7 +1677,7 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
     );
 
   for (const [command, group] of [
-    ['dockerfileActions', 'inline@5'],
+    ['dockerfileActions', 'inline@4'],
     ['buildImage', '0_actions@1'],
     ['dockerfileActions', '0_actions@4'],
     ['openManifest', '0_open@1'],
@@ -1570,7 +1691,7 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
   // ▶ is the exception, and only inline: a row in the pile is taken out before it
   // is built, which is the eye's click rather than ▶'s. The menu has no eye, so
   // there it reaches a hidden row too.
-  const [play] = when('buildImage', 'inline@4');
+  const [play] = when('buildImage', 'inline@5');
   const [, pattern] = play.match(/viewItem =~ \/(.+)\/$/);
   assert.equal(new RegExp(pattern).test('dockerfile:hidden'), false);
   assert.equal(new RegExp(pattern).test('dockerfile:carried'), true);
@@ -1581,12 +1702,13 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
   assert.equal(takes('restartDockerfile', '0_actions@2', 'dockerfile:running'), true);
 });
 
-test('▶ is drawn after ■ on the rows that keep both, the way every other row draws it last', () => {
-  // A script row is either idle or running, so ▶ and ■ never share it and the
-  // rightmost button is whichever one the row is currently offering. A compose
-  // or Dockerfile row can hold several at once, and the order they are
-  // contributed in is the order they are drawn in — so ▶ takes the slot after ■
-  // and before ☰, and lands in the same column as it does everywhere else.
+test('▶ is the last inline action on every row that offers it, which is the right edge of the row', () => {
+  // Inline actions are drawn right-aligned and in contribution order, so the
+  // last slot a row fills is the button against its right edge — and that is the
+  // column the eye goes to first. A script row is either idle or running, so ▶
+  // and ■ never share it and whichever one it offers is already last. A compose
+  // or Dockerfile row can hold several at once, so ▶ is contributed after all of
+  // them, ☰ included, to land in the same column as on the rows that hold one.
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
   const drawn = (value) =>
     manifest.contributes.menus['view/item/context']
@@ -1599,12 +1721,12 @@ test('▶ is drawn after ■ on the rows that keep both, the way every other row
   // down, ▶ runs `up` again over it.
   assert.deepEqual(drawn('compose:up'), ['stopStack', 'runGroup']);
   // A Dockerfile with something of ours alive under it — a `run` container, say
-  // — is the whole set at once: restart, stop, rebuild, and the rest in ☰.
+  // — is the whole set at once: restart, stop, the rest behind ☰, and a rebuild.
   assert.deepEqual(drawn('dockerfile:running'), [
     'restartDockerfile',
     'stopDockerfile',
-    'buildImage',
     'dockerfileActions',
+    'buildImage',
   ]);
   // Its own build running is the one thing that takes ▶ away; ■ and ☰ stay.
   assert.deepEqual(drawn('dockerfile:building:running'), [
@@ -1615,6 +1737,22 @@ test('▶ is drawn after ■ on the rows that keep both, the way every other row
   // In the pile it is the eye that comes first, and it has the row's left-hand
   // slot to itself — ▶ is not offered there at all.
   assert.deepEqual(drawn('dockerfile:hidden'), ['showGroup', 'dockerfileActions']);
+
+  // The point of the numbers above, stated once as the rule they exist for:
+  // wherever ▶ is offered it is the last action drawn, and a row that has no ▶
+  // to draw — a script of ours that is already running — ends in ■ instead.
+  // Relative order within one row is not enough on its own: compose and
+  // Dockerfile could agree with each other and still sit a column in.
+  for (const [value, play] of [
+    ['compose', 'runGroup'],
+    ['compose:up', 'runGroup'],
+    ['dockerfile', 'buildImage'],
+    ['dockerfile:running', 'buildImage'],
+    ['script:idle:fav:noconfirm', 'runItem'],
+    ['script:running:fav:noconfirm', 'stopItem'],
+  ]) {
+    assert.equal(drawn(value).at(-1), play, `${value} draws ${play} flush right`);
+  }
 });
 
 test('▶ survives a container of the same file, and stands down only for its own build', () => {
@@ -1628,7 +1766,7 @@ test('▶ survives a container of the same file, and stands down only for its ow
     );
     return new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]);
   };
-  const inline = clause('buildImage', 'inline@4');
+  const inline = clause('buildImage', 'inline@5');
   const menu = clause('buildImage', '0_actions@1');
 
   const h = harness({ settings: { grouping: 'flat' } });

@@ -291,6 +291,42 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "taskRunnerUltimate.copyRelativePath",
+        "title": "Copy Relative Path",
+        "category": "Task & Script Explorer",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "taskRunnerUltimate.copyPath",
+        "title": "Copy Path",
+        "category": "Task & Script Explorer",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "taskRunnerUltimate.revealFileInOS.mac",
+        "title": "Reveal in Finder",
+        "category": "Task & Script Explorer",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "taskRunnerUltimate.revealFileInOS.windows",
+        "title": "Reveal in File Explorer",
+        "category": "Task & Script Explorer",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "taskRunnerUltimate.revealFileInOS.linux",
+        "title": "Open Containing Folder",
+        "category": "Task & Script Explorer",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "taskRunnerUltimate.revealInExplorerView",
+        "title": "Reveal in Explorer View",
+        "category": "Task & Script Explorer",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "taskRunnerUltimate.setColor.red",
         "title": "🔴 Red",
         "category": "Task & Script Explorer"
@@ -502,14 +538,14 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?:running$/"
         },
         {
-          "command": "taskRunnerUltimate.buildImage",
+          "command": "taskRunnerUltimate.dockerfileActions",
           "group": "inline@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:carried)?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?(:running)?$/"
         },
         {
-          "command": "taskRunnerUltimate.dockerfileActions",
+          "command": "taskRunnerUltimate.buildImage",
           "group": "inline@5",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:carried)?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.runItemMenu",
@@ -580,6 +616,36 @@
           "command": "taskRunnerUltimate.addToTerminal",
           "group": "0_open@4",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:shell:/"
+        },
+        {
+          "command": "taskRunnerUltimate.copyRelativePath",
+          "group": "0_path@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.copyPath",
+          "group": "0_path@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.revealFileInOS.mac",
+          "group": "0_path@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isMac && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.revealFileInOS.windows",
+          "group": "0_path@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isWindows && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.revealFileInOS.linux",
+          "group": "0_path@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && isLinux && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
+        },
+        {
+          "command": "taskRunnerUltimate.revealInExplorerView",
+          "group": "0_path@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
         },
         {
           "command": "taskRunnerUltimate.addFavorite",
@@ -794,6 +860,30 @@
         },
         {
           "command": "taskRunnerUltimate.addToTerminal",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.copyRelativePath",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.revealFileInOS.mac",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.revealFileInOS.windows",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.revealFileInOS.linux",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.revealInExplorerView",
           "when": "false"
         },
         {

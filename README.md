@@ -135,6 +135,9 @@ monorepo.
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
   at the line the task is on, wherever a task has one to point at; on a heading, **Open Manifest
   File** opens the file itself, and on a shell row it opens the script.
+- **The file behind the row** — right-click a heading or a shell row for **Copy Relative Path**,
+  **Copy Path**, **Reveal in Finder** and **Reveal in Explorer View**, on the manifest the heading
+  names, the folder a script group stands for, or the script itself.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
 - **Favorites** — star the two or three tasks you actually run and they pin to the very top of the
   tree, above everything, without leaving the manifest they belong to.
@@ -344,7 +347,7 @@ which is where the fan-out goes. Every named `FROM … AS <stage>` gets an entry
 command you have to remember:
 
 ```text
-🐳 Dockerfile • apps/api                     ▶ ☰
+🐳 Dockerfile • apps/api                     ☰ ▶
      ↳ ☰  build: deps      docker build -f Dockerfile --target deps -t api/deps .
         ☰  build: builder  docker build -f Dockerfile --target builder -t api/builder .
         ☰  run             docker run --rm -it api
@@ -1060,7 +1063,8 @@ they are Unicode 15, and an older emoji font would draw three empty boxes instea
 
 **Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Enable Confirmation**,
 **Disable Confirmation**, **Go to Script Definition**, **Open Manifest File**, **Show Terminal**,
-**Add to Terminal**, **Rename…** and **Colour** all act on the row they were invoked from, so they
+**Add to Terminal**, **Copy Relative Path**, **Copy Path**, **Reveal in Finder**, **Reveal in
+Explorer View**, **Rename…** and **Colour** all act on the row they were invoked from, so they
 live where there is a row to invoke them on:
 
 | Command | Where |
@@ -1078,6 +1082,10 @@ live where there is a row to invoke them on:
 | Compose Down | ■ inline on hover and right-click, on a compose item — it ends whatever of ours the file has running and then runs `docker compose down`, and does neither if something refuses to stop |
 | Compose Commands… | right-click only, on a compose item — the picker holding one `up` per declared service and the extra subcommands from [`dockerComposeCommands`](#settings) |
 | Add to Terminal | right-click only, on a [shell row](#shell-scripts) — a new terminal with the command line typed into it and not run, which is where a script takes arguments nobody wrote down. A manifest task says its own arguments in the manifest, so the entry is not offered there |
+| Copy Relative Path | right-click only, on the rows that are a file or a folder — a heading's manifest, the directory a [shell group](#shell-scripts) stands for, or a shell row's own script. Relative to the workspace root, and named with its folder when more than one is open |
+| Copy Path | the same rows, the whole path. A manifest task is not one of them: an npm script is a line in a file its siblings share, so every row of the group would copy the same `package.json` |
+| Reveal in Finder | the same rows, in the platform's file manager — **Reveal in File Explorer** on Windows, **Open Containing Folder** on Linux, since the workbench calls it something different on each |
+| Reveal in Explorer View | the same rows, in VS Code's own Explorer side bar rather than the desktop's |
 | Rename… | right-click only, on a script row and on a package heading alike — a rename is rare enough not to earn a permanent button |
 | Colour ▸ | right-click only, on every row the tree draws itself — eleven entries in a submenu, so the menu itself stays four lines long |
 

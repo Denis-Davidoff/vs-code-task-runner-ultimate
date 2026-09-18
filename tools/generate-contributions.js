@@ -334,6 +334,22 @@ manifest.contributes.commands = [
   // A terminal holding the row's command line, unrun — the way to pass a script
   // arguments the tree has no way to ask for. See `addToTerminal`.
   { command: 'taskRunnerUltimate.addToTerminal', title: 'Add to Terminal', category: 'Task & Script Explorer', icon: '$(terminal)' },
+  // The four that are about the file a row stands for rather than the task it
+  // runs, worded the way the workbench words them so the menu reads as one menu.
+  { command: 'taskRunnerUltimate.copyRelativePath', title: 'Copy Relative Path', category: 'Task & Script Explorer', icon: '$(copy)' },
+  { command: 'taskRunnerUltimate.copyPath', title: 'Copy Path', category: 'Task & Script Explorer', icon: '$(copy)' },
+  // One action under three ids, which is how the workbench itself says this:
+  // the label of a menu entry is the command's, a command's title is a constant
+  // in this file, and the file manager it opens is called something different on
+  // each of the three platforms. Each id is offered on its own platform alone —
+  // see the `when` clauses — so a row still shows exactly one of them.
+  { command: 'taskRunnerUltimate.revealFileInOS.mac', title: 'Reveal in Finder', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
+  { command: 'taskRunnerUltimate.revealFileInOS.windows', title: 'Reveal in File Explorer', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
+  { command: 'taskRunnerUltimate.revealFileInOS.linux', title: 'Open Containing Folder', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
+  // Not "Show in File Explorer": on Windows that is the entry above, and these
+  // two land in different places. This is the workbench's own name for its side
+  // bar, and the tree is contributed into that side bar as well as its own.
+  { command: 'taskRunnerUltimate.revealInExplorerView', title: 'Reveal in Explorer View', category: 'Task & Script Explorer', icon: '$(list-tree)' },
   // The swatch rides in the title; see PALETTE above for why it is not an icon.
   // None of these reach the command palette (see commandPalette below), so the
   // glyph is only ever read where it means something.
@@ -424,8 +440,9 @@ const COMPOSE = `/^${COMPOSE_ROW}(:running)?$/`;
 // other heading in the pile carries a run-all: what is in there is out of the
 // way, and taking it out again is the click that comes first. `:running` is
 // absent as well — see `runGroup`, which refuses a second `up` over the first.
-// It sits in the last slot before ☰ rather than the first, so ▶ lands in the
-// same column on every kind of row — see the `inline@` numbers below.
+// It sits in the last slot rather than the first: inline actions are drawn
+// right-aligned, so ▶ ends up against the right edge of the row here and on a
+// Dockerfile alike — see the `inline@` numbers below.
 const COMPOSE_IDLE = `/^compose${STACK}$/`;
 // A Dockerfile row is a leaf on the same terms, with `BUILDING` where compose
 // has `STACK`: nothing asks Docker whether an image exists, but the row does
@@ -441,8 +458,16 @@ const DOCKERFILE_RUNNING = `/^${DOCKERFILE_ROW}:running$/`;
 // keeps it: it is in the pile only because its project is, and no eye is offered
 // there to take it out with.
 const DOCKERFILE_IDLE = `/^dockerfile${CARRIED}(:running)?$/`;
-// The same, for the menu, which has no eye to make room for.
+// The same, for the menu, which has no eye standing in the way.
 const DOCKERFILE_BUILDABLE = `/^dockerfile${PUT_AWAY}(:running)?$/`;
+// Every row with a real path behind it: the headings, which are a manifest or —
+// for the shell groups — the folder they stand for, and the shell rows, which
+// are each a file of their own. A manifest task is deliberately not one of them:
+// an npm script is a line in a file rather than a file, and four entries naming
+// the package.json it shares with its siblings are four entries that say the
+// same thing on every row of the group. `:shell:` is the fourth axis of a script
+// row's context value, the same one Add to Terminal is keyed on.
+const PATH_ROW = `/^(${NAMED_ROW}|script:.+:shell:.+)$/`;
 const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];
@@ -506,9 +531,10 @@ manifest.contributes.menus = {
     // ending the run without removing the containers is not what ■ on a stack
     // means.
     //
-    // ▶ is contributed after ■ so the two never swap columns: a stack is either
-    // idle or up, so only one of them is ever drawn, and pinning ▶ to the last
-    // slot puts it where the same button sits on a Dockerfile row.
+    // ▶ is contributed last so the two never swap columns: a stack is either idle
+    // or up, so only one of them is ever drawn, and inline actions are drawn
+    // right-aligned — the last slot is the right edge of the row, which is where
+    // a Dockerfile draws ▶ too.
     { command: 'taskRunnerUltimate.stopStack', group: 'inline@3', when: `${inTree} && viewItem =~ ${COMPOSE}` },
     { command: 'taskRunnerUltimate.runGroup', group: 'inline@4', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
     // The same four on a Dockerfile row. ☰ is inline here where compose keeps it
@@ -518,12 +544,14 @@ manifest.contributes.menus = {
     //
     // Unlike every other row, this one can draw ▶ and ↻ at once: a rebuild is
     // offered while the container it built is up. ▶ therefore cannot share the
-    // run/restart column, and it takes the slot after ■ instead — the last one
-    // before ☰, which is where a compose row draws it too.
+    // run/restart column, and it takes the last slot of all instead — ☰ included,
+    // which is the one place a button is given up for it. Inline actions are
+    // right-aligned, so that is the right edge of the row: the column ▶ holds on
+    // a compose row, where ■ is the only thing it can share the row with.
     { command: 'taskRunnerUltimate.restartDockerfile', group: 'inline@2', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
     { command: 'taskRunnerUltimate.stopDockerfile', group: 'inline@3', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
-    { command: 'taskRunnerUltimate.buildImage', group: 'inline@4', when: `${inTree} && viewItem =~ ${DOCKERFILE_IDLE}` },
-    { command: 'taskRunnerUltimate.dockerfileActions', group: 'inline@5', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
+    { command: 'taskRunnerUltimate.dockerfileActions', group: 'inline@4', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
+    { command: 'taskRunnerUltimate.buildImage', group: 'inline@5', when: `${inTree} && viewItem =~ ${DOCKERFILE_IDLE}` },
     // Non-inline groups are what the right-click menu shows.
     //
     // The two gestures the row itself answers to, named in the menu so they are
@@ -579,6 +607,16 @@ manifest.contributes.menus = {
     // compose row's are the subcommand it already is. `:shell:` is the fourth
     // axis of a script row's context value — see `treeItemFor`.
     { command: 'taskRunnerUltimate.addToTerminal', group: '0_open@4', when: `${inTree} && viewItem =~ /^script:.+:shell:/` },
+    // The file a row stands for, in its own group so the menu draws a separator
+    // above it: these four are about where the thing is, not about running it.
+    // `0_path` sorts after `0_open` — the entry that opens the file — and before
+    // the star, which is the first of the ones that change the row.
+    { command: 'taskRunnerUltimate.copyRelativePath', group: '0_path@1', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
+    { command: 'taskRunnerUltimate.copyPath', group: '0_path@2', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
+    { command: 'taskRunnerUltimate.revealFileInOS.mac', group: '0_path@3', when: `${inTree} && isMac && viewItem =~ ${PATH_ROW}` },
+    { command: 'taskRunnerUltimate.revealFileInOS.windows', group: '0_path@3', when: `${inTree} && isWindows && viewItem =~ ${PATH_ROW}` },
+    { command: 'taskRunnerUltimate.revealFileInOS.linux', group: '0_path@3', when: `${inTree} && isLinux && viewItem =~ ${PATH_ROW}` },
+    { command: 'taskRunnerUltimate.revealInExplorerView', group: '0_path@4', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
     { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav:/` },
     { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },
     // Under the star and above the rename: turning the prompt on is the same kind
@@ -654,6 +692,12 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.showTerminal', when: 'false' },
     { command: 'taskRunnerUltimate.openTerminalEditor', when: 'false' },
     { command: 'taskRunnerUltimate.addToTerminal', when: 'false' },
+    { command: 'taskRunnerUltimate.copyRelativePath', when: 'false' },
+    { command: 'taskRunnerUltimate.copyPath', when: 'false' },
+    { command: 'taskRunnerUltimate.revealFileInOS.mac', when: 'false' },
+    { command: 'taskRunnerUltimate.revealFileInOS.windows', when: 'false' },
+    { command: 'taskRunnerUltimate.revealFileInOS.linux', when: 'false' },
+    { command: 'taskRunnerUltimate.revealInExplorerView', when: 'false' },
     ...PALETTE.map(({ name }) => ({ command: colourCommand(name), when: 'false' })),
     { command: CLEAR_COLOUR, when: 'false' },
     { command: 'taskRunnerUltimate.pickIcon', when: 'false' },
