@@ -33,6 +33,19 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
   const warnings = [];
   const hints = [];
   const quickPicks = [];
+  /**
+   * The one pack the stubbed catalogue offers. Spelled the way `iconsFrom` spells
+   * one, because what the picker files is built out of these two fields — and the
+   * string it builds is the only thing that has to survive the trip back.
+   */
+  const pack = {
+    id: 'test-pack',
+    variant: 'dark',
+    label: 'Test Pack',
+    base: { path: '/pack' },
+    icons: [{ key: '_rust', name: 'Rust', kind: 'file', specimen: 'icon.rs', hint: '*.rs', art: 'rust.svg' }],
+    art: new Map([['file:icon.rs', 'rust.svg']]),
+  };
   const copied = [];
   const invoked = [];
   const vscode = {
@@ -146,7 +159,10 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
     QuickPickItemKind: { Separator: -1 },
-    Uri: { from: (parts) => ({ ...parts, toString: () => `${parts.scheme}:${parts.path}` }) },
+    Uri: {
+      from: (parts) => ({ ...parts, toString: () => `${parts.scheme}:${parts.path}` }),
+      joinPath: (base, ...rest) => uri([base.path, ...rest].join('/')),
+    },
   };
 
   const memento = {
@@ -170,7 +186,20 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
         ? vscode
         : name === 'path'
           ? path
-          : name === './containers'
+          : name === './iconTheme'
+            ? {
+                // The catalogue is a file on disk in the real thing. Here it is
+                // one pack of one icon, which is enough to walk the whole path
+                // the picker takes: the icon is listed, picked, filed, and read
+                // back onto the row by the code that draws it.
+                forgetIconPack: () => {},
+                iconPack: async () => pack,
+                // A pack drawing from a font has no picture for any name, which
+                // is the other answer worth having.
+                packArt: (kind, name) =>
+                  kind === 'file' && name === 'icon.rs' ? { fsPath: '/pack/rust.svg' } : undefined,
+              }
+            : name === './containers'
             ? { composeState: async (prefix, cwd) => (probes.push({ prefix, cwd }), probeReply()) }
             : // The tree reads one thing out of the scan module, and it is the one
             // that decides which parent row a heading lands under.
@@ -194,15 +223,18 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     compiled +
       `
     storage = memento;
+    // Set by activate in the real thing; the swatches in the colour picker are
+    // files inside the extension, and this is where it keeps them.
+    extensionUri = extUri;
     keyForTask = () => undefined;
     repaint = () => {};
     confirmScript = async () => true;
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async () => ${stops};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, SCAN_SETTINGS };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS };
   `,
-    Object.assign(context, { memento }),
+    Object.assign(context, { memento, extUri: uri('/ext') }),
   );
   return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked };
 }
@@ -637,10 +669,189 @@ test('a painted heading keeps both its colour and its file icon', () => {
   assert.equal(row.resourceUri.path.split('/')[1], 'taskRunnerUltimate.palette.teal');
 });
 
+test('the colour picker draws a swatch for every colour and files what was picked', async () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  // Index 0 is Default, so this lands on the third colour of the palette.
+  const h = harness({ pick: 3 });
+  await h.pickColor({ kind: 'script', script: dev });
+
+  const [{ items, options }] = h.quickPicks;
+  assert.equal(options.title, 'Change Colour');
+  assert.deepEqual(
+    [...items].map((item) => item.label),
+    ['$(discard) Default', ...h.PALETTE.map((name) => name[0].toUpperCase() + name.slice(1))],
+  );
+  // A file per colour and per theme, which is the only kind of icon a quick pick
+  // draws in colour at all.
+  assert.deepEqual(
+    [items[1].iconPath.dark.path, items[1].iconPath.light.path],
+    ['/ext/media/swatch-red-dark.svg', '/ext/media/swatch-red-light.svg'],
+  );
+  assert.equal(h.memento.data.colors['file:///repo/package.json::dev'], h.PALETTE[2]);
+});
+
+test('the colour picker takes a colour back off', async () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const h = harness({ pick: 0, stored: { colors: { 'file:///repo/package.json::dev': 'green' } } });
+  await h.pickColor({ kind: 'script', script: dev });
+  // Deleted rather than stored as a default, which is what keeps the count in
+  // the menu honest about how much there is to undo.
+  assert.equal('file:///repo/package.json::dev' in h.memento.data.colors, false);
+  assert.equal(h.quickPicks[0].items[0].description, undefined);
+});
+
+test('the palette, the theme colours and the swatch files all say the same thing', () => {
+  // Three lists that used to be kept in step by hand. The generator writes two of
+  // them now, and this is what catches a colour added to the code and nowhere else.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const { PALETTE } = harness({});
+  const declared = manifest.contributes.colors
+    .filter((entry) => entry.id.startsWith('taskRunnerUltimate.palette.'))
+    .map((entry) => entry.id.slice('taskRunnerUltimate.palette.'.length));
+  assert.deepEqual(declared, [...PALETTE]);
+
+  for (const name of PALETTE) {
+    for (const theme of ['dark', 'light']) {
+      const at = path.join(__dirname, '..', 'media', `swatch-${name}-${theme}.svg`);
+      assert.equal(fs.existsSync(at), true, `missing swatch for ${name} ${theme}`);
+      // The swatch is the shade the theme colour declares, or the list shows one
+      // colour and the row takes another.
+      const fill = fs.readFileSync(at, 'utf8').match(/fill="(#[0-9A-Fa-f]{6})"/)[1];
+      const entry = manifest.contributes.colors.find(
+        (colour) => colour.id === `taskRunnerUltimate.palette.${name}`,
+      );
+      assert.equal(fill, entry.defaults[theme], `${name} ${theme} swatch does not match the palette`);
+    }
+  }
+});
+
+test('only the commands that work without a row are offered in the palette', () => {
+  // A command invoked from the palette is handed no row, so every command that
+  // needs one returns silently there — a visible entry that does nothing. The
+  // rule is old; what is new is that the colour picker is a command rather than a
+  // submenu, and a submenu was never offered in the palette at all.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const hidden = new Set(
+    manifest.contributes.menus.commandPalette
+      .filter((entry) => entry.when === 'false')
+      .map((entry) => entry.command),
+  );
+  const visible = manifest.contributes.commands
+    .map((command) => command.command.replace('taskRunnerUltimate.', ''))
+    .filter((command) => !hidden.has(`taskRunnerUltimate.${command}`));
+  assert.deepEqual(visible.sort(), [
+    'checkContainers',
+    'groupByEcosystem',
+    'groupFlat',
+    'menu',
+    'refresh',
+    'restartAll',
+    'show',
+    'stopAll',
+  ]);
+});
+
+test('nothing is left pointing at the colour submenu that no longer exists', () => {
+  // An id left in contributes.submenus draws an empty `Colour ▸` in every menu.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  assert.equal(manifest.contributes.submenus, undefined);
+  assert.equal(JSON.stringify(manifest.contributes.menus).includes('submenu'), false);
+});
+
 test('an icon picked by hand stands in for the theme\'s', () => {
   const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'rocket' } } });
   const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
   assert.equal(row.iconPath.id, 'rocket');
+});
+
+test('an icon picked out of the pack reaches the store and comes back onto the row', async () => {
+  // The seam this feature rests on: the picker writes one string, the row reads
+  // it back, and nothing else in the codebase knows what that string looks like.
+  // Both halves are exercised here, in that order, so neither can be changed
+  // alone.
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  // 0 is Default, 1 the separator naming the pack, 2 the one icon in it.
+  const h = harness({ pick: 2 });
+  await h.pickIcon({ kind: 'script', script: dev });
+
+  const [{ items, options }] = h.quickPicks;
+  assert.equal(options.title, 'Change Icon');
+  // Typing filters on the name beside the icon as well, which is the half worth
+  // typing — `*.rs` rather than `Rust`.
+  assert.equal(options.matchOnDescription, true);
+  assert.equal(items[1].label, 'Test Pack');
+  assert.deepEqual(
+    [items[2].label, items[2].description, items[2].iconPath.path],
+    ['Rust', '*.rs', '/pack/rust.svg'],
+  );
+
+  // Filed as the name that reaches the icon, never as anything belonging to the
+  // pack it came from.
+  assert.equal(h.memento.data.icons['file:///repo/package.json::dev'], 'file:icon.rs');
+
+  // And read back by the code that draws the row, which is the half a test that
+  // seeds the store by hand never checks.
+  const row = h.treeItemFor({ kind: 'script', script: dev });
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
+  assert.deepEqual(row.resourceUri.path.split('/').slice(1), ['-', 'icon.rs']);
+
+  // The same string is what finds the picture for the dropdown.
+  assert.deepEqual({ ...h.scriptItem(dev, false).iconPath }, { fsPath: '/pack/rust.svg' });
+});
+
+test('the icon already on a row is marked in the pack list, and Default takes it off', async () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const held = { icons: { 'file:///repo/package.json::dev': 'file:icon.rs' } };
+  const h = harness({ pick: 2, stored: held });
+  await h.pickIcon({ kind: 'script', script: dev });
+  const [{ items }] = h.quickPicks;
+  assert.equal(items[0].description, undefined);
+  assert.equal(items[2].description, '*.rs · current');
+
+  const off = harness({ pick: 0, stored: held });
+  await off.pickIcon({ kind: 'script', script: dev });
+  assert.equal('file:///repo/package.json::dev' in off.memento.data.icons, false);
+});
+
+test('an icon picked out of the icon pack is worn as a name, not as a glyph', () => {
+  // Nothing of the pack is held: the row says "draw me the way you draw a
+  // Dockerfile" and the workbench answers out of whichever pack is installed.
+  const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'file:Dockerfile' } } });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
+  assert.equal(row.resourceUri.path.split('/').pop(), 'Dockerfile');
+});
+
+test('a folder icon from the pack asks for a folder', () => {
+  const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'folder:src' } } });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.deepEqual({ ...row.iconPath }, { themeFolder: true });
+  assert.equal(row.resourceUri.path.split('/').pop(), 'src');
+});
+
+test('a pack icon on a heading leaves the shared title colour alone', () => {
+  // A heading always carries a colour — its own or the one every heading shares
+  // — so the name for the icon has to ride alongside it rather than in its slot.
+  // The sentinel is a task row's problem, and is pinned there instead.
+  const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'file:Dockerfile' } } });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.deepEqual(row.resourceUri.path.split('/').slice(1), [
+    'taskRunnerUltimate.sourceTitleForeground',
+    'Dockerfile',
+  ]);
+});
+
+test('a painted heading wearing a pack icon keeps its colour', () => {
+  const h = harness({
+    stored: {
+      colors: { 'file:///repo/engine/Cargo.toml': 'teal' },
+      icons: { 'file:///repo/engine/Cargo.toml': 'file:Dockerfile' },
+    },
+  });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.equal(row.resourceUri.path.split('/')[1], 'taskRunnerUltimate.palette.teal');
+  assert.equal(row.resourceUri.path.split('/').pop(), 'Dockerfile');
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
 });
 
 test('no heading is tinted by what kind of thing it is', () => {
@@ -1105,6 +1316,54 @@ test('two manifests in one folder stay tellable apart when they share a name', (
     [...h.buildTreeRoots([first, second])].map((group) => h.treeItemFor(group).label),
     ['docker-compose.yml • repo/svc', 'docker-compose.dev.yml • repo/svc'],
   );
+});
+
+test('a task row wearing a pack icon names it and takes no colour with it', () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const h = harness({ stored: { icons: { [`file:///repo/package.json::dev`]: 'file:icon.rs' } } });
+  const row = h.treeItemFor({ kind: 'script', script: dev });
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
+  // The colour slot holds the sentinel, so the decoration provider leaves the
+  // row alone — the URI is here for the name at the end of it.
+  assert.deepEqual(row.resourceUri.path.split('/').slice(1), ['-', 'icon.rs']);
+
+  // And a row that was painted keeps the paint, with the name still on the end.
+  const painted = harness({
+    stored: {
+      colors: { [`file:///repo/package.json::dev`]: 'teal' },
+      icons: { [`file:///repo/package.json::dev`]: 'file:icon.rs' },
+    },
+  });
+  const row2 = painted.treeItemFor({ kind: 'script', script: dev });
+  assert.deepEqual(row2.resourceUri.path.split('/').slice(1), [
+    'taskRunnerUltimate.palette.teal',
+    'icon.rs',
+  ]);
+});
+
+test('a pack icon follows the row into the dropdown, as a picture', () => {
+  // A quick-pick row has no resource behind it for the workbench to resolve a
+  // file icon against, so the picture itself is what goes on it — and the glyph
+  // in the label steps aside, or the row would wear two icons.
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const h = harness({ stored: { icons: { [`file:///repo/package.json::dev`]: 'file:icon.rs' } } });
+  const item = h.scriptItem(dev, false);
+  assert.deepEqual({ ...item.iconPath }, { fsPath: '/pack/rust.svg' });
+  assert.equal(item.label, 'dev');
+
+  // A pack with no picture for it keeps the glyph: findable in both lists either
+  // way is the point.
+  const fontish = harness({ stored: { icons: { [`file:///repo/package.json::dev`]: 'file:icon.zig' } } });
+  const plain = fontish.scriptItem(dev, false);
+  assert.equal(plain.iconPath, undefined);
+  assert.equal(plain.label, '$(play) dev');
+});
+
+test('the spinner wins over a pack icon, as it does over every other', () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const h = harness({ stored: { icons: { [`file:///repo/package.json::dev`]: 'file:icon.rs' } } });
+  h.running.set(dev.key, { task: { name: 'dev' } });
+  assert.equal(h.treeItemFor({ kind: 'script', script: dev }).iconPath.id, 'loading~spin');
 });
 
 test('up is filled and green, down is hollow and red', () => {
@@ -1720,6 +1979,7 @@ test('every action a Dockerfile row has stays on it once the row is put away', (
     ['dockerfileActions', '0_actions@4'],
     ['openManifest', '0_open@1'],
     ['editTitle', '2_modify@1'],
+    ['pickColor', '2_modify@2'],
     ['pickIcon', '2_modify@3'],
   ]) {
     assert.equal(takes(command, group, 'dockerfile:hidden'), true, `${command} ${group} hidden`);

@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { composeState } from './containers';
+import { forgetIconPack, iconPack, packArt, PackIcon } from './iconTheme';
 import { locateTask } from './locate';
 import {
   ALL_ECOSYSTEMS,
@@ -244,6 +245,26 @@ function repaint(): void {
 }
 
 /**
+ * The catalogue is no longer the one on screen: a different pack, a changed one,
+ * or a colour theme that draws the other half of it.
+ *
+ * Dropping it is half the answer. The dropdown draws its pack icons as pictures
+ * — a quick pick row has no resource for the workbench to resolve one against —
+ * and it reads them out of the catalogue *synchronously*, on every render. So a
+ * list left open across an invalidation would lose every one of them at the next
+ * keystroke. It is read again here, and the list repainted once it is back.
+ *
+ * The tree needs none of this: its rows name an icon rather than holding one,
+ * and the workbench redraws them itself.
+ */
+function iconPackChanged(): void {
+  forgetIconPack();
+  if (activePicker) {
+    void iconPack().then(() => activePicker?.refresh());
+  }
+}
+
+/**
  * Whether a `.go` file sits beside a `go.mod` — the only Go files whose contents
  * decide anything, since `go run .` is about the module root and nothing below it.
  */
@@ -264,6 +285,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // `ExtensionContext.extension` is stable API as of VS Code 1.62, well under the
   // 1.85 this extension asks for, so there is no id spelled out anywhere here.
   extensionId = context.extension.id;
+  extensionUri = context.extensionUri;
 
   for (const exec of vscode.tasks.taskExecutions) {
     const key = keyForTask(exec.task);
@@ -361,9 +383,15 @@ export function activate(context: vscode.ExtensionContext): void {
       restartGroup(node),
     ),
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
-    // One command per colour: a submenu entry is a command, and there is no way
-    // to hand it an argument from contributes.menus. The list is the palette's,
-    // so the two can never drift apart.
+    // One command per colour, though the menu points at none of them any more:
+    // the picker below is a list, and a list needs one command for all fifteen.
+    //
+    // They stay registered so that a keybinding somebody already wrote against
+    // `setColor.green` does not start failing with "command not found". It will
+    // not paint anything either — a command invoked from a keybinding is handed
+    // no row, and `setNodeColor` has nothing to file a colour against — which is
+    // why they are hidden from the command palette too. Registered so as not to
+    // break, not because they work.
     ...PALETTE.map((name) =>
       vscode.commands.registerCommand(`taskRunnerUltimate.setColor.${name}`, (node?: TreeNode) =>
         setNodeColor(node, name),
@@ -372,8 +400,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.clearColor', (node?: TreeNode) =>
       setNodeColor(node, undefined),
     ),
-    // One command for every icon, unlike the colours: an icon picker is a list
-    // of thirty, which is a quick pick's size and three columns past a submenu's.
+    vscode.commands.registerCommand('taskRunnerUltimate.pickColor', (node?: TreeNode) => pickColor(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.pickIcon', (node?: TreeNode) => pickIcon(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.checkContainers', () => checkContainers(true)),
     // Two commands for one button: each names the mode it puts the tree in, and
@@ -490,7 +517,22 @@ export function activate(context: vscode.ExtensionContext): void {
       if (event.affectsConfiguration('taskRunnerUltimate.title')) {
         syncTitles();
       }
+      // Not one of ours, and the only setting outside this extension worth
+      // watching: the icons the picker offers are the ones the pack in this
+      // setting carries, and the rows that already wear one are redrawn by the
+      // workbench itself — they name an icon rather than holding one.
+      if (event.affectsConfiguration('workbench.iconTheme')) {
+        iconPackChanged();
+      }
     }),
+    // A pack installed, updated or uninstalled is the other half of the same
+    // answer: the catalogue was read out of an extension folder, and that folder
+    // is what just changed.
+    vscode.extensions.onDidChange(() => iconPackChanged()),
+    // And the colour theme decides which of a pack's two sets of icons is the
+    // one being drawn — a pack with light artwork is a different catalogue under
+    // a light theme, so the one held here is no longer the one on screen.
+    vscode.window.onDidChangeActiveColorTheme(() => iconPackChanged()),
   );
 
   clearStaleBadges();
@@ -790,6 +832,8 @@ const CONFIRM_KEY = 'confirmations';
 let storage: vscode.Memento | undefined;
 /** This extension's `publisher.name`, for the query that filters the settings editor. */
 let extensionId: string | undefined;
+/** Where this extension's own files live, which is where the palette swatches are. */
+let extensionUri: vscode.Uri | undefined;
 
 /**
  * Storage identity of a workspace folder. Its name, which is what the workspace
@@ -1244,9 +1288,13 @@ async function renameRef(
 // --- row colours -------------------------------------------------------------
 
 /**
- * The ten colours a row can be painted, in the order the submenu offers them:
- * around the wheel from red, then the two quiet ones — brown and grey — last,
- * which is where a row being turned down rather than picked out belongs.
+ * The colours a row can be painted, in the order the picker lists them: around
+ * the wheel from red, with the two neutrals last, which is where a row being
+ * turned down rather than picked out belongs.
+ *
+ * Kept in step with the PALETTE in `tools/generate-contributions.js`, which is
+ * where the shades themselves are declared and where the swatch files and the
+ * `contributes.colors` entries are made from them.
  *
  * The store keeps these names rather than the theme colour ids behind them. A
  * name is what the user picked, and the id it maps to stays ours to move; a
@@ -1254,7 +1302,23 @@ async function renameRef(
  * also what lets a name this build no longer offers be ignored rather than
  * handed to `ThemeColor` as a colour nothing declares.
  */
-const PALETTE = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'brown', 'gray'] as const;
+const PALETTE = [
+  'red',
+  'orange',
+  'yellow',
+  'lime',
+  'green',
+  'teal',
+  'cyan',
+  'blue',
+  'indigo',
+  'purple',
+  'magenta',
+  'pink',
+  'brown',
+  'slate',
+  'gray',
+] as const;
 
 type PaletteName = (typeof PALETTE)[number];
 
@@ -1306,6 +1370,68 @@ function colorRef(node: TreeNode): string | undefined {
 function nodeColor(node: TreeNode): string | undefined {
   const name = storedColor(colorRef(node));
   return name ? paletteColor(name) : undefined;
+}
+
+/**
+ * The swatch a colour is drawn with in the picker, as a pair the workbench picks
+ * between. A file rather than a `ThemeIcon` carrying the palette colour itself,
+ * because VS Code turns a `ThemeIcon` into a bare codicon on the way into a quick
+ * pick and drops the colour doing it — only URI icons are drawn in colour there.
+ *
+ * The cost of that is one thing worth knowing: a swatch is the shade the palette
+ * ships, so a colour overridden in `workbench.colorCustomizations` is painted on
+ * the row as the override and drawn here as the original.
+ */
+function swatch(name: PaletteName): { light: vscode.Uri; dark: vscode.Uri } | undefined {
+  return extensionUri
+    ? {
+        light: vscode.Uri.joinPath(extensionUri, 'media', `swatch-${name}-light.svg`),
+        dark: vscode.Uri.joinPath(extensionUri, 'media', `swatch-${name}-dark.svg`),
+      }
+    : undefined;
+}
+
+/**
+ * The colour picker, on the same rows the icons are and now in the same shape.
+ *
+ * It was a submenu of one command per colour until the palette outgrew it: a
+ * platform menu draws no icons, so every swatch had to be spelled as a character
+ * in the label, and Unicode has no coloured circle for teal, pink, grey or any of
+ * the five this list gained. A quick pick draws a real one, which is what lets
+ * fifteen colours be told apart by eye rather than read.
+ */
+async function pickColor(node: TreeNode | undefined): Promise<void> {
+  const ref = node ? colorRef(node) : undefined;
+  if (!ref) {
+    return;
+  }
+  const current = storedColor(ref);
+
+  interface ColourItem extends vscode.QuickPickItem {
+    name?: PaletteName;
+  }
+  const items: ColourItem[] = [
+    {
+      label: '$(discard) Default',
+      description: current ? undefined : 'current',
+      detail: 'The colour its category or kind gives it.',
+    },
+    ...PALETTE.map((name): ColourItem => ({
+      label: name.charAt(0).toUpperCase() + name.slice(1),
+      description: name === current ? 'current' : undefined,
+      iconPath: swatch(name),
+      name,
+    })),
+  ];
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Change Colour',
+    placeHolder: 'Pick a colour for this row — shown in this list only',
+  });
+  if (picked) {
+    // `undefined` on the Default row, which is what takes the colour back off.
+    await setNodeColor(node, picked.name);
+  }
 }
 
 /**
@@ -1509,6 +1635,50 @@ function storedIcon(ref: string | undefined): string | undefined {
 }
 
 /**
+ * The other half of the same store: an icon taken from the file icon theme the
+ * workbench is wearing, kept as the *name* that reaches it rather than as
+ * anything belonging to the pack it was picked from — see `iconTheme.ts` for why.
+ *
+ * One store holds both kinds because a row has one icon, whichever list it came
+ * from, and one "Reset all icons" should answer for all of them. They are told
+ * apart by the prefix: no codicon id has a colon in it, so an entry either names
+ * a glyph in the font or a file the workbench knows how to draw.
+ */
+interface Specimen {
+  /** Which of the two the workbench has to be shown to draw the icon. */
+  readonly kind: 'file' | 'folder';
+  /** The name to show it. */
+  readonly name: string;
+}
+
+function specimenValue(icon: PackIcon): string {
+  return `${icon.kind}:${icon.specimen}`;
+}
+
+function storedSpecimen(ref: string | undefined): Specimen | undefined {
+  const value = ref ? customIcons()[ref] : undefined;
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  // Nothing is checked against the pack that was installed when it was picked.
+  // That is the point of keeping a name: a pack swapped out since answers for
+  // `Dockerfile` too, and a pack that has nothing to say about it draws its own
+  // default file icon, which is the same answer the Explorer gives that name.
+  const [kind, ...rest] = value.split(':');
+  const name = rest.join(':');
+  return name && (kind === 'file' || kind === 'folder') ? { kind, name } : undefined;
+}
+
+/**
+ * What to hand `TreeItem.iconPath` for a specimen. The icon itself is never
+ * loaded by us: this says "draw this the way you would draw that file", and the
+ * name it goes with rides on the row's `resourceUri`.
+ */
+function specimenIcon(specimen: Specimen): vscode.ThemeIcon {
+  return specimen.kind === 'folder' ? vscode.ThemeIcon.Folder : vscode.ThemeIcon.File;
+}
+
+/**
  * The icon picker, on the same rows the colours are: an icon is filed under the
  * same ref a colour is — see `colorRef` — so the two annotations travel together
  * and one "Reset all icons" mirrors "Reset all colours" exactly.
@@ -1519,16 +1689,45 @@ async function pickIcon(node: TreeNode | undefined): Promise<void> {
     return;
   }
   const current = storedIcon(ref);
+  const currentSpecimen = storedSpecimen(ref);
+  // Read before the list is shown rather than while it is: a pack is a file on
+  // disk, and a quick pick that opens empty and fills in a moment is one you
+  // have already started typing into. It is read once and kept — see `iconPack`.
+  const pack = await iconPack();
 
   interface IconItem extends vscode.QuickPickItem {
     id?: string;
+    specimen?: string;
   }
   const items: IconItem[] = [
     {
       label: '$(discard) Default',
-      description: current ? undefined : 'current',
+      description: current || currentSpecimen ? undefined : 'current',
       detail: 'The icon its category or kind gives it.',
     },
+    // The pack goes first, and by name. Somebody who installed an icon pack did
+    // it to see those icons, and the codicons below are the ones this extension
+    // ships with — the order says which list is which without a word of prose.
+    //
+    // The icons are drawn from the pack's own files. Only for the preview: what
+    // a row is given is the name under each entry, which is what the workbench
+    // matches on. A pack with no files to draw from — Seti draws from a font —
+    // still lists, without the pictures.
+    ...(pack
+      ? [
+          { label: pack.label, kind: vscode.QuickPickItemKind.Separator } as IconItem,
+          ...pack.icons.map((icon): IconItem => {
+            const specimen = specimenValue(icon);
+            const held = currentSpecimen && specimen === `${currentSpecimen.kind}:${currentSpecimen.name}`;
+            return {
+              label: icon.name,
+              description: held ? `${icon.hint} · current` : icon.hint,
+              iconPath: icon.art ? vscode.Uri.joinPath(pack.base, icon.art) : undefined,
+              specimen,
+            };
+          }),
+        ]
+      : []),
     // The sections carry the browsing case; typing filters across all of them
     // alike, separators standing aside the way quick picks always have them.
     ...ICON_GROUPS.flatMap((group): IconItem[] => [
@@ -1544,13 +1743,19 @@ async function pickIcon(node: TreeNode | undefined): Promise<void> {
   const picked = await vscode.window.showQuickPick(items, {
     title: 'Change Icon',
     placeHolder: 'Pick an icon for this row — shown in this list only',
+    // The name beside a pack icon is the half worth typing: `*.rs` and
+    // `Dockerfile` are how you look for one, and the pretty name above it is
+    // often not what the file is called.
+    matchOnDescription: true,
   });
   if (!picked) {
     return;
   }
 
   const icons = { ...customIcons() };
-  if (picked.id) {
+  if (picked.specimen) {
+    icons[ref] = picked.specimen;
+  } else if (picked.id) {
     icons[ref] = picked.id;
   } else {
     // `undefined` is the default, and the default is an absent entry — same
@@ -3274,7 +3479,10 @@ function createTree(): vscode.Disposable[] {
   const decorations = vscode.window.registerFileDecorationProvider({
     provideFileDecoration: (uri) => {
       const [color] = uri.scheme === DECORATION_SCHEME ? uri.path.slice(1).split('/') : [];
-      return color ? { color: new vscode.ThemeColor(color) } : undefined;
+      // `NO_TINT` is a row that took one of these URIs for the file name in it
+      // and nothing else — an unpainted row wearing an icon from the file icon
+      // theme — and it must come back as plainly as a row with no URI at all.
+      return color && color !== NO_TINT ? { color: new vscode.ThemeColor(color) } : undefined;
     },
   });
 
@@ -3799,14 +4007,24 @@ function parentRows(groups: Array<TreeNode & { kind: 'group' }>): TreeNode[] {
 }
 
 /**
- * The resource a coloured row points at: the colour first, then something that
- * tells this row from the others. Nothing of it is on screen — the row carries
- * its own label, description and tooltip — so the path is free to be an identity
- * for the decoration cache rather than a path anyone reads.
+ * The URI a row borrows to be two things at once: a resource a decoration can be
+ * hung on, and a name a file icon theme can be matched against.
+ *
+ * Nothing of it is on screen — the row carries its own label, description and
+ * tooltip — but the path is not free to be any identity that tells this row from
+ * the others: its last segment is read, by the workbench, to decide which icon
+ * the row wears.
+ *
+ * The colour is the first segment and the name is the rest, which is why a row
+ * that wants only the name passes `NO_TINT` — a path cannot have an empty first
+ * segment without turning into an authority the moment the URI is spelled out.
  */
 function decorationUri(color: string, name: string): vscode.Uri {
   return vscode.Uri.from({ scheme: DECORATION_SCHEME, path: `/${color}/${name}` });
 }
+
+/** The colour slot of a row that is only here for the name. See `decorationUri`. */
+const NO_TINT = '-';
 
 function treeItemFor(node: TreeNode): vscode.TreeItem {
   if (node.kind === 'group') {
@@ -3892,7 +4110,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // icon for it while the scheme stays ours. Both halves matter: the scheme
     // keeps our colour off the real file in the Explorer, and the file name is
     // the only thing an icon theme matches on.
-    item.resourceUri = decorationUri(tint, node.detail ?? node.label);
+    // An icon taken from the file icon theme is worn the same way the manifest's
+    // own icon is, and through the same URI: the workbench is shown a name and
+    // draws whatever its pack has for it. So the name in this path is the picked
+    // one when there is one, and the manifest's own the rest of the time.
+    const specimen = storedSpecimen(node.ref ?? node.id);
+    item.resourceUri = decorationUri(tint, specimen?.name ?? node.detail ?? node.label);
 
     // A heading that names something on disk wears that thing's own icon, taken
     // from whichever file icon theme the user runs — the real npm, Rust and
@@ -3929,6 +4152,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
       // on a row: "this one is busy" is the answer to a different question, and
       // it is the answer for as long as it is the one worth finding.
       item.iconPath = runningIcon();
+    } else if (specimen) {
+      // Picked by hand out of the pack, so it wins over the manifest's own icon
+      // and over `groupIcons` alike — the setting decides what an unanswered
+      // heading wears, and this heading was answered for.
+      item.iconPath = specimenIcon(specimen);
     } else if (!picked && node.ref !== undefined && node.source !== 'shell' && typeIcons()) {
       item.iconPath = vscode.ThemeIcon.File;
     } else {
@@ -4035,15 +4263,25 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     ...(needsConfirmation(node.script) ? ['Asks before it starts or stops.'] : []),
   ].join('\n');
   const tint = nodeColor(node);
-  item.iconPath = iconFor(node.script, isRunning, tint, up);
+  // An icon out of the file icon theme is not a glyph we hold, so it cannot come
+  // back from `iconFor` with the rest: it is a name on the row's URI below and a
+  // `ThemeIcon.File` here. The spinner still wins over it, for the reason it wins
+  // over every other picked icon — a running row is answering a different
+  // question — which is why this asks for one only while the row is idle.
+  const specimen = isRunning ? undefined : storedSpecimen(scriptRef(node.script));
+  item.iconPath = specimen ? specimenIcon(specimen) : iconFor(node.script, isRunning, tint, up);
   // A painted task carries the same decoration trick the headings do, which is
   // the only way a tree label takes a colour at all. The description goes with it
   // — the decoration lands on the whole resource label and `.label-description`
   // has only an opacity of its own — which is the colour on the row rather than
   // on a dot beside it, and is what painting one was for. Unpainted rows are left
   // without a resourceUri, so nothing about them changes.
-  if (tint) {
-    item.resourceUri = decorationUri(tint, scriptRef(node.script));
+  //
+  // A row wearing a pack icon takes one whether it was painted or not: that URI
+  // is where the name lives that the workbench draws the icon from. `NO_TINT`
+  // keeps an unpainted row unpainted.
+  if (tint || specimen) {
+    item.resourceUri = decorationUri(tint ?? NO_TINT, specimen?.name ?? scriptRef(node.script));
   }
   // Five independent axes in one value, matched a piece at a time by the
   // `when` clauses in contributes.menus. Each pair is spelled so that neither
@@ -5276,6 +5514,10 @@ async function showScriptPicker(): Promise<void> {
   // that has just stopped can only drop back down if the list it is rebuilt from
   // still remembers where it belongs.
   let scripts = await savedOrder();
+  // Warmed before the first row is built, never while one is: `scriptItem` runs
+  // on every render — a start, a stop, a keystroke — and the pack is a file on
+  // disk. Read once here and answered out of memory from then on.
+  await iconPack();
 
   if (scripts.length === 0 && runningCount() === 0) {
     vscode.window.showInformationMessage('No tasks found in any manifest of this workspace.');
@@ -5459,8 +5701,8 @@ function buildItems(saved: ScriptEntry[]): Item[] {
  * same way the tree's starred rows do — listed away from a package heading, the
  * row has to answer that itself.
  *
- * The icon is written into the label as `$(id)` rather than passed as `iconPath`,
- * which looks like the worse of the two and is not:
+ * A codicon is written into the label as `$(id)` rather than passed as
+ * `iconPath`, which looks like the worse of the two and is not:
  *
  * - `iconPath` puts the icon in the row's own 16px slot, which carries
  *   `padding-right: 6px`. A codicon lands centred in the content box while
@@ -5473,16 +5715,30 @@ function buildItems(saved: ScriptEntry[]): Item[] {
  *   icons are drawn in colour there, and a pre-rendered SVG cannot resolve a
  *   theme colour id, least of all one a user put in `categories`.
  *
- * So `iconPath` costs the spinner and buys nothing. In the label the codicon is
- * an inline span sized to the glyph, and it spins true.
+ * So for a codicon `iconPath` costs the spinner and buys nothing. In the label it
+ * is an inline span sized to the glyph, and it spins true.
+ *
+ * An icon out of the file icon theme is the one exception, and it is the same
+ * sentence read the other way: it is a picture, not a glyph in the font, so the
+ * label cannot carry it and `iconPath` is the only way in. Such a row never
+ * spins — the spinner wins over a picked icon — so the cost above is not one it
+ * can pay, and being a URI icon it is the one kind drawn in colour here.
  */
 function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
   const isRunning = running.has(script.key);
   // The user's icon carries over from the tree: the picker and the tree are two
   // views of the same rows, and a row you marked should be findable in both.
   const icon = isRunning ? 'loading~spin' : storedIcon(scriptRef(script)) ?? categoryFor(script)?.icon ?? 'play';
+  // An icon out of the file icon theme carries over too, and here it has to be
+  // the picture itself: a quick pick row has no resource behind it for the
+  // workbench to resolve a `ThemeIcon.File` against, the way a tree row does. A
+  // pack that draws from a font has no picture to give, and such a row keeps the
+  // glyph below — findable in both lists either way, which is the point.
+  const specimen = isRunning ? undefined : storedSpecimen(scriptRef(script));
+  const art = specimen ? packArt(specimen.kind, specimen.name) : undefined;
   return {
-    label: `$(${icon}) ${displayName(script)}`,
+    label: art ? displayName(script) : `$(${icon}) ${displayName(script)}`,
+    iconPath: art,
     description: scriptDescription(script, inFavorites),
     buttons: isRunning ? [restartButton(true), stopButton()] : [restartButton(false)],
     script,

@@ -224,41 +224,69 @@ fs.writeFileSync(path.join(media, 'icon.png'), encodePng(renderIcon(), ICON_SIZE
 // --- manifest ---------------------------------------------------------------
 
 /*
- * The colours the right-click menu can paint a row with — keep in step with
- * PALETTE in src/extension.ts and with the taskRunnerUltimate.palette.* entries
- * in contributes.colors, which are written by hand.
+ * The colours a row can be painted with — the one place they are written down.
  *
- * A submenu entry is a command and takes no argument, so each colour needs one
- * of its own; generating them is what keeps eleven commands, eleven menu entries
- * and eleven palette exclusions saying the same thing.
+ * Each entry carries the four values the workbench asks a theme colour for, and
+ * everything else is made out of them: the `taskRunnerUltimate.palette.*` entries
+ * in contributes.colors, the command per colour, and the two swatch files the
+ * picker draws. They used to be three lists kept in step by hand, which is three
+ * chances for a colour to be declared one shade and drawn another.
  *
- * The swatch is part of the title because a context menu draws no icons at all —
- * VS Code hands those menus to the platform, and `contributes.commands.icon` is
- * dropped on the way. A character in the label is the one thing that survives, so
- * the colour is spelled in the text rather than declared beside it.
+ * The swatch is a file rather than a character because the picker is a quick
+ * pick now. A context menu draws no icons at all — VS Code hands those menus to
+ * the platform and `contributes.commands.icon` is dropped on the way — so while
+ * the palette lived in a submenu the only swatch that survived was one spelled
+ * in the label, and Unicode has no circle for teal, pink or grey. A quick pick
+ * draws a real image, so all fifteen are the same circle in fifteen colours.
  *
- * Seven of the ten are the coloured circles, which every platform has had since
- * 2019. Teal and pink have no circle in Unicode at all and grey's is a white one,
- * so those three take the nearest glyph that is the right colour — a shape the
- * label is not relying on, since the name is next to it either way. The newer
- * heart glyphs would have matched all ten exactly and are skipped on purpose:
- * they are Unicode 15, and on a machine whose emoji font predates them the menu
- * would show three empty boxes.
+ * A `ThemeColor` would have been better still and is not available: VS Code
+ * turns a `ThemeIcon` into a bare codicon class on the way into a quick pick and
+ * drops the colour doing it. Only URI icons are drawn in colour there — which is
+ * why these are files, and why a palette colour overridden in
+ * `workbench.colorCustomizations` is drawn here as the shade it ships as.
  */
 const PALETTE = [
-  { name: 'red', swatch: '🔴' },
-  { name: 'orange', swatch: '🟠' },
-  { name: 'yellow', swatch: '🟡' },
-  { name: 'green', swatch: '🟢' },
-  { name: 'teal', swatch: '💠' },
-  { name: 'blue', swatch: '🔵' },
-  { name: 'purple', swatch: '🟣' },
-  { name: 'pink', swatch: '🌸' },
-  { name: 'brown', swatch: '🟤' },
-  { name: 'gray', swatch: '⚪' },
+  { name: 'red', dark: '#F14C4C', light: '#E51400', highContrast: '#FF8A8A', highContrastLight: '#B5000F' },
+  { name: 'orange', dark: '#E8A33D', light: '#C06000', highContrast: '#FFB86C', highContrastLight: '#8A4300' },
+  { name: 'yellow', dark: '#E5C07B', light: '#A67F00', highContrast: '#F0D48A', highContrastLight: '#6B5200' },
+  { name: 'lime', dark: '#A8CC52', light: '#5E7A00', highContrast: '#C6E37A', highContrastLight: '#3F5200' },
+  { name: 'green', dark: '#73C991', light: '#388A34', highContrast: '#89D185', highContrastLight: '#0B6A0B' },
+  { name: 'teal', dark: '#4EC9B0', light: '#0F8A82', highContrast: '#7EE0CC', highContrastLight: '#0A5E58' },
+  { name: 'cyan', dark: '#4ABFD9', light: '#0E7490', highContrast: '#84DCEF', highContrastLight: '#04566E' },
+  { name: 'blue', dark: '#75BEFF', light: '#0066BF', highContrast: '#9CDCFE', highContrastLight: '#004E8C' },
+  { name: 'indigo', dark: '#8C8CF0', light: '#4343C4', highContrast: '#B0B0FF', highContrastLight: '#2B2B96' },
+  { name: 'purple', dark: '#B180D7', light: '#652D90', highContrast: '#C8A2E0', highContrastLight: '#4B1D6E' },
+  { name: 'magenta', dark: '#DE73C8', light: '#A3007A', highContrast: '#F29BE0', highContrastLight: '#75005A' },
+  { name: 'pink', dark: '#F191C9', light: '#B4267A', highContrast: '#FFB3DC', highContrastLight: '#8A1259' },
+  { name: 'brown', dark: '#C1936B', light: '#8A5A2B', highContrast: '#D8AE86', highContrastLight: '#633D17' },
+  { name: 'slate', dark: '#98A7BA', light: '#4F5B6B', highContrast: '#BDC9D8', highContrastLight: '#36404D' },
+  { name: 'gray', dark: '#9D9D9D', light: '#767676', highContrast: '#B0B0B0', highContrastLight: '#5A5A5A' },
 ];
 
-const COLOUR_SUBMENU = 'taskRunnerUltimate.color';
+/** Where the picker looks for a colour's swatch. */
+const swatchPath = (name, theme) => `media/swatch-${name}-${theme}.svg`;
+
+/*
+ * A swatch is a filled dot on a 16×16 canvas, the size VS Code gives an icon in
+ * a quick pick row. Smaller than the slot on purpose: a circle drawn to the edges
+ * reads as a button, and this one is standing in for a colour, not offering to be
+ * pressed. Two files per colour rather than one, because a quick pick takes a
+ * light and a dark icon and the palette declares a value for each.
+ */
+function swatchFile(fill) {
+  return [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">',
+    `<circle cx="8" cy="8" r="5" fill="${fill}"/>`,
+    '</svg>',
+    '',
+  ].join('\n');
+}
+
+for (const colour of PALETTE) {
+  fs.writeFileSync(path.join(root, swatchPath(colour.name, 'dark')), swatchFile(colour.dark));
+  fs.writeFileSync(path.join(root, swatchPath(colour.name, 'light')), swatchFile(colour.light));
+}
+
 const colourCommand = (name) => `taskRunnerUltimate.setColor.${name}`;
 const CLEAR_COLOUR = 'taskRunnerUltimate.clearColor';
 const titleCase = (name) => name[0].toUpperCase() + name.slice(1);
@@ -272,6 +300,21 @@ const icon = (suffix) => ({
   light: `media/scripts-light${suffix}.svg`,
   dark: `media/scripts-dark${suffix}.svg`,
 });
+
+/*
+ * The palette half of contributes.colors, written from PALETTE so that the shade
+ * a row is painted and the shade its swatch is drawn are one decision. Everything
+ * else in the list is left exactly where it was — those colours are about what
+ * the tree says, not about what a row can be painted.
+ */
+manifest.contributes.colors = [
+  ...manifest.contributes.colors.filter((entry) => !entry.id.startsWith('taskRunnerUltimate.palette.')),
+  ...PALETTE.map(({ name, dark, light, highContrast, highContrastLight }) => ({
+    id: `taskRunnerUltimate.palette.${name}`,
+    description: `Colour a task or package heading can be painted with from its context menu: ${titleCase(name)}.`,
+    defaults: { dark, light, highContrast, highContrastLight },
+  })),
+];
 
 manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'Task & Script Explorer', icon: icon('') },
@@ -353,15 +396,20 @@ manifest.contributes.commands = [
   // two land in different places. This is the workbench's own name for its side
   // bar, and the tree is contributed into that side bar as well as its own.
   { command: 'taskRunnerUltimate.revealInExplorerView', title: 'Reveal in Explorer View', category: 'Task & Script Explorer', icon: '$(list-tree)' },
-  // The swatch rides in the title; see PALETTE above for why it is not an icon.
-  // None of these reach the command palette (see commandPalette below), so the
-  // glyph is only ever read where it means something.
-  ...PALETTE.map(({ name, swatch }) => ({
+  // One command per colour still, though nothing in the menus points at them any
+  // more: the picker is a quick pick and needs none of them. They stay so that a
+  // keybinding somebody already wrote against `setColor.green` does not start
+  // failing with "command not found" — it will not paint anything either, since a
+  // command invoked from a keybinding is handed no row, which is why they are
+  // hidden from the palette below. Registered so as not to break, not because
+  // they work.
+  ...PALETTE.map(({ name }) => ({
     command: colourCommand(name),
-    title: `${swatch} ${titleCase(name)}`,
+    title: `Paint ${titleCase(name)}`,
     category: 'Task & Script Explorer',
   })),
   { command: CLEAR_COLOUR, title: 'Default', category: 'Task & Script Explorer' },
+  { command: 'taskRunnerUltimate.pickColor', title: 'Change Colour…', category: 'Task & Script Explorer', icon: '$(symbol-color)' },
   { command: 'taskRunnerUltimate.pickIcon', title: 'Change Icon…', category: 'Task & Script Explorer', icon: '$(symbol-misc)' },
   { command: 'taskRunnerUltimate.checkContainers', title: 'Check Containers', category: 'Task & Script Explorer', icon: '$(archive)' },
   // One switch, two commands: a header button can show the mode it puts you in
@@ -480,9 +528,10 @@ const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];
 
-manifest.contributes.submenus = [
-  { id: COLOUR_SUBMENU, label: 'Colour', icon: '$(symbol-color)' },
-];
+// The colours were a flyout and are a list now, so the extension contributes no
+// submenu at all. Left behind, the id would still draw an empty `Colour ▸` in
+// every row's menu.
+delete manifest.contributes.submenus;
 
 manifest.contributes.menus = {
   'editor/title': toolbarEntries(inTitle),
@@ -658,12 +707,10 @@ manifest.contributes.menus = {
     // needs nothing but a row. Only `foreignTask` is left out, and the regex is
     // what leaves it out.
     //
-    // One entry, not one per kind of row, and that is load-bearing: a flyout is
-    // identified by its submenu id, so the same id contributed twice to the same
-    // menu is one submenu described two ways rather than two submenus. The two
-    // `editTitle` lines above get away with it because a command is its own
-    // action; a submenu is not.
-    { submenu: COLOUR_SUBMENU, group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile)/` },
+    // One entry opening a list, where this used to be a flyout of fifteen. The
+    // list can show what each colour looks like, which a platform menu cannot —
+    // see PALETTE — and it is the same gesture the icons next to it already take.
+    { command: 'taskRunnerUltimate.pickColor', group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile)/` },
     { command: 'taskRunnerUltimate.pickIcon', group: '2_modify@3', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile)/` },
     // Bringing a group back is the one of the two that keeps its button: a row
     // under HIDDEN is there to be taken out again, and an eye in its own column is
@@ -673,12 +720,6 @@ manifest.contributes.menus = {
     // with a name on them.
     { command: 'taskRunnerUltimate.hideGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${VISIBLE}` },
     { command: 'taskRunnerUltimate.showGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${HIDDEN}` },
-  ],
-  // The palette itself, in one group, with the way back to the default in a
-  // second so the menu draws a separator above it.
-  [COLOUR_SUBMENU]: [
-    ...PALETTE.map(({ name }, index) => ({ command: colourCommand(name), group: `1_palette@${index + 1}` })),
-    { command: CLEAR_COLOUR, group: '2_reset@1' },
   ],
   commandPalette: [
     { command: 'taskRunnerUltimate.restartActive', when: 'false' },
@@ -719,6 +760,11 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.revealInExplorerView', when: 'false' },
     ...PALETTE.map(({ name }) => ({ command: colourCommand(name), when: 'false' })),
     { command: CLEAR_COLOUR, when: 'false' },
+    // Both pickers, for the reason given above: neither can do anything without
+    // the row it was invoked from. The colour one is a command rather than a
+    // submenu now, and a submenu was never offered in the palette at all — so
+    // this line is what the submenu used to get for free.
+    { command: 'taskRunnerUltimate.pickColor', when: 'false' },
     { command: 'taskRunnerUltimate.pickIcon', when: 'false' },
   ],
 };
@@ -868,4 +914,4 @@ manifest.activationEvents = [
 ];
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-console.log('wrote 4 svg files, icon.png and patched package.json');
+console.log(`wrote 4 svg files, ${PALETTE.length * 2} swatches, icon.png and patched package.json`);
