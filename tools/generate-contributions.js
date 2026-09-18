@@ -670,8 +670,12 @@ manifest.contributes.menus = {
     // above it: these four are about where the thing is, not about running it.
     // `0_path` sorts after `0_open` — the entry that opens the file — and before
     // the star, which is the first of the ones that change the row.
-    { command: 'taskRunnerUltimate.copyRelativePath', group: '0_path@1', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
-    { command: 'taskRunnerUltimate.copyPath', group: '0_path@2', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
+    //
+    // The whole path first and the relative one under it, which is the order the
+    // Explorer's own menu puts them in — a menu that disagrees with the one next
+    // to it about which of two entries comes first costs a look every time.
+    { command: 'taskRunnerUltimate.copyPath', group: '0_path@1', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
+    { command: 'taskRunnerUltimate.copyRelativePath', group: '0_path@2', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
     // Not offered over a remote connection, because there it does nothing: the
     // workbench's `revealFileInOS` reveals a `file:` URI, and the file behind a
     // row in a Remote SSH, Dev Container or Codespaces window is a

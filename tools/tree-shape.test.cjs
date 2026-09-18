@@ -63,7 +63,13 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
       showInformationMessage: () => Promise.resolve(undefined),
       showQuickPick: (items, options) => {
         quickPicks.push({ items, options });
-        return Promise.resolve(items[pick]);
+        // An index, or the label of the row to choose. A test that names the row
+        // it wants keeps saying the same thing when the list is reordered, which
+        // an index does not — and the order of these lists is a design decision
+        // that has changed before.
+        const chosen =
+          typeof pick === 'string' ? items.findIndex((item) => item.label === pick) : pick;
+        return Promise.resolve(items[chosen]);
       },
       // What a refused drop says, and the only place it says it.
       setStatusBarMessage: (message) => (hints.push(message), { dispose() {} }),
@@ -770,8 +776,7 @@ test('an icon picked out of the pack reaches the store and comes back onto the r
   // Both halves are exercised here, in that order, so neither can be changed
   // alone.
   const dev = script('/repo/package.json', 'dev', 'npm');
-  // 0 is Default, 1 the separator naming the pack, 2 the one icon in it.
-  const h = harness({ pick: 2 });
+  const h = harness({ pick: 'Rust' });
   await h.pickIcon({ kind: 'script', script: dev });
 
   const [{ items, options }] = h.quickPicks;
@@ -779,10 +784,18 @@ test('an icon picked out of the pack reaches the store and comes back onto the r
   // Typing filters on the name beside the icon as well, which is the half worth
   // typing — `*.rs` rather than `Rust`.
   assert.equal(options.matchOnDescription, true);
-  assert.equal(items[1].label, 'Test Pack');
+
+  // The font VS Code ships with is offered first and the installed pack after it,
+  // each under its own separator.
+  const separators = [...items].filter((item) => item.kind === -1).map((item) => item.label);
+  assert.equal(separators[0], 'Actions & status');
+  assert.equal(separators[separators.length - 1], 'Test Pack');
+  assert.equal(items[0].label, '$(discard) Default');
+
+  const rust = [...items].find((item) => item.label === 'Rust');
   assert.deepEqual(
-    [items[2].label, items[2].description, items[2].iconPath.path],
-    ['Rust', '*.rs', '/pack/rust.svg'],
+    [rust.description, rust.iconPath.path],
+    ['*.rs', '/pack/rust.svg'],
   );
 
   // Filed as the name that reaches the icon, never as anything belonging to the
@@ -802,13 +815,13 @@ test('an icon picked out of the pack reaches the store and comes back onto the r
 test('the icon already on a row is marked in the pack list, and Default takes it off', async () => {
   const dev = script('/repo/package.json', 'dev', 'npm');
   const held = { icons: { 'file:///repo/package.json::dev': 'file:icon.rs' } };
-  const h = harness({ pick: 2, stored: held });
+  const h = harness({ pick: 'Rust', stored: held });
   await h.pickIcon({ kind: 'script', script: dev });
   const [{ items }] = h.quickPicks;
   assert.equal(items[0].description, undefined);
-  assert.equal(items[2].description, '*.rs · current');
+  assert.equal([...items].find((item) => item.label === 'Rust').description, '*.rs · current');
 
-  const off = harness({ pick: 0, stored: held });
+  const off = harness({ pick: '$(discard) Default', stored: held });
   await off.pickIcon({ kind: 'script', script: dev });
   assert.equal('file:///repo/package.json::dev' in off.memento.data.icons, false);
 });

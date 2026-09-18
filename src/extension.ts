@@ -1705,9 +1705,23 @@ async function pickIcon(node: TreeNode | undefined): Promise<void> {
       description: current || currentSpecimen ? undefined : 'current',
       detail: 'The icon its category or kind gives it.',
     },
-    // The pack goes first, and by name. Somebody who installed an icon pack did
-    // it to see those icons, and the codicons below are the ones this extension
-    // ships with — the order says which list is which without a word of prose.
+    // The icon font VS Code ships with comes first, in its five sections. It is
+    // the set every machine has, the same on all of them, and the one somebody
+    // opening this list for the first time is looking at — a hundred glyphs
+    // ahead of eight hundred pictures is also the shorter half to scroll past.
+    //
+    // The sections carry the browsing case; typing filters across all of them
+    // alike, separators standing aside the way quick picks always have them.
+    ...ICON_GROUPS.flatMap((group): IconItem[] => [
+      { label: group.label, kind: vscode.QuickPickItemKind.Separator },
+      ...group.icons.map(({ id, name }) => ({
+        label: `$(${id}) ${name}`,
+        description: id === current ? 'current' : undefined,
+        id,
+      })),
+    ]),
+    // Then whatever pack is installed, under its own name — the set that is not
+    // ours and not every machine's, which is what puts it after the one that is.
     //
     // The icons are drawn from the pack's own files. Only for the preview: what
     // a row is given is the name under each entry, which is what the workbench
@@ -1728,16 +1742,6 @@ async function pickIcon(node: TreeNode | undefined): Promise<void> {
           }),
         ]
       : []),
-    // The sections carry the browsing case; typing filters across all of them
-    // alike, separators standing aside the way quick picks always have them.
-    ...ICON_GROUPS.flatMap((group): IconItem[] => [
-      { label: group.label, kind: vscode.QuickPickItemKind.Separator },
-      ...group.icons.map(({ id, name }) => ({
-        label: `$(${id}) ${name}`,
-        description: id === current ? 'current' : undefined,
-        id,
-      })),
-    ]),
   ];
 
   const picked = await vscode.window.showQuickPick(items, {

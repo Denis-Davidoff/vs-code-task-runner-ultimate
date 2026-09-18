@@ -22,10 +22,10 @@ restart without ever going looking for a terminal tab.**
 - 🖍️ **[Paint a row](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#painting-a-row)** — right-click → **Change Colour…** → one of fifteen, on a task
   or on a whole folder, each drawn as a circle in its own colour. The list stops being one colour of
   text and starts being a map of what is yours, what is loud and what you never touch.
-- 🖼️ **[Any icon your icon pack has](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#changing-a-rows-icon)** — right-click → **Change Icon…**, and the list
-  opens with the icons of whichever file icon theme you run — Material Icon Theme, vscode-icons —
-  drawn in the list, beside the ones VS Code ships with. Picked by name, so switching packs keeps
-  your choice.
+- 🖼️ **[Any icon your icon pack has](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#changing-a-rows-icon)** — right-click → **Change Icon…**: the icons VS Code
+  ships with first, then every icon of whichever file icon theme you run — Material Icon Theme,
+  vscode-icons — each drawn in the list with its own artwork. Picked by name, so switching packs
+  keeps your choice.
 - ⭐ **[Favorites](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#favorites)** — star the two or three scripts you actually run and they sit as
   loose rows at the very top of the tree, above everything, with no heading to open first and
   without leaving the package they belong to.

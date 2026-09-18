@@ -642,12 +642,12 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:.+:shell:/"
         },
         {
-          "command": "taskRunnerUltimate.copyRelativePath",
+          "command": "taskRunnerUltimate.copyPath",
           "group": "0_path@1",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
         },
         {
-          "command": "taskRunnerUltimate.copyPath",
+          "command": "taskRunnerUltimate.copyRelativePath",
           "group": "0_path@2",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^((group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?|script:.+:shell:.+)$/"
         },
