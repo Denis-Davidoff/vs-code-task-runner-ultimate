@@ -187,7 +187,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async () => ${stops};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, SCAN_SETTINGS };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, SCAN_SETTINGS };
   `,
     Object.assign(context, { memento }),
   );
@@ -1414,6 +1414,203 @@ test('a compose item can still run down when its internal up action is absent', 
   // A package heading is not a stack either.
   await h.runGroup(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
   assert.deepEqual([...h.launched].map((task) => task.definition.script), ['down']);
+});
+
+// --- the buttons a Dockerfile heading carries -----------------------------------
+
+/**
+ * A Dockerfile as `parseDockerfile` builds one: the bare `build`, one build per
+ * named stage, and the `run` the setting adds by default.
+ */
+function dockerfile(manifest = '/repo/Dockerfile') {
+  const file = manifest.replace(/^.*\//, '');
+  return ['build', 'build: deps', 'run'].map((name) => ({
+    ...script(manifest, name, 'dockerfile'),
+    command: `docker ${name}`,
+    argv: ['docker', ...name.split(': ')],
+  }));
+}
+
+test('a Dockerfile is a leaf with a context value of its own', () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = dockerfile();
+  const heading = () => h.buildTreeRoots(rows)[0];
+
+  // One row and nothing underneath it: the actions are on the heading.
+  assert.equal(h.treeItemFor(heading()).collapsibleState, 0);
+  // No `:up`/`:down` — that segment is Docker's answer about a stack's
+  // containers, and nothing asks it about an image.
+  assert.equal(h.treeItemFor(heading()).contextValue, 'dockerfile');
+
+  // The build itself running fills the slot compose fills with `:up`/`:down`.
+  h.running.set(rows[0].key, { task: { name: 'build' } });
+  assert.equal(h.treeItemFor(heading()).contextValue, 'dockerfile:building:running');
+  // And it says it is busy where a folder would have shown a spinning row.
+  assert.equal(h.treeItemFor(heading()).iconPath.id, 'loading~spin');
+  h.running.clear();
+
+  // A container of this file's own is *not* the build: the row is busy, but the
+  // slot stays empty, which is what keeps ▶ on it. See the test below.
+  h.running.set(rows[2].key, { task: { name: 'run' } });
+  assert.equal(h.treeItemFor(heading()).contextValue, 'dockerfile:running');
+  h.running.clear();
+
+  // Old fold state cannot turn the file back into a folder.
+  const opened = harness({
+    settings: { grouping: 'flat' },
+    scan: rows,
+    stored: { collapsed: ['file:///repo/Dockerfile'] },
+  });
+  assert.equal(opened.treeItemFor(opened.buildTreeRoots(rows)[0]).collapsibleState, 0);
+});
+
+test('▶ on a Dockerfile builds it, and ■ ends what is running', async () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = dockerfile();
+  const heading = h.buildTreeRoots(rows)[0];
+
+  await h.buildImage(heading);
+  // The bare `build`, not `build: deps`: the heading stands for the whole file.
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['build']);
+
+  h.running.set(rows[0].key, { task: { name: 'build' } });
+  await h.stopGroup(heading);
+  // Nothing new is launched — unlike compose there is no `down` to shell out to,
+  // only the execution to terminate.
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['build']);
+
+  // And a second ▶ over a run of ours shows its terminal rather than starting
+  // another build over the handle the first one left in `running`.
+  await h.buildImage(heading);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['build']);
+});
+
+test('a Dockerfile row carries no confirmation toggle, and no flag on it survives', async () => {
+  // The same rule compose has, and for the same reason: the file is one leaf, so
+  // there is no row to hang the toggle on and no way back off once it is on.
+  // Starring does not buy it back either — starring needs a row to star, and the
+  // dropdown offers no star — so the flag would have no way off but the global
+  // reset. A flag stored by the version where these rows *were* drawn is dropped
+  // on the next scan rather than honoured in silence.
+  const rows = dockerfile();
+  const h = harness({
+    settings: { grouping: 'flat' },
+    scan: rows,
+    stored: {
+      confirmations: ['file:///repo/Dockerfile::build', 'file:///repo/package.json::deploy'],
+      favorites: ['file:///repo/Dockerfile::run'],
+    },
+  });
+
+  const row = h.treeItemFor({ kind: 'script', script: rows[0] });
+  assert.equal(row.contextValue, 'script:idle:nofav:task');
+  assert.equal(row.tooltip.includes('Asks before it starts or stops.'), false);
+  // Neither half of the toggle matches a value that simply stops there.
+  assert.equal(/^script:.+:confirm$/.test(row.contextValue), false);
+  assert.equal(/^script:.+:noconfirm$/.test(row.contextValue), false);
+
+  // ▶ runs rather than raising a modal nobody can dismiss for good. The starred
+  // row puts a Favorites group at the top, so the file's own heading is found by
+  // what it is rather than by its position.
+  const roots = h.buildTreeRoots(rows);
+  const heading = [...roots].find((node) => node.kind === 'group' && node.source === 'dockerfile');
+  assert.ok(heading, 'the Dockerfile heading is on the list');
+  await h.buildImage(heading);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['build']);
+
+  // And the stored flag is dropped, not merely ignored: it would otherwise sit
+  // in the ⋮ menu's count of guarded rows for ever. The flag on the npm script
+  // stays, and so does the star on the Dockerfile row.
+  await h.pruneStaleRefs(rows);
+  assert.deepEqual([...h.memento.data.confirmations], ['file:///repo/package.json::deploy']);
+  assert.deepEqual([...h.memento.data.favorites], ['file:///repo/Dockerfile::run']);
+});
+
+test('the Dockerfile menu offers the stages and the extra commands', async () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = dockerfile();
+  const heading = h.buildTreeRoots(rows)[0];
+
+  await h.dockerfileActions(heading);
+  const [{ items }] = h.quickPicks;
+  // Everything but the bare `build`, which is what ▶ already runs.
+  assert.deepEqual([...items].map((item) => item.label), ['$(play) Build deps', 'run']);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['build: deps']);
+});
+
+test('every action a Dockerfile row has stays on it once the row is put away', () => {
+  // A leaf in the pile has no inside to open, so the menu is the only way at it:
+  // every clause but ▶'s allows the put-away segments.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const when = (command, group) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}` && entry.group === group)
+      .map((entry) => entry.when);
+
+  // `editTitle` is contributed twice in one slot — once for a script row, once
+  // for a heading — so the question is whether *some* clause takes the row, not
+  // whether the first one does.
+  const takes = (command, group, value) =>
+    when(command, group).some((clause) =>
+      new RegExp(clause.match(/viewItem =~ \/(.+)\/$/)[1]).test(value),
+    );
+
+  for (const [command, group] of [
+    ['dockerfileActions', 'inline@4'],
+    ['buildImage', '0_actions@1'],
+    ['dockerfileActions', '0_actions@4'],
+    ['openManifest', '0_open@1'],
+    ['editTitle', '2_modify@1'],
+    ['pickIcon', '2_modify@3'],
+  ]) {
+    assert.equal(takes(command, group, 'dockerfile:hidden'), true, `${command} ${group} hidden`);
+    assert.equal(takes(command, group, 'dockerfile:carried'), true, `${command} ${group} carried`);
+  }
+
+  // ▶ is the exception, and only inline: it shares `inline@1` with the eye that
+  // brings a hidden row back, and a row cannot hold two buttons in one slot. The
+  // menu has no eye, so there it reaches a hidden row too.
+  const [play] = when('buildImage', 'inline@1');
+  const [, pattern] = play.match(/viewItem =~ \/(.+)\/$/);
+  assert.equal(new RegExp(pattern).test('dockerfile:hidden'), false);
+  assert.equal(new RegExp(pattern).test('dockerfile:carried'), true);
+  assert.equal(takes('buildImage', '0_actions@1', 'dockerfile:hidden'), true);
+
+  // And restart is named in the menu as well as drawn inline — a hover-only
+  // glyph is a gesture with no name anywhere in the UI.
+  assert.equal(takes('restartDockerfile', '0_actions@2', 'dockerfile:running'), true);
+});
+
+test('▶ survives a container of the same file, and stands down only for its own build', () => {
+  // The edit-build-restart loop: `run` puts a container up, and the next thing
+  // anybody asks for is a rebuild. Keying ▶ on `:running` — true of anything
+  // alive under the row — took the rebuild away at exactly that point.
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const clause = (command, group) => {
+    const entry = manifest.contributes.menus['view/item/context'].find(
+      (item) => item.command === `taskRunnerUltimate.${command}` && item.group === group,
+    );
+    return new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]);
+  };
+  const inline = clause('buildImage', 'inline@1');
+  const menu = clause('buildImage', '0_actions@1');
+
+  const h = harness({ settings: { grouping: 'flat' } });
+  const rows = dockerfile();
+  const heading = () => h.buildTreeRoots(rows)[0];
+
+  h.running.set(rows[2].key, { task: { name: 'run' } });
+  const withContainer = h.treeItemFor(heading()).contextValue;
+  assert.equal(withContainer, 'dockerfile:running');
+  assert.equal(inline.test(withContainer), true, '▶ stays while a container runs');
+  assert.equal(menu.test(withContainer), true);
+
+  h.running.clear();
+  h.running.set(rows[0].key, { task: { name: 'build' } });
+  const whileBuilding = h.treeItemFor(heading()).contextValue;
+  assert.equal(whileBuilding, 'dockerfile:building:running');
+  assert.equal(inline.test(whileBuilding), false, '▶ stands down for its own build');
+  assert.equal(menu.test(whileBuilding), false);
 });
 
 // --- what a heading looks like the first time it is seen ------------------------

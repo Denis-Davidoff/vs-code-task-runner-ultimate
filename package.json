@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "Run all your monorepo's tasks and scripts from a single list: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -221,6 +221,30 @@
       {
         "command": "taskRunnerUltimate.composeActions",
         "title": "Compose Commands…",
+        "category": "Task & Script Explorer",
+        "icon": "$(menu)"
+      },
+      {
+        "command": "taskRunnerUltimate.buildImage",
+        "title": "Docker Build",
+        "category": "Task & Script Explorer",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskRunnerUltimate.stopDockerfile",
+        "title": "Stop Docker Tasks",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "taskRunnerUltimate.restartDockerfile",
+        "title": "Restart Docker Tasks",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "taskRunnerUltimate.dockerfileActions",
+        "title": "Docker Commands…",
         "category": "Task & Script Explorer",
         "icon": "$(menu)"
       },
@@ -468,6 +492,26 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
+          "command": "taskRunnerUltimate.buildImage",
+          "group": "inline@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:carried)?(:running)?$/"
+        },
+        {
+          "command": "taskRunnerUltimate.restartDockerfile",
+          "group": "inline@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?:running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopDockerfile",
+          "group": "inline@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?:running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.dockerfileActions",
+          "group": "inline@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?(:running)?$/"
+        },
+        {
           "command": "taskRunnerUltimate.runItemMenu",
           "group": "0_actions@1",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:(idle|up):/"
@@ -493,6 +537,26 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^compose(:(up|down))?(:(hidden|carried))?(:running)?$/"
         },
         {
+          "command": "taskRunnerUltimate.buildImage",
+          "group": "0_actions@1",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:(hidden|carried))?(:running)?$/"
+        },
+        {
+          "command": "taskRunnerUltimate.restartDockerfile",
+          "group": "0_actions@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?:running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopDockerfile",
+          "group": "0_actions@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?:running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.dockerfileActions",
+          "group": "0_actions@4",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:building)?(:(hidden|carried))?(:running)?$/"
+        },
+        {
           "command": "taskRunnerUltimate.openScript",
           "group": "0_open@1",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^script:/"
@@ -500,7 +564,7 @@
         {
           "command": "taskRunnerUltimate.openManifest",
           "group": "0_open@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?(:(hidden|carried))?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showTerminal",
@@ -545,32 +609,32 @@
         {
           "command": "taskRunnerUltimate.editTitle",
           "group": "2_modify@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?(:(hidden|carried))?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose|dockerfile)(:(up|down|building))?(:(hidden|carried))?(:running)?$/"
         },
         {
           "submenu": "taskRunnerUltimate.color",
           "group": "2_modify@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group|compose)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group|compose|dockerfile)/"
         },
         {
           "command": "taskRunnerUltimate.pickIcon",
           "group": "2_modify@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group|compose)/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(script|group|compose|dockerfile)/"
         },
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "inline@1",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?:hidden(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose|dockerfile)(:(up|down|building))?:hidden(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.hideGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose|dockerfile)(:(up|down|building))?(:running)?$/"
         },
         {
           "command": "taskRunnerUltimate.showGroup",
           "group": "2_modify@4",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose)(:(up|down))?:hidden(:running)?$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package|compose|dockerfile)(:(up|down|building))?:hidden(:running)?$/"
         }
       ],
       "taskRunnerUltimate.color": [
@@ -694,6 +758,22 @@
         },
         {
           "command": "taskRunnerUltimate.composeActions",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.buildImage",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.stopDockerfile",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.restartDockerfile",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.dockerfileActions",
           "when": "false"
         },
         {

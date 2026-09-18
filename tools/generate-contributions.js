@@ -314,6 +314,17 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.runGroup', title: 'Compose Up', category: 'Task & Script Explorer', icon: '$(play)' },
   { command: 'taskRunnerUltimate.stopStack', title: 'Compose Down', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
   { command: 'taskRunnerUltimate.composeActions', title: 'Compose Commands…', category: 'Task & Script Explorer', icon: '$(menu)' },
+  // And the four a Dockerfile answers to, for the same reason: a Dockerfile is an
+  // image rather than a folder of tasks — `build` is the one action it has and
+  // `run`, `push` and the per-stage builds are variations on it — so it is a leaf
+  // too, with ▶ and a menu of its own.
+  //
+  // ■ and ↻ are the group's stop-all and restart-all under names that fit a row
+  // drawn as one line: "all in package" is a tooltip about rows nobody can see.
+  { command: 'taskRunnerUltimate.buildImage', title: 'Docker Build', category: 'Task & Script Explorer', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopDockerfile', title: 'Stop Docker Tasks', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartDockerfile', title: 'Restart Docker Tasks', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.dockerfileActions', title: 'Docker Commands…', category: 'Task & Script Explorer', icon: '$(menu)' },
   { command: 'taskRunnerUltimate.restartGroup', title: 'Restart All in Package', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
   { command: 'taskRunnerUltimate.showGroup', title: 'Show Package', category: 'Task & Script Explorer', icon: '$(eye)' },
   { command: 'taskRunnerUltimate.openScript', title: 'Go to Script Definition', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
@@ -368,10 +379,18 @@ const inTree = 'view =~ /^taskRunnerUltimate\\.(tree|explorer)$/';
 // `treeItemFor`. Every pattern that matches such a row therefore allows it, and
 // the compose patterns further down read it.
 const STACK = '(:(up|down))?';
+// The same slot as `STACK`, plus the Dockerfile's own spelling of it. Every
+// pattern that matches a heading of any kind allows all three, so a row is not
+// dropped out of Open Manifest or Rename by the state it happens to be in.
+const STATE = '(:(up|down|building))?';
+// A Dockerfile fills that slot only while its bare `build` is the thing running
+// — see `treeItemFor`. It is what ▶ refuses, where `:running` (anything at all
+// under the row, a `run` container included) is not.
+const BUILDING = '(:building)?';
 // Hiding and bringing back reach every heading the tree drew from a file, the
 // compose rows included: the pile is where a row goes, whatever its row does.
-const VISIBLE = `/^(group:package|compose)${STACK}(:running)?$/`;
-const HIDDEN = `/^(group:package|compose)${STACK}:hidden(:running)?$/`;
+const VISIBLE = `/^(group:package|compose|dockerfile)${STATE}(:running)?$/`;
+const HIDDEN = `/^(group:package|compose|dockerfile)${STATE}:hidden(:running)?$/`;
 // An ecosystem parent holds groups rather than rows, but it still has things
 // running under it, so it gets the stop-all and restart-all buttons too.
 const PUT_AWAY = '(:(hidden|carried))?';
@@ -385,7 +404,7 @@ const PACKAGE_ROW = `group:package${STACK}${PUT_AWAY}(:running)?`;
 // Every row the tree read off a file, whichever kind: the two actions that are
 // about the manifest rather than the task — opening it and renaming it — reach
 // all of them.
-const NAMED_ROW = `(group:package|compose)${STACK}${PUT_AWAY}(:running)?`;
+const NAMED_ROW = `(group:package|compose|dockerfile)${STATE}${PUT_AWAY}(:running)?`;
 // A compose file is a leaf rather than a folder — `getChildren` returns nothing
 // for it — so every action it has must be on the row itself. There is no way in
 // by opening it, which is why these patterns allow the put-away segments too: a
@@ -398,6 +417,20 @@ const COMPOSE = `/^${COMPOSE_ROW}(:running)?$/`;
 // way, and taking it out again is the click that comes first. `:running` is
 // absent as well — see `runGroup`, which refuses a second `up` over the first.
 const COMPOSE_IDLE = `/^compose${STACK}$/`;
+// A Dockerfile row is a leaf on the same terms, with `BUILDING` where compose
+// has `STACK`: nothing asks Docker whether an image exists, but the row does
+// know whether its own build is the thing running.
+const DOCKERFILE_ROW = `dockerfile${BUILDING}${PUT_AWAY}`;
+const DOCKERFILE = `/^${DOCKERFILE_ROW}(:running)?$/`;
+const DOCKERFILE_RUNNING = `/^${DOCKERFILE_ROW}:running$/`;
+// ▶ is off only while the build itself runs — `:building`, which this omits —
+// and off a hidden row because that is where the eye that brings it back sits:
+// both are `inline@1`, and a row cannot hold two. It stays on a row whose
+// container is up, which is the middle of the edit-build-restart loop and the
+// place a vanishing ▶ hurt most. A carried row keeps it: no eye is offered there.
+const DOCKERFILE_IDLE = '/^dockerfile(:carried)?(:running)?$/';
+// The same, for the menu, which has no eye to make room for.
+const DOCKERFILE_BUILDABLE = `/^dockerfile${PUT_AWAY}(:running)?$/`;
 const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];
@@ -462,6 +495,14 @@ manifest.contributes.menus = {
     // means.
     { command: 'taskRunnerUltimate.runGroup', group: 'inline@1', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
     { command: 'taskRunnerUltimate.stopStack', group: 'inline@3', when: `${inTree} && viewItem =~ ${COMPOSE}` },
+    // The same four on a Dockerfile row. ☰ is inline here where compose keeps it
+    // in the menu alone: a compose file's extras are `logs`, `ps` and `restart`
+    // — things you go looking for — where a Dockerfile's are `run`, `push` and
+    // the stage builds, which are the other half of what the row is for.
+    { command: 'taskRunnerUltimate.buildImage', group: 'inline@1', when: `${inTree} && viewItem =~ ${DOCKERFILE_IDLE}` },
+    { command: 'taskRunnerUltimate.restartDockerfile', group: 'inline@2', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
+    { command: 'taskRunnerUltimate.stopDockerfile', group: 'inline@3', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
+    { command: 'taskRunnerUltimate.dockerfileActions', group: 'inline@4', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
     // Non-inline groups are what the right-click menu shows.
     //
     // The two gestures the row itself answers to, named in the menu so they are
@@ -487,6 +528,16 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.runGroup', group: '0_actions@1', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
     { command: 'taskRunnerUltimate.stopStack', group: '0_actions@2', when: `${inTree} && viewItem =~ ${COMPOSE}` },
     { command: 'taskRunnerUltimate.composeActions', group: '0_actions@3', when: `${inTree} && viewItem =~ ${COMPOSE}` },
+    // The put-away segments are allowed here where ▶ refuses them inline: a leaf
+    // in the pile has no inside to open, so its menu is the only way to build it
+    // without taking it out of the pile first.
+    { command: 'taskRunnerUltimate.buildImage', group: '0_actions@1', when: `${inTree} && viewItem =~ ${DOCKERFILE_BUILDABLE}` },
+    // Restart is named here as well as drawn inline. A hover-only glyph is a
+    // gesture with no name anywhere in the UI, which is the gap these twins exist
+    // to close — and stop, beside it, has had one all along.
+    { command: 'taskRunnerUltimate.restartDockerfile', group: '0_actions@2', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
+    { command: 'taskRunnerUltimate.stopDockerfile', group: '0_actions@3', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
+    { command: 'taskRunnerUltimate.dockerfileActions', group: '0_actions@4', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
     //
     // Opening the file is the one action here that is about the manifest rather
     // than the task, and it is deliberately not an inline button: a row already
@@ -534,8 +585,8 @@ manifest.contributes.menus = {
     // menu is one submenu described two ways rather than two submenus. The two
     // `editTitle` lines above get away with it because a command is its own
     // action; a submenu is not.
-    { submenu: COLOUR_SUBMENU, group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group|compose)/` },
-    { command: 'taskRunnerUltimate.pickIcon', group: '2_modify@3', when: `${inTree} && viewItem =~ /^(script|group|compose)/` },
+    { submenu: COLOUR_SUBMENU, group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile)/` },
+    { command: 'taskRunnerUltimate.pickIcon', group: '2_modify@3', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile)/` },
     // Bringing a group back is the one of the two that keeps its button: a row
     // under HIDDEN is there to be taken out again, and an eye in its own column is
     // one click where putting it away was a menu you went looking for.
@@ -573,6 +624,10 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.runGroup', when: 'false' },
     { command: 'taskRunnerUltimate.stopStack', when: 'false' },
     { command: 'taskRunnerUltimate.composeActions', when: 'false' },
+    { command: 'taskRunnerUltimate.buildImage', when: 'false' },
+    { command: 'taskRunnerUltimate.stopDockerfile', when: 'false' },
+    { command: 'taskRunnerUltimate.restartDockerfile', when: 'false' },
+    { command: 'taskRunnerUltimate.dockerfileActions', when: 'false' },
     { command: 'taskRunnerUltimate.openScript', when: 'false' },
     { command: 'taskRunnerUltimate.openManifest', when: 'false' },
     { command: 'taskRunnerUltimate.showTerminal', when: 'false' },
