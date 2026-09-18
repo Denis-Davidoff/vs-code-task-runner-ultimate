@@ -170,7 +170,20 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
         ? vscode
         : name === 'path'
           ? path
-          : name === './containers'
+          : name === './iconTheme'
+            ? {
+                // The catalogue is a file on disk in the real thing; the tree
+                // only ever asks it for a picture to put in the dropdown, and
+                // answers without one are the ordinary case (a pack drawing from
+                // a font has none).
+                forgetIconPack: () => {},
+                iconPack: async () => undefined,
+                // One pack, one picture in it. A pack drawing from a font has
+                // none for any name, which is the other answer worth having.
+                packArt: (kind, name) =>
+                  kind === 'file' && name === 'icon.rs' ? { fsPath: '/pack/rust.svg' } : undefined,
+              }
+            : name === './containers'
             ? { composeState: async (prefix, cwd) => (probes.push({ prefix, cwd }), probeReply()) }
             : // The tree reads one thing out of the scan module, and it is the one
             // that decides which parent row a heading lands under.
@@ -200,7 +213,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async () => ${stops};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, SCAN_SETTINGS };
+    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, SCAN_SETTINGS };
   `,
     Object.assign(context, { memento }),
   );
@@ -641,6 +654,44 @@ test('an icon picked by hand stands in for the theme\'s', () => {
   const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'rocket' } } });
   const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
   assert.equal(row.iconPath.id, 'rocket');
+});
+
+test('an icon picked out of the icon pack is worn as a name, not as a glyph', () => {
+  // Nothing of the pack is held: the row says "draw me the way you draw a
+  // Dockerfile" and the workbench answers out of whichever pack is installed.
+  const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'file:Dockerfile' } } });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
+  assert.equal(row.resourceUri.path.split('/').pop(), 'Dockerfile');
+});
+
+test('a folder icon from the pack asks for a folder', () => {
+  const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'folder:src' } } });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.deepEqual({ ...row.iconPath }, { themeFolder: true });
+  assert.equal(row.resourceUri.path.split('/').pop(), 'src');
+});
+
+test('a pack icon on an unpainted heading leaves the colour slot empty', () => {
+  // The URI is borrowed for the file name in it. A row that was never painted
+  // must come back out of the decoration provider as plainly as one with no URI
+  // at all, which is what the sentinel in the colour slot is for.
+  const h = harness({ stored: { icons: { 'file:///repo/engine/Cargo.toml': 'file:Dockerfile' } } });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.equal(row.resourceUri.path.split('/')[1], 'taskRunnerUltimate.sourceTitleForeground');
+});
+
+test('a painted heading wearing a pack icon keeps its colour', () => {
+  const h = harness({
+    stored: {
+      colors: { 'file:///repo/engine/Cargo.toml': 'teal' },
+      icons: { 'file:///repo/engine/Cargo.toml': 'file:Dockerfile' },
+    },
+  });
+  const row = h.treeItemFor(h.buildTreeRoots([ENGINE])[0]);
+  assert.equal(row.resourceUri.path.split('/')[1], 'taskRunnerUltimate.palette.teal');
+  assert.equal(row.resourceUri.path.split('/').pop(), 'Dockerfile');
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
 });
 
 test('no heading is tinted by what kind of thing it is', () => {
@@ -1105,6 +1156,54 @@ test('two manifests in one folder stay tellable apart when they share a name', (
     [...h.buildTreeRoots([first, second])].map((group) => h.treeItemFor(group).label),
     ['docker-compose.yml • repo/svc', 'docker-compose.dev.yml • repo/svc'],
   );
+});
+
+test('a task row wearing a pack icon names it and takes no colour with it', () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const h = harness({ stored: { icons: { [`file:///repo/package.json::dev`]: 'file:icon.rs' } } });
+  const row = h.treeItemFor({ kind: 'script', script: dev });
+  assert.deepEqual({ ...row.iconPath }, { themeFile: true });
+  // The colour slot holds the sentinel, so the decoration provider leaves the
+  // row alone — the URI is here for the name at the end of it.
+  assert.deepEqual(row.resourceUri.path.split('/').slice(1), ['-', 'icon.rs']);
+
+  // And a row that was painted keeps the paint, with the name still on the end.
+  const painted = harness({
+    stored: {
+      colors: { [`file:///repo/package.json::dev`]: 'teal' },
+      icons: { [`file:///repo/package.json::dev`]: 'file:icon.rs' },
+    },
+  });
+  const row2 = painted.treeItemFor({ kind: 'script', script: dev });
+  assert.deepEqual(row2.resourceUri.path.split('/').slice(1), [
+    'taskRunnerUltimate.palette.teal',
+    'icon.rs',
+  ]);
+});
+
+test('a pack icon follows the row into the dropdown, as a picture', () => {
+  // A quick-pick row has no resource behind it for the workbench to resolve a
+  // file icon against, so the picture itself is what goes on it — and the glyph
+  // in the label steps aside, or the row would wear two icons.
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const h = harness({ stored: { icons: { [`file:///repo/package.json::dev`]: 'file:icon.rs' } } });
+  const item = h.scriptItem(dev, false);
+  assert.deepEqual({ ...item.iconPath }, { fsPath: '/pack/rust.svg' });
+  assert.equal(item.label, 'dev');
+
+  // A pack with no picture for it keeps the glyph: findable in both lists either
+  // way is the point.
+  const fontish = harness({ stored: { icons: { [`file:///repo/package.json::dev`]: 'file:icon.zig' } } });
+  const plain = fontish.scriptItem(dev, false);
+  assert.equal(plain.iconPath, undefined);
+  assert.equal(plain.label, '$(play) dev');
+});
+
+test('the spinner wins over a pack icon, as it does over every other', () => {
+  const dev = script('/repo/package.json', 'dev', 'npm');
+  const h = harness({ stored: { icons: { [`file:///repo/package.json::dev`]: 'file:icon.rs' } } });
+  h.running.set(dev.key, { task: { name: 'dev' } });
+  assert.equal(h.treeItemFor({ kind: 'script', script: dev }).iconPath.id, 'loading~spin');
 });
 
 test('up is filled and green, down is hollow and red', () => {

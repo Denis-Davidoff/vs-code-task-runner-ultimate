@@ -22,6 +22,10 @@ restart without ever going looking for a terminal tab.**
 - 🖍️ **[Paint a row](#painting-a-row)** — right-click → **Colour** → one of ten, on a task or on a
   whole folder, each swatch shown in the menu in its own colour. The list stops being one colour of
   text and starts being a map of what is yours, what is loud and what you never touch.
+- 🖼️ **[Any icon your icon pack has](#changing-a-rows-icon)** — right-click → **Icon**, and the list
+  opens with the icons of whichever file icon theme you run — Material Icon Theme, vscode-icons —
+  drawn in the menu, beside the ones VS Code ships with. Picked by name, so switching packs keeps
+  your choice.
 - ⭐ **[Favorites](#favorites)** — star the two or three scripts you actually run and they sit as
   loose rows at the very top of the tree, above everything, with no heading to open first and
   without leaving the package they belong to.
@@ -1046,6 +1050,41 @@ Three things a colour deliberately does not do:
 Painting a folder paints that row only — the tasks under it keep whatever they have. Like the
 titles, colours are stored per workspace against the same refs, so **Reset all colours** in
 [the menu](#the-menu) clears tasks and folders together.
+
+### Changing a row's icon
+
+Right-click any row → **Icon**. The list is in two halves.
+
+The top half is **whatever file icon theme you are running** — Material Icon Theme, vscode-icons, or
+whichever pack you installed — listed by name with its own artwork beside each entry, so the icons
+are picked by eye. Typing filters on the name beside them as well, which is usually the faster half
+to type: `*.rs`, `Dockerfile`, `src/`.
+
+The bottom half is the icon font VS Code ships with, in five sections — actions and status, objects,
+dev and infrastructure, files and folders, git and people.
+
+Both halves are offered on every row: tasks, package headings, compose files and script folders
+alike. **Default** at the top takes it back off, and the row returns to the icon its category or its
+kind gives it.
+
+An icon picked out of a pack is stored as *the name that reaches it* — `Dockerfile`, `src`, a file
+ending — and never as anything belonging to the pack itself. Three things follow from that, and they
+are the reason it is done that way:
+
+- **Switching packs keeps your choice.** Material Icon Theme and vscode-icons disagree about
+  everything except what a Dockerfile is, so a row marked with the Docker icon shows each pack's own
+  Docker icon, and changes the moment you change the pack.
+- **It works with packs that have no image files.** Seti, the one VS Code ships with, draws from a
+  font. Those icons have no picture to preview, so they are listed without one — and they still draw
+  on the row exactly like any other.
+- **Light and dark follow the pack.** The workbench resolves the icon, so a pack with two variants
+  switches with the theme on its own.
+
+A pack the workbench has no rule for — an icon whose pack you uninstalled — falls back to that pack's
+plain file icon rather than to an empty square.
+
+The running spinner still wins over any icon, picked or not: while a task is alive, "this one is
+busy" is the one thing the icon is being asked.
 
 This is the one thing **OTHER TASKS** can have that a rename is not: a rename needs a
 name on disk to put back and that one is a label of this extension's own, while a colour needs
