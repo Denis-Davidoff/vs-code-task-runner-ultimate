@@ -445,6 +445,100 @@ exactly as a package behind a closed workspace folder does.
 This is the one source that ships enabled *and* changes an existing tree on upgrade; `shell` out of
 `taskRunnerUltimate.sources` is the way back.
 
+### Custom tasks
+
+Some commands belong to no manifest: the `docker compose down -v && docker compose up -d db` you type
+every other morning, or a `tail -f logs/*.log | grep ERROR`. A **custom task** is a name and a shell
+command, nothing more, and every one of them sits under a single **Custom Tasks** heading at the very
+top of the tree, above every package and in both [grouping modes](#grouping-by-ecosystem).
+
+The first one is made from [the menu](#the-menu): ⋮ → **Create custom task**, which asks for a name
+and then for the command. Once the heading exists it carries a **+** of its own, and its right-click
+menu has **New Custom Task…** as well; the command palette has it under the same name. With more than
+one workspace folder open you are asked which folder the task belongs to, and each folder gets its
+own heading, with the folder's name after the bullet.
+
+The command goes to the shell **as one line, exactly as typed** — `&&`, pipes, globs and `$VAR` work
+the way they do at a prompt, which is the opposite of every other row: a task name read out of a
+manifest is quoted word by word so it can never be read as code, and a custom task is code you wrote
+on purpose. It runs **from the workspace folder root**, in the shell your terminal uses.
+
+A custom row is a row like any other — star it, paint it, give it an icon, drag it into order, ask
+for a [confirmation](#asking-before-a-task-starts-or-stops), and ▶, ■ and ↻ work as they do everywhere
+— plus three entries of its own in the right-click menu:
+
+| Entry | What it does |
+| --- | --- |
+| **Edit Command…** | Changes the command line, in place. |
+| **Rename…** | A real rename here, not [a display title](#renaming-a-row): the name in the file changes, and the star, colour, icon, confirmation and drag position move with it. Refused while the task runs, since its terminal is filed under the old name. |
+| **Delete Custom Task** | Takes it out of the file after asking, stopping it first if it runs. |
+
+**Add to Terminal** types the command into a fresh terminal unrun, for the day it needs one more flag.
+
+The tasks are kept per workspace folder in **`.vscode/task-script-explorer.json`**, a plain file:
+
+```jsonc
+{
+  "tasks": {
+    "Reset DB": "docker compose down -v && docker compose up -d db",
+    "Tail errors": "tail -f logs/*.log | grep ERROR"
+  }
+}
+```
+
+Commit it and the whole team has the same list; add it to `.gitignore` and it stays yours — the
+choice `.vscode/tasks.json` beside it already offers. It is watched, so an edit by hand or a
+`git pull` reaches the tree on its own, and **Go to Script Definition** opens it at the task's line.
+The tree rewrites the file as plain JSON when it saves a change: keys it does not know are kept, and
+so are entries under `tasks` it cannot run — an empty command, an object — in the places they were.
+Comments are not kept. Tasks stay in the order the file writes them, names like `1` or `2024`
+included. A file that is there but is not valid JSON, whose `tasks` is not an object, that is over
+1 MB or that could not be read is never written over — the tree says so, and waits for it to be
+fixed. Only a file that is not there at all is started from nothing.
+
+Neither `taskRunnerUltimate.sources` nor `taskRunnerUltimate.exclude` applies to it: both are about
+what the scan goes looking for, and this file is not looked for — it has one place to be.
+
+#### Approving a command you did not type
+
+A custom task reads as *yours* — you named it, so you click it without reading it — and its file sits
+in the project, where a `git pull` or any other program can rewrite it. So a custom task runs at once
+only when its command is the one **this machine last approved**:
+
+- A task created or edited in the tree is approved as it is saved, and never asks.
+- A task that reached the file some other way — a teammate's commit, an edit by hand, another
+  program — shows a shield and **not approved** in its row, and its first run opens a dialog with the
+  **whole command** in it: **Run** approves it and runs it, **Open File** takes you to the line.
+- A task whose command has changed since it was approved asks again, and shows what it **was** beside
+  what it **is now**.
+- A task whose command or name holds a **line break** or a **hidden character** is **blocked**: it
+  never runs, approved or not, because it can run something other than what the dialog shows. Hidden
+  means by kind, not by list — control and format characters (bidirectional overrides, zero-width
+  joiners, the soft hyphen), every space but the plain one, anything Unicode says may be drawn as
+  nothing (variation selectors, tag characters, the Hangul fillers), private-use characters and the
+  braille blank. Letters of any script are fine: `echo привет` runs like any other line. Such a
+  task's name is drawn with those characters spelled out — `\u{202e}` — in the tree and in its
+  dialogs. **Add to Terminal** refuses it too, since a line break typed into a prompt is an Enter.
+  The tree's own prompts refuse these characters, so such a task was always written some other way. A long run of plain spaces is spelled out in the dialog —
+  `[200 spaces]` — rather than drawn, so it cannot push the rest of the line out of sight.
+- Saving a not-yet-approved command unchanged in **Edit Command…** approves it, the same as **Run**.
+
+Every way of starting a row goes through the same check — a click, ▶, ↻, the dropdown, a heading's
+restart — and a restart asks *before* stopping anything, so turning it down leaves the approved run up.
+An unapproved task is also left out of the workbench's own **Run Task** list, which would otherwise be
+a way round the question.
+
+Approvals are kept in [workspace storage](#where-list-customizations-are-stored), out of the project,
+where nothing that can only write the repository reaches them — that is all their strength rests on.
+They are the command itself rather than a hash of it, which is what lets a changed task show the old
+line. A rename made in the tree carries the approval to the new name, a task deleted from the file
+takes its approval with it, and **Reset all changes for this project** forgets them all.
+
+This guards one case, not the repository: the same `git pull` can rewrite a `package.json` script,
+and that runs unasked, as `npm run` would run it. The boundary for a repository as a whole is
+[Workspace Trust](https://code.visualstudio.com/docs/editor/workspace-trust) — in Restricted Mode this
+extension does not run at all.
+
 ## Where the button appears
 
 | Place | Notes |
@@ -744,6 +838,7 @@ The ⋮ in the view header opens everything that is not aimed at one row:
 
 | Entry | What it does |
 | --- | --- |
+| **Create custom task** | Asks for a name and a shell command and adds it to [Custom Tasks](#custom-tasks) at the top of the tree. First in the menu, because until that heading exists — with a **+** of its own — this is where the first one is made. |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
 | **Check containers** | Asks Docker which compose services are actually running and marks those rows — see [Knowing what is actually up](#knowing-what-is-actually-up). Nothing happens in the background; this is the question. |
@@ -756,7 +851,7 @@ The ⋮ in the view header opens everything that is not aimed at one row:
 | **Remove favorites** | Unstars everything, so the rows at the top disappear. The tasks stay where they are, in their own packages. |
 | **Reset all confirmations** | Every [guarded](#asking-before-a-task-starts-or-stops) task goes back to starting and stopping straight away. |
 | **Show hidden packages** | Restores every hidden package to its saved place in the tree. This entry is separated at the bottom of the individual resets. |
-| **Reset all changes for this project** | Clears all list customizations for this project, including favorites, hidden packages, ordering and folded state. |
+| **Reset all changes for this project** | Clears all list customizations for this project, including favorites, hidden packages, ordering and folded state — and the [approvals](#approving-a-command-you-did-not-type) of custom tasks, which then ask once more before they next run. |
 
 Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `4 painted`,
 `5 starred`, `2 guarded` — and asks once before it does it. The two broad resets are separated from the

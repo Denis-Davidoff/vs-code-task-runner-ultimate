@@ -55,6 +55,10 @@ restart without ever going looking for a terminal tab.**
   claimed wears the shell it is read by, the dimmed text is the script's own first comment, and each
   extension is started by the runner that can start it. **Add to Terminal** puts the command line in a fresh
   terminal unrun, for when a script takes arguments.
+- ✍️ **[Custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks)** — a name and a shell command of your own,
+  `docker compose down -v && docker compose up -d db` included, under one **Custom Tasks** heading at
+  the top of the tree. ⋮ → **Create custom task** makes the first, the heading's **+** the rest. Kept in
+  `.vscode/task-script-explorer.json`: commit it for the team, or keep it to yourself.
 - 🧠 **[Knows how to run things](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
   package from `packageManager`, the lock files and `engines`; everything else named by the table it
   is declared in.
