@@ -1,4 +1,4 @@
-import { DOCKERFILE_STAGE, JUST_RECIPE, MAKE_TARGET, SourceKind, yamlBlockKeys } from './sources';
+import { DOCKERFILE_STAGE, expandBraces, JUST_RECIPE, MAKE_TARGET, makeDefineLines, SourceKind, yamlBlockKeys } from './sources';
 
 /**
  * Where a task is written down in its manifest: a zero-based line, and the span
@@ -331,7 +331,12 @@ function under(keys: ReadonlyArray<string>, path: ReadonlyArray<string>): boolea
  * has no section is written.
  */
 function toxEnvironment(lines: ReadonlyArray<string>, name: string): TaskLocation | undefined {
-  const section = lines.findIndex((line) => line.trim().replace(/\s+/g, '') === `[testenv:${name}]`);
+  // The header as written, or one whose braces open into the name — which is
+  // how `parseTox` got `lint` out of `[testenv:{lint,format}]`.
+  const header = (line: string) => /^\[testenv:(.*)\]$/.exec(line.trim().replace(/\s+/g, ''))?.[1];
+  const exact = lines.findIndex((line) => header(line) === name);
+  const section =
+    exact >= 0 ? exact : lines.findIndex((line) => expandBraces(header(line) ?? '').includes(name));
   if (section >= 0) {
     // Not `on()`: for a name like `test` or `env` a plain indexOf lands inside
     // the `testenv` prefix, so the search starts after the colon.
@@ -421,9 +426,10 @@ function noxSession(lines: ReadonlyArray<string>, name: string): TaskLocation | 
 
 /** The first target line that names this target, recipe bodies skipped as in the parser. */
 function makeTarget(lines: ReadonlyArray<string>, name: string): TaskLocation | undefined {
+  const defined = makeDefineLines(lines);
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    if (line.startsWith('\t') || !line.trim() || line.trim().startsWith('#')) {
+    if (line.startsWith('\t') || !line.trim() || line.trim().startsWith('#') || defined[index]) {
       continue;
     }
     const match = MAKE_TARGET.exec(line);

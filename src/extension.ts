@@ -17,6 +17,7 @@ import {
   resetSources,
   scriptKey,
   ScriptEntry,
+  settingShapedManifests,
   SHELL_GLOB,
   SourceKind,
   SOURCE_GLOB,
@@ -910,9 +911,20 @@ function scriptRef(script: ScriptEntry): string {
   return `${groupRef(script)}::${script.name}`;
 }
 
-function favoriteRefs(): string[] {
-  const stored = storage?.get<unknown>(FAVORITES_KEY);
+/** A stored list of refs, with anything that is not a string left out. */
+function storedList(key: string): string[] {
+  const stored = storage?.get<unknown>(key);
   return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+}
+
+/** A stored ref -> value map, or an empty one when what is there is not a map. */
+function storedMap(key: string): Record<string, string> {
+  const stored = storage?.get<unknown>(key);
+  return stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, string>) : {};
+}
+
+function favoriteRefs(): string[] {
+  return storedList(FAVORITES_KEY);
 }
 
 function isFavorite(script: ScriptEntry): boolean {
@@ -960,8 +972,7 @@ async function setFavorite(node: TreeNode | undefined, favorite: boolean): Promi
  * neither has anything stable to file a flag against.
  */
 function confirmRefs(): string[] {
-  const stored = storage?.get<unknown>(CONFIRM_KEY);
-  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+  return storedList(CONFIRM_KEY);
 }
 
 /**
@@ -1049,10 +1060,7 @@ async function confirmScript(script: ScriptEntry, action: ConfirmAction): Promis
 }
 
 function customTitles(): Record<string, string> {
-  const stored = storage?.get<unknown>(TITLES_KEY);
-  return stored && typeof stored === 'object' && !Array.isArray(stored)
-    ? (stored as Record<string, string>)
-    : {};
+  return storedMap(TITLES_KEY);
 }
 
 /**
@@ -1328,10 +1336,7 @@ function paletteColor(name: PaletteName): string {
 }
 
 function customColors(): Record<string, string> {
-  const stored = storage?.get<unknown>(COLORS_KEY);
-  return stored && typeof stored === 'object' && !Array.isArray(stored)
-    ? (stored as Record<string, string>)
-    : {};
+  return storedMap(COLORS_KEY);
 }
 
 /**
@@ -1622,10 +1627,7 @@ const ICON_GROUPS: ReadonlyArray<{ label: string; icons: ReadonlyArray<{ id: str
 const ICON_CHOICES: ReadonlyArray<{ id: string; name: string }> = ICON_GROUPS.flatMap((group) => group.icons);
 
 function customIcons(): Record<string, string> {
-  const stored = storage?.get<unknown>(ICONS_KEY);
-  return stored && typeof stored === 'object' && !Array.isArray(stored)
-    ? (stored as Record<string, string>)
-    : {};
+  return storedMap(ICONS_KEY);
 }
 
 /** The icon a ref was given, if it still names one this build offers. */
@@ -1866,8 +1868,7 @@ const GROUPS_SCOPE = '::groups';
  * scripts have one per heading.
  */
 function groupOrder(): string[] {
-  const stored = storage?.get<unknown>(GROUP_ORDER_KEY);
-  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+  return storedList(GROUP_ORDER_KEY);
 }
 
 /**
@@ -2052,8 +2053,7 @@ const HIDDEN_GROUP_ID = 'group:hidden';
 const HIDDEN_COLOR = 'disabledForeground';
 
 function hiddenRefs(): string[] {
-  const stored = storage?.get<unknown>(HIDDEN_KEY);
-  return Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [];
+  return storedList(HIDDEN_KEY);
 }
 
 /**
@@ -2204,14 +2204,24 @@ async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
   // that evidence deletes stars and colours for files that are still on disk.
   // The cost is the other way round and is the one this rule always pays: a
   // script deleted for real keeps its marks, as a closed workspace folder does.
+  //
+  // A row a setting may have taken away is spared for the same reason. Taking
+  // `test` out of `cargoCommands` removes the row from a Cargo.toml that is still
+  // there and still read, and putting it back brings the row back — so its star
+  // and colour have to be waiting for it. The parser says which names those are:
+  // a compose service or a Dockerfile stage the file dropped is still gone.
+  const shaped = new Map(settingShapedManifests(scripts).map(([manifest, test]) => [manifestRef(manifest), test]));
   const scanned = new Set([
     ...scripts.filter((script) => !script.file).map(groupRef),
-    ...emptyManifests().map(manifestRef),
+    ...emptyManifests(scripts).map(manifestRef),
   ]);
   const live = new Set(scripts.map(scriptRef));
   const gone = (ref: string): boolean => {
     const group = groupOfRef(ref);
-    return group !== undefined && scanned.has(group) && !live.has(ref);
+    if (group === undefined || !scanned.has(group) || live.has(ref)) {
+      return false;
+    }
+    return !shaped.get(group)?.(ref.slice(group.length + 2));
   };
 
   // A compose row and a Dockerfile row do not ask any more — see
@@ -3336,10 +3346,7 @@ let folded: Set<string> | undefined;
 
 function foldedRefs(): Set<string> {
   if (!folded) {
-    const stored = storage?.get<unknown>(COLLAPSED_KEY);
-    folded = new Set(
-      Array.isArray(stored) ? stored.filter((ref): ref is string => typeof ref === 'string') : [],
-    );
+    folded = new Set(storedList(COLLAPSED_KEY));
   }
   return folded;
 }
@@ -5107,12 +5114,7 @@ async function stopStack(node: TreeNode | undefined): Promise<void> {
   if (!down) {
     return;
   }
-  const stopped = await Promise.all(
-    runningScriptsOf(node).map((script) => {
-      const execution = running.get(script.key);
-      return execution ? stopExecution(execution) : Promise.resolve(true);
-    }),
-  );
+  const stopped = await Promise.all(executionsOf(runningScriptsOf(node)).map(stopExecution));
   if (!stopped.every(Boolean)) {
     return;
   }
@@ -5147,23 +5149,53 @@ async function composeActions(node: TreeNode | undefined): Promise<void> {
   }
 }
 
+/**
+ * Every run behind these rows, and not only the one `running` keeps per key.
+ *
+ * A row can stand for several processes — the same script started through our
+ * task and through the built-in npm provider, or a task whose `instanceLimit`
+ * lets it run twice — and the map holds one handle for all of them. A group
+ * command that stopped only that one would leave the others up: Stop All in
+ * Package would stop half a package, a restart would raise a fresh copy beside
+ * the survivors, and compose's `down` would race an `up` still running.
+ */
+function executionsOf(scripts: ReadonlyArray<ScriptEntry>): vscode.TaskExecution[] {
+  const keys = new Set(scripts.map((script) => script.key));
+  const found = new Set<vscode.TaskExecution>();
+  for (const script of scripts) {
+    const held = running.get(script.key);
+    // The handle the listing has for the run, when it has replaced ours with a
+    // fresh object: otherwise both would be stopped, the same run twice, with two
+    // "did not stop" warnings for one row. A handle nothing lists any more is
+    // kept as it is — stopping it is how the row gets cleared.
+    const execution = held && (liveExecution(held) ?? held);
+    if (execution) {
+      found.add(execution);
+    }
+  }
+  for (const execution of liveExecutions()) {
+    const key = keyForTask(execution.task);
+    if (key !== undefined && keys.has(key)) {
+      found.add(execution);
+    }
+  }
+  return [...found];
+}
+
 /** Stops everything running in one package group; the rest of the tree keeps going. */
 async function stopGroup(node: TreeNode | undefined): Promise<void> {
-  await Promise.all(
-    runningScriptsOf(node).map((script) => {
-      const execution = running.get(script.key);
-      return execution ? stopExecution(execution) : Promise.resolve();
-    }),
-  );
+  await Promise.all(executionsOf(runningScriptsOf(node)).map(stopExecution));
 }
 
 /** Restarts everything running in one package group. Idle rows stay idle. */
 async function restartGroup(node: TreeNode | undefined): Promise<void> {
   for (const script of runningScriptsOf(node)) {
-    const execution = running.get(script.key);
-    // Only this row is skipped when it will not stop; the rest of the group has
-    // nothing to do with it and is restarted as asked.
-    if (execution && !(await stopExecution(execution))) {
+    // Every copy goes before the one fresh start, so a row that was running
+    // twice comes back running once rather than three times. Only this row is
+    // skipped when one of them will not stop; the rest of the group has nothing
+    // to do with it and is restarted as asked.
+    const stopped = await Promise.all(executionsOf([script]).map(stopExecution));
+    if (!stopped.every(Boolean)) {
       continue;
     }
     await startScript(script, false);

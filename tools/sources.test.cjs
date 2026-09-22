@@ -71,7 +71,7 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, readText, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
+    exports.parsers = { parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
   `,
     context,
   );
@@ -1045,4 +1045,234 @@ test('compose options that imply detach are removed too', async () => {
   assert.deepEqual(parsed.tasks.map((task) => task.name), ['up', 'up: web', 'up: db', 'down']);
   assert.ok(!parsed.tasks.some((task) => task.argv.some((word) => word.startsWith('--wait'))));
   assert.ok(!parsed.tasks.some((task) => task.argv.some((word) => word.startsWith('--detach'))));
+});
+
+test('a compose command keeps the flags of the command it runs in a container', async () => {
+  const { parseCompose } = harness({
+    settings: {
+      dockerComposeCommands: ['exec web ls -d /tmp', 'run --rm -e CI=1 web pytest -vd', 'run -d web migrate', 'up --scale web=3 -d'],
+    },
+  });
+  const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
+  const tail = (name) => parsed.tasks.find((task) => task.name === name)?.argv.slice(4);
+  // After the service name everything is the container's, so `-d` there is
+  // `ls`'s and `-vd` is pytest's.
+  assert.deepEqual(tail('exec web ls -d /tmp'), ['exec', 'web', 'ls', '-d', '/tmp']);
+  assert.deepEqual(tail('run --rm -e CI=1 web pytest -vd'), ['run', '--rm', '-e', 'CI=1', 'web', 'pytest', '-vd']);
+  // Before it the `-d` is compose's, and still goes.
+  assert.deepEqual(tail('run web migrate'), ['run', 'web', 'migrate']);
+  // `up` takes its options anywhere, so its `-d` goes wherever it stands.
+  assert.deepEqual(tail('up --scale web=3'), ['up', '--scale', 'web=3']);
+});
+
+// --- Go build constraints, as go/build reads them -----------------------------
+
+test('a Go file named after a platform with nothing before it is built everywhere', async () => {
+  const other = process.platform === 'win32' ? 'linux' : 'windows';
+  const h = harness({
+    settings: { goCommands: ['run'] },
+    found: { [`/repo/${other}.go`]: 'package main\n\nfunc main() {}\n' },
+    directory: { '/repo': [[`${other}.go`, 1]] },
+  });
+  assert.deepEqual(names(await h.parseGoMod('module example.com/app\n', { path: '/repo' })), ['run']);
+});
+
+test('release tags are met up to the module\'s own go line, and cgo is never assumed', async () => {
+  const run = async (constraint, gomod = 'module example.com/app\n\ngo 1.22\n') =>
+    names(
+      await harness({
+        settings: { goCommands: ['run'] },
+        found: { '/repo/main.go': `${constraint}\n\npackage main\n\nfunc main() {}\n` },
+        directory: { '/repo': [['main.go', 1]] },
+      }).parseGoMod(gomod, { path: '/repo' }),
+    );
+  const here = process.platform === 'win32' ? 'windows' : process.platform;
+  // Any toolchain that builds a `go 1.22` module has reached 1.21 and 1.22.
+  assert.deepEqual(await run('//go:build go1.21'), ['run']);
+  assert.deepEqual(await run('//go:build go1.22'), ['run']);
+  assert.deepEqual(await run('//go:build !go1.21'), []);
+  // Past that line nothing is known, so the row is the one left out.
+  assert.deepEqual(await run('//go:build go1.999'), []);
+  assert.deepEqual(await run('//go:build go1.21', 'module example.com/app\n'), []);
+  // `CGO_ENABLED=0`, or no C compiler, is indistinguishable from on.
+  assert.deepEqual(await run('//go:build cgo'), []);
+  assert.deepEqual(await run('//go:build !cgo'), ['run']);
+  assert.deepEqual(await run(`//go:build ignore || ${here}`), ['run']);
+  assert.deepEqual(await run('//go:build ignore'), []);
+  assert.deepEqual(await run('// +build ignore'), []);
+});
+
+// --- Taskfile descriptions ------------------------------------------------------
+
+test('a Taskfile block scalar is described by its first line, and desc wins over summary', () => {
+  const { parseTaskfile } = harness();
+  const text = [
+    'version: "3"',
+    'tasks:',
+    '  release:',
+    '    summary: |',
+    '      Release your project to GitHub.',
+    '',
+    '      It tags and uploads.',
+    '    cmds:',
+    '      - goreleaser',
+    '  build:',
+    '    summary: Long form of build',
+    '    desc: >-',
+    '      Build the binary',
+    '  lint:',
+    '    desc: "Run the linters"',
+  ].join('\n');
+  const parsed = plain(parseTaskfile(text, 'Taskfile.yml'));
+  assert.deepEqual(
+    parsed.tasks.map((task) => [task.name, task.command]),
+    [
+      ['release', 'Release your project to GitHub.'],
+      ['build', 'Build the binary'],
+      ['lint', 'Run the linters'],
+    ],
+  );
+});
+
+// --- tox ------------------------------------------------------------------------
+
+test('a generative tox section name is opened into the environments it declares', () => {
+  const { parseTox } = harness();
+  const text = [
+    '[tox]',
+    'envlist = py{310,311}, lint',
+    '[testenv]',
+    'commands = pytest',
+    '[testenv:{lint,format}]',
+    'commands = ruff check',
+    '[testenv:py{310,311}-django]',
+    'deps = django',
+    '[testenv:docs]',
+    'description = Build the docs',
+  ].join('\n');
+  // The header is tox declaring environments, so it is opened into them; the
+  // `envlist` matrix is still left alone.
+  assert.deepEqual(names(parseTox(text)), ['lint', 'format', 'py310-django', 'py311-django', 'docs']);
+  const lint = plain(parseTox('[testenv:{lint, format}]\ndescription = Lint it\n')).tasks;
+  assert.deepEqual(lint.map((task) => [task.name, task.command, task.argv.at(-1)]), [
+    ['lint', 'Lint it', 'lint'],
+    ['format', 'Lint it', 'format'],
+  ]);
+});
+
+// --- package manager detection ------------------------------------------------
+
+test('a lock file names the runner before `engines` does, and `engines.npm` names none', async () => {
+  const detect = async ({ engines, present }) => {
+    const h = harness({ root: '/repo', present });
+    h.nodeHints.set('file:///repo/package.json', { engines });
+    const entry = { kind: 'npm', manifest: uri('/repo/package.json'), cwd: uri('/repo') };
+    return h.detectPackageManager(entry, new Map());
+  };
+  // `"npm": ">=9"` says which npm is too old, not that npm runs the scripts.
+  assert.equal(await detect({ engines: { node: '>=18', npm: '>=9' }, present: ['/repo/pnpm-lock.yaml'] }), 'pnpm');
+  assert.equal(await detect({ engines: { pnpm: '>=9' }, present: ['/repo/yarn.lock'] }), 'yarn');
+  // With no lock file, `engines` is still the hint it was.
+  assert.equal(await detect({ engines: { pnpm: '>=9' }, present: [] }), 'pnpm');
+  assert.equal(await detect({ engines: { npm: '>=9' }, present: [] }), undefined);
+});
+
+test('the lock-file walk asks each directory once per scan', async () => {
+  const h = harness({ root: '/repo', present: ['/repo/pnpm-lock.yaml'] });
+  let stats = 0;
+  const lockFiles = new Map();
+  for (const name of ['a', 'b', 'c']) {
+    const before = lockFiles.size;
+    await h.detectPackageManager(
+      { kind: 'npm', manifest: uri(`/repo/packages/${name}/package.json`), cwd: uri(`/repo/packages/${name}`) },
+      lockFiles,
+    );
+    stats += lockFiles.size - before;
+  }
+  // Three package directories, then `packages` and the root once between them.
+  assert.equal(stats, 5);
+});
+
+// --- what a scan learnt travels with its own rows ---------------------------------
+
+test('a scan cut short by a reset still answers for the rows it hands back', async () => {
+  // The prune runs on whatever list the caller was given. A reset during the
+  // walk must not leave that list with nobody saying which of its manifests a
+  // setting shapes — that would read the go.mod as a file whose rows are all
+  // its own, and drop the star on the row `goCommands` just hid.
+  const h = harness({
+    root: '/repo',
+    settings: { goCommands: ['build'] },
+    found: { '/repo/go.mod': 'module example.com/app\n' },
+    directory: { '/repo': [['go.mod', 1]] },
+  });
+  const scan = h.collectScripts();
+  h.resetSources();
+  const rows = await scan;
+  assert.deepEqual(plain(rows.map((row) => row.name)), ['build']);
+  const shaped = h.settingShapedManifests(rows);
+  assert.equal(shaped.length, 1);
+  assert.equal(shaped[0][0].path, '/repo/go.mod');
+  assert.equal(shaped[0][1]('test'), true);
+});
+
+test('a Makefile rule named `define-…` does not swallow the rules after it', () => {
+  const { parseMakefile } = harness();
+  const text = [
+    'define-docs: ## generate docs',
+    '\techo',
+    'export define BANNER',
+    'banner: not a rule',
+    'endef',
+    'build: ## build it',
+    '\tgo build',
+  ].join('\n');
+  assert.deepEqual(names(parseMakefile(text, 'Makefile')), ['define-docs', 'build']);
+});
+
+test('a bundle of short options loses its `d` and keeps the rest', async () => {
+  const { parseCompose } = harness({
+    settings: { dockerComposeCommands: ['exec -dT web ./migrate', 'run -dit web sh', 'run -edev web env'] },
+  });
+  const parsed = plain(await parseCompose(COMPOSE, 'docker-compose.yml', cwd));
+  const tails = parsed.tasks.slice(4).map((task) => task.argv.slice(4).join(' '));
+  // `-T` and `-it` are not a detach and survive it; the `d` of `-edev` is the
+  // value of `-e`, not an option at all.
+  assert.deepEqual(tails, ['exec -T web ./migrate', 'run -it web sh', 'run -edev web env']);
+
+  const dockerfile = async (entry) =>
+    plain(
+      await harness({ settings: { dockerfileCommands: [entry] } }).parseDockerfile('FROM scratch\n', 'Dockerfile', {
+        path: '/repo/api',
+      }),
+    ).tasks.at(-1).command;
+  // A capital letter in the bundle no longer hides the `d` beside it.
+  assert.equal(await dockerfile('run -dP'), 'docker run --rm -it -P api');
+});
+
+test('a Taskfile description is the task\'s own, and an empty block has none', () => {
+  const { parseTaskfile } = harness();
+  const text = [
+    'version: "3"',
+    'tasks:',
+    '  empty:',
+    '    summary: |',
+    '    cmds:',
+    '      - echo',
+    '  nested:',
+    '    requires:',
+    '      - desc: not this one',
+    '    vars:',
+    '      desc: nor this',
+    '    cmds:',
+    '      - echo',
+  ].join('\n');
+  const parsed = plain(parseTaskfile(text, 'Taskfile.yml'));
+  assert.deepEqual(
+    parsed.tasks.map((task) => [task.name, task.command]),
+    [
+      ['empty', 'task empty'],
+      ['nested', 'task nested'],
+    ],
+  );
 });

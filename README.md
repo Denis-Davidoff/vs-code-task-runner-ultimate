@@ -56,7 +56,7 @@ restart without ever going looking for a terminal tab.**
   extension is started by the runner that can start it. **Add to Terminal** puts the command line in a fresh
   terminal unrun, for when a script takes arguments.
 - 🧠 **[Knows how to run things](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
-  package from `packageManager`, `engines` and the lock files; everything else named by the table it
+  package from `packageManager`, the lock files and `engines`; everything else named by the table it
   is declared in.
 - ⏹ **Stop all / restart all** — kill five watchers before a rebase, or bring the whole stack back
   up after switching branches, in one click.

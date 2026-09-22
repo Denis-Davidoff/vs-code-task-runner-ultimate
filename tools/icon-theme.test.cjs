@@ -15,6 +15,23 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
+// The file reading is borrowed from the scan module, size guard and all, so the
+// real one is loaded against the same workbench — a stand-in here would be the
+// one part of the read these tests could no longer see.
+const sourcesCompiled = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/sources.ts'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+function sourcesFor(vscode) {
+  const context = vm.createContext({
+    exports: {},
+    Buffer,
+    process,
+    require: (name) => (name === 'vscode' ? vscode : name === 'path' ? path : {}),
+  });
+  vm.runInContext(sourcesCompiled, context);
+  return context.exports;
+}
+
 const context = vm.createContext({
   exports: {},
   Buffer,
@@ -288,7 +305,7 @@ function loadPack({ id = 'pack', kind = 2, extensions, files = {}, sizes = {}, g
     exports: {},
     Buffer,
     require: (name) =>
-      name === 'vscode' ? vscode : name === './sources' ? { parseJsonc: JSON.parse } : {},
+      name === 'vscode' ? vscode : name === './sources' ? sourcesFor(vscode) : {},
   });
   vm.runInContext(compiled, context);
   return { ...context.exports, reads };
