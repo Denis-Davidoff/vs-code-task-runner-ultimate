@@ -52,6 +52,8 @@ export function tomlTables(root: unknown, ...keys: string[]): Record<string, unk
 
 const BARE_KEY = /[A-Za-z0-9_-]/;
 const NUMBER = /^[+-]?(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9_]+)?)$/;
+/** What may follow a line-ending backslash up to its newline; sticky, so it is tried in place. */
+const LINE_END = /[ \t]*\r?\n/y;
 
 class Reader {
   private index = 0;
@@ -313,7 +315,10 @@ class Reader {
       }
       // A backslash at the end of a line swallows the newline and the indent
       // that follows it, which is how long commands are wrapped in a manifest.
-      if (this.char() === '\n' || this.text.startsWith('\r\n', this.index)) {
+      // The spec lets whitespace sit between the backslash and the newline, and
+      // an editor that does not trim trailing spaces leaves exactly that.
+      LINE_END.lastIndex = this.index;
+      if (LINE_END.test(this.text)) {
         while (' \t\r\n'.includes(this.char()) && !this.done()) {
           this.index++;
         }

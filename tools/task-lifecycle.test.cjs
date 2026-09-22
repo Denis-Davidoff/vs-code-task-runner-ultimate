@@ -39,6 +39,7 @@ function harness() {
     exports.lifecycle = {
       running, executionOf, stopExecution, stopNode, restartNode, markEnded,
       liveExecutions, runningCount, forgetExecution, clearEnded,
+      stopGroup, restartGroup, stopStack,
     };
   `, context);
   const api = context.exports.lifecycle;
@@ -191,4 +192,69 @@ test('a stale foreign row repaints when its stop button finds nothing', async ()
   const h = harness();
   await h.stopNode({ kind: 'foreign', execution: h.execution() });
   assert.ok(h.repaints.length > 0, 'the vanished row must ask for a repaint');
+});
+
+// --- group commands and a row that is running twice ----------------------------
+
+/** A group whose one row is the `dev` task, run twice, with the map holding one handle. */
+function twice(h) {
+  const first = h.execution();
+  const second = h.execution();
+  h.tasks.taskExecutions = [first, second];
+  h.running.set('dev', first);
+  const script = { key: 'dev', name: 'dev' };
+  const group = { kind: 'group', children: [{ kind: 'script', script }] };
+  return { script, group };
+}
+
+test('Stop All in Package stops every run of a task, not only the one the row holds', async () => {
+  const h = harness();
+  const { group } = twice(h);
+  await h.stopGroup(group);
+  assert.deepEqual(h.tasks.taskExecutions, []);
+  assert.equal(h.runningCount(), 0);
+});
+
+test('a group restart brings a task running twice back running once', async () => {
+  const h = harness();
+  const { script, group } = twice(h);
+  await h.restartGroup(group);
+  assert.deepEqual(h.tasks.taskExecutions, []);
+  assert.deepEqual(h.launches, [script]);
+});
+
+test('compose `down` waits for every copy of `up` to stop', async () => {
+  const h = harness();
+  const first = h.execution();
+  const second = h.execution();
+  h.tasks.taskExecutions = [first, second];
+  h.running.set('dev', first);
+  const up = { key: 'dev', name: 'up' };
+  const down = { key: 'down', name: 'down' };
+  const stack = {
+    kind: 'group',
+    source: 'docker-compose',
+    children: [{ kind: 'script', script: up }, { kind: 'script', script: down }],
+  };
+  await h.stopStack(stack);
+  assert.deepEqual(h.tasks.taskExecutions, []);
+  assert.deepEqual(h.launches, [down]);
+});
+
+test('a replaced handle and the one the listing holds are one run, stopped once', async () => {
+  const h = harness();
+  const current = h.execution();
+  const terminate = current.terminate;
+  let stops = 0;
+  // A real run takes a moment to die, which is when a second stop would land.
+  current.terminate = () => {
+    stops++;
+    setTimeout(terminate, 5);
+  };
+  // Same task, different object: what the task system hands back after a repaint.
+  const stale = { task: current.task, terminate: () => assert.fail('Must use the current handle') };
+  h.tasks.taskExecutions = [current];
+  h.running.set('dev', stale);
+  await h.stopGroup({ kind: 'group', children: [{ kind: 'script', script: { key: 'dev', name: 'dev' } }] });
+  assert.equal(stops, 1);
 });

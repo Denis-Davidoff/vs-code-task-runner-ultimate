@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { parseJsonc } from './sources';
+import { parseJsonc, readText } from './sources';
 
 /**
  * The icons of whichever file icon theme the workbench is wearing, offered to
@@ -164,7 +164,7 @@ async function readPack(id: string, variant: Variant): Promise<IconPack | undefi
         continue;
       }
       const file = vscode.Uri.joinPath(extension.extensionUri, theme.path);
-      const text = await readText(file);
+      const text = await readText(file, MAX_THEME_BYTES);
       if (text === undefined) {
         return undefined;
       }
@@ -175,11 +175,9 @@ async function readPack(id: string, variant: Variant): Promise<IconPack | undefi
         // time in the case that is nearly all of them.
         parsed = JSON.parse(text);
       } catch {
-        try {
-          parsed = parseJsonc(text);
-        } catch {
-          return undefined;
-        }
+        // Never throws: what it cannot read comes back undefined, and
+        // `iconsFrom` finds no icons in that.
+        parsed = parseJsonc(text);
       }
       const icons = iconsFrom(parsed, languageSpecimens(), variant);
       if (icons.length === 0) {
@@ -218,27 +216,6 @@ function nameOf(...candidates: unknown[]): string {
     }
   }
   return 'File icons';
-}
-
-async function readText(uri: vscode.Uri): Promise<string | undefined> {
-  try {
-    // Asked of the file system first, so a huge file is never pulled into the
-    // extension host only to be thrown away — the same two-stage guard, and for
-    // the same reason, as the manifest reader in `sources.ts`. The check after
-    // the read stays: the file can grow between the two calls.
-    const info = await vscode.workspace.fs.stat(uri);
-    if (info.size > MAX_THEME_BYTES) {
-      return undefined;
-    }
-    const bytes = await vscode.workspace.fs.readFile(uri);
-    if (bytes.byteLength > MAX_THEME_BYTES) {
-      return undefined;
-    }
-    const text = Buffer.from(bytes).toString('utf8');
-    return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-  } catch {
-    return undefined;
-  }
 }
 
 /**

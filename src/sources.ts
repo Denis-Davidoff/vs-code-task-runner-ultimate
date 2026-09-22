@@ -382,7 +382,7 @@ const DETECTION_FILES: ReadonlyArray<[string, PackageManager]> = [
   ['deno.jsonc', 'deno'],
 ];
 
-/** Order in which the `engines` field is consulted; npm last, as it is the fallback anyway. */
+/** Order in which the `packageManager` and `engines` fields are matched. */
 const ENGINE_KEYS: ReadonlyArray<PackageManager> = ['deno', 'bun', 'pnpm', 'yarn', 'npm'];
 
 /** The tool a `[project.scripts]` entry has to be run through, and the lock file that names it. */
@@ -545,6 +545,16 @@ interface ParsedManifest {
   tasks: RawTask[];
   /** package.json fields that runner detection reads, kept to avoid a second read. */
   hints?: NodeHints;
+  /**
+   * Whether a row of this name, missing from this scan, may be a setting's doing
+   * rather than the file's — a `*Commands` entry taken out, `pythonRunner` set
+   * to `none`, a `.go` file beside the go.mod edited. Such a row comes back with
+   * the setting, so this is what keeps `pruneStaleRefs` from reading its absence
+   * as a deletion. Asked per name, because the rows a file declares on its own —
+   * a compose service, a Dockerfile stage — are still gone when the file drops
+   * them. Absent for a manifest whose rows are all its own text.
+   */
+  shaped?: (name: string) => boolean;
 }
 
 interface NodeHints {
@@ -567,6 +577,8 @@ const MAX_MANIFESTS = 2000;
  * setting. Narrowing `shellScripts` is the remedy here.
  */
 const MAX_SHELL_SCRIPTS = 200;
+/** How many files a scan reads at once. */
+const SCAN_CONCURRENCY = 8;
 /** Manifests above this size are skipped: nothing hand-written comes close. */
 const MAX_MANIFEST_BYTES = 1_000_000;
 /** The truncation warning is shown once per window, not once per scan. */
@@ -599,7 +611,22 @@ const nodeHints = new Map<string, NodeHints>();
  * from "the file was not scanned" without them. `pruneStaleRefs` is the caller
  * that needs to tell the two apart.
  */
-let empty: vscode.Uri[] = [];
+interface ScanFacts {
+  empty: vscode.Uri[];
+  /** The manifests whose rows a setting helps decide; see `ParsedManifest.shaped`. */
+  shaped: Array<[vscode.Uri, (name: string) => boolean]>;
+}
+
+/**
+ * What each scan learnt beyond its rows, filed under the very list it returned.
+ *
+ * Not module state, because a scan outlives a `resetSources`: one that was
+ * already walking when a setting changed still hands its rows to whoever asked,
+ * and the prune that runs on them has to read *that* scan's facts. An empty list
+ * in their place would read every Cargo.toml as a file whose rows are all its
+ * own, and throw away the star on the row the setting just hid.
+ */
+const scanFacts = new WeakMap<ReadonlyArray<ScriptEntry>, ScanFacts>();
 
 /**
  * Drops everything derived from the manifests.
@@ -617,12 +644,38 @@ export function resetSources(): void {
   generation++;
   detected.clear();
   nodeHints.clear();
-  empty = [];
 }
 
-/** The manifests of the last scan that parsed cleanly and declared no tasks. */
-export function emptyManifests(): ReadonlyArray<vscode.Uri> {
-  return empty;
+/** The manifests of this scan that parsed cleanly and declared no tasks. */
+export function emptyManifests(scripts: ReadonlyArray<ScriptEntry>): ReadonlyArray<vscode.Uri> {
+  return scanFacts.get(scripts)?.empty ?? [];
+}
+
+/**
+ * The manifests of this scan whose rows do not follow from the file alone, each
+ * with the test for which of its row names a setting may have taken away.
+ */
+export function settingShapedManifests(
+  scripts: ReadonlyArray<ScriptEntry>,
+): ReadonlyArray<[vscode.Uri, (name: string) => boolean]> {
+  return scanFacts.get(scripts)?.shaped ?? [];
+}
+
+/**
+ * `work` over every item, at most `limit` at a time, with each answer at its
+ * item's index — the order the items came in, not the order they finished.
+ */
+async function inBatches<T, R>(items: ReadonlyArray<T>, limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const at = next++;
+      out[at] = await work(items[at]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 export async function collectScripts(): Promise<ScriptEntry[]> {
@@ -671,17 +724,30 @@ async function runScan(): Promise<ScriptEntry[]> {
 
   const entries: ScriptEntry[] = [];
   const blank: vscode.Uri[] = [];
+  const shaped: ScanFacts['shaped'] = [];
 
-  for (const manifest of manifests) {
+  // Read and parsed a few at a time and then walked in the sorted order, so the
+  // list comes out the same as a one-by-one pass would build it. Over Remote SSH
+  // or in a container every stat and read is a round trip, and two thousand of
+  // them in a row is what the first paint of the tree used to wait for.
+  const results = await inBatches(manifests, SCAN_CONCURRENCY, async (manifest) => {
     const kind = manifestKind(manifest);
     if (!kind || !enabled.has(ECOSYSTEM_OF[kind])) {
-      continue;
+      return undefined;
     }
-
     const cwd = directoryOf(manifest);
     const parsed = await parseManifest(manifest, kind, cwd);
-    if (!parsed) {
+    return parsed && { kind, cwd, parsed };
+  });
+
+  for (const [at, manifest] of manifests.entries()) {
+    const result = results[at];
+    if (!result) {
       continue;
+    }
+    const { kind, cwd, parsed } = result;
+    if (parsed.shaped) {
+      shaped.push([manifest, parsed.shaped]);
     }
     if (parsed.tasks.length === 0) {
       blank.push(manifest);
@@ -746,8 +812,8 @@ async function runScan(): Promise<ScriptEntry[]> {
   // entries describe manifests that have already changed.
   if (started === generation) {
     cache = entries;
-    empty = blank;
   }
+  scanFacts.set(entries, { empty: blank, shaped });
   return entries;
 }
 
@@ -995,7 +1061,8 @@ async function parseCargo(text: string, cwd: vscode.Uri): Promise<ParsedManifest
   const push = (name: string, argv: string[]) =>
     tasks.push({ name, command: argv.join(' '), argv });
 
-  if (commands.includes('run') && pkg) {
+  const runs = commands.includes('run');
+  if (runs && pkg) {
     // A crate with no binary cannot be run at all, and one with several needs to
     // be told which — so a bare `run` row is only correct for a single binary.
     const bins = await cargoBins(toml, cwd, packageName);
@@ -1023,7 +1090,11 @@ async function parseCargo(text: string, cwd: vscode.Uri): Promise<ParsedManifest
   // No rows at all is a setting's doing (`cargoCommands: []`, or `["run"]` on a
   // library), not the manifest's — reporting it as an empty manifest would let
   // the prune throw the crate's stars and colours away.
-  return tasks.length > 0 ? { packageName, tasks } : undefined;
+  // Every name but the targets is a `cargoCommands` entry. The targets are the
+  // crate's own — a binary deleted is gone — unless `run` is what was taken out.
+  const target = (name: string) => name === 'run' || name.startsWith('run: ') || name.startsWith('example: ');
+  const shaped = (name: string) => !runs || !target(name);
+  return tasks.length > 0 ? { packageName, tasks, shaped } : undefined;
 }
 
 /**
@@ -1197,8 +1268,9 @@ async function parsePyproject(text: string, cwd: vscode.Uri): Promise<ParsedMani
   // only exist inside the project's environment, so they are listed only when
   // something is known to be able to enter it.
   const runner = await pythonRunner(toml, cwd);
+  const entryPoints = tableEntries(toml, 'project', 'scripts');
   if (runner) {
-    for (const [name, value] of tableEntries(toml, 'project', 'scripts')) {
+    for (const [name, value] of entryPoints) {
       add(name, value, [runner, 'run', name], `${runner} run ${name}`);
     }
   }
@@ -1211,7 +1283,13 @@ async function parsePyproject(text: string, cwd: vscode.Uri): Promise<ParsedMani
 
   // As with Cargo: `pythonRunner: "none"` leaving no rows is not a manifest
   // that declares nothing, and must not read as one to the prune.
-  return tasks.length > 0 ? { tasks, packageName } : undefined;
+  // The entry points come and go with `pythonRunner` and the lock files, so one
+  // the file still declares proves nothing by its absence. One it no longer
+  // declares, and every task table's row, is gone with the file's say-so.
+  const declared = new Set(entryPoints.map(([name]) => name));
+  return tasks.length > 0
+    ? { tasks, packageName, shaped: declared.size > 0 ? (name: string) => declared.has(name) : undefined }
+    : undefined;
 }
 
 async function pythonRunner(
@@ -1282,7 +1360,13 @@ function parseTox(text: string): ParsedManifest | undefined {
 
   const names: string[] = [];
   const add = (name: string) => {
-    if (name && !names.includes(name)) {
+    // Generative names — `py{38,39}-django{42}` — stand for a matrix rather than
+    // an environment, and expanding one here would invent environments that the
+    // file never names. tox does not expand them after `-e` either, so a row
+    // named that way could only fail. Both braces are checked because the split
+    // of `envlist` below lands in the middle of one, and the same rule covers a
+    // `[testenv:{lint,format}]` section header.
+    if (name && !/[{}]/.test(name) && !names.includes(name)) {
       names.push(name);
     }
   };
@@ -1290,25 +1374,29 @@ function parseTox(text: string): ParsedManifest | undefined {
   const tox = sections.find((section) => section.name === 'tox');
   const list = tox?.options.get('envlist') ?? tox?.options.get('env_list') ?? '';
   for (const entry of list.split(/[,\n]/)) {
-    const name = entry.trim();
-    // Generative names — `py{38,39}-django{42}` — stand for a matrix rather than
-    // an environment, and expanding one here would invent environments that the
-    // file never names. Both braces are checked because the split above lands in
-    // the middle of one.
-    if (name && !/[{}]/.test(name)) {
-      add(name);
-    }
+    add(entry.trim());
   }
+  // A section header is different: `[testenv:{lint,format}]` is tox declaring
+  // the environments `lint` and `format`, both of which `tox -e` accepts. So the
+  // header is opened into the names it stands for, and each keeps the section it
+  // came from for its description.
+  const sectionOf = new Map<string, IniSection>();
   for (const section of sections) {
-    if (section.name.startsWith('testenv:')) {
-      add(section.name.slice('testenv:'.length).trim());
+    if (!section.name.startsWith('testenv:')) {
+      continue;
+    }
+    for (const expanded of expandBraces(section.name.slice('testenv:'.length))) {
+      const name = expanded.replace(/\s+/g, '');
+      if (!sectionOf.has(name)) {
+        sectionOf.set(name, section);
+      }
+      add(name);
     }
   }
 
   return {
     tasks: names.map((name) => {
-      const section = sections.find((item) => item.name === `testenv:${name}`);
-      const description = section?.options.get('description');
+      const description = sectionOf.get(name)?.options.get('description');
       return {
         name,
         command: description || `tox -e ${name}`,
@@ -1366,6 +1454,37 @@ function parseNoxfile(text: string): ParsedManifest | undefined {
 export const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?![:=])\s*(.*)$/;
 /** `build: deps ## Build everything` — the convention every self-documenting Makefile uses. */
 const MAKE_DOC = /##\s*(.*)$/;
+/**
+ * `define` as make reads it: the directive, perhaps behind `override`, `export`
+ * or `private`, and then a space or the end of the line. `define-docs:` is a rule.
+ */
+const MAKE_DEFINE = /^(?:(?:override|export|private)\s+)*define(?:\s|$)/;
+const MAKE_ENDEF = /^endef(?:\s|#|$)/;
+
+/**
+ * Which lines belong to a `define … endef` block, the directives included.
+ *
+ * Inside one a line is text, not a rule — the self-documenting `define HELP` /
+ * `Usage: make <target>` idiom would otherwise list `Usage`. Exported so that
+ * `locate.ts` skips exactly what the parser skipped: a help text reading
+ * `build: Build the project` is not the rule a row came from.
+ */
+export function makeDefineLines(lines: ReadonlyArray<string>): boolean[] {
+  let defining = false;
+  return lines.map((line) => {
+    // A recipe line is the recipe's, whatever it says.
+    if (line.startsWith('\t')) {
+      return defining;
+    }
+    const trimmed = line.trim();
+    if (defining) {
+      defining = !MAKE_ENDEF.test(trimmed);
+      return true;
+    }
+    defining = MAKE_DEFINE.test(trimmed);
+    return defining;
+  });
+}
 
 function parseMakefile(text: string, file: string): ParsedManifest | undefined {
   // make searches for GNUmakefile, then makefile, then Makefile, and this row
@@ -1375,26 +1494,16 @@ function parseMakefile(text: string, file: string): ParsedManifest | undefined {
   const tasks: RawTask[] = [];
   const seen = new Set<string>();
   let doc = '';
-  // Inside `define … endef` a line is text, not a rule — the self-documenting
-  // `define HELP` / `Usage: make <target>` idiom would otherwise list `Usage`.
-  let defining = false;
+  const lines = text.split(/\r?\n/);
+  const defined = makeDefineLines(lines);
 
-  for (const line of text.split(/\r?\n/)) {
+  for (const [index, line] of lines.entries()) {
     // A tab starts a recipe body, which can hold anything at all.
     if (line.startsWith('\t')) {
       continue;
     }
     const trimmed = line.trim();
-    if (!trimmed) {
-      doc = '';
-      continue;
-    }
-    if (defining) {
-      defining = !/^endef\b/.test(trimmed);
-      continue;
-    }
-    if (/^(?:override\s+)?define\b/.test(trimmed)) {
-      defining = true;
+    if (!trimmed || defined[index]) {
       doc = '';
       continue;
     }
@@ -1523,16 +1632,16 @@ function parseJustfile(text: string, file: string): ParsedManifest | undefined {
 export function yamlBlockKeys(
   lines: ReadonlyArray<string>,
   block: string,
-): Array<{ name: string; body: string[]; line: number }> {
+): Array<{ name: string; body: string[]; raw: string[]; line: number }> {
   const header = new RegExp(`^${block}:\\s*(#.*)?$`);
   const start = lines.findIndex((line) => header.test(line));
   if (start < 0) {
     return [];
   }
 
-  const entries: Array<{ name: string; body: string[]; line: number }> = [];
+  const entries: Array<{ name: string; body: string[]; raw: string[]; line: number }> = [];
   let indent: number | undefined;
-  let current: { name: string; body: string[]; line: number } | undefined;
+  let current: { name: string; body: string[]; raw: string[]; line: number } | undefined;
 
   for (let index = start + 1; index < lines.length; index++) {
     const line = lines[index];
@@ -1548,6 +1657,7 @@ export function yamlBlockKeys(
     }
     if (width > indent) {
       current?.body.push(line.trim());
+      current?.raw.push(line);
       continue;
     }
     // A YAML key ends at the last colon that is followed by a space or the end
@@ -1556,7 +1666,7 @@ export function yamlBlockKeys(
     if (!key) {
       continue;
     }
-    current = { name: key[1].trim().replace(/^["']|["']$/g, ''), body: [], line: index };
+    current = { name: key[1].trim().replace(/^["']|["']$/g, ''), body: [], raw: [], line: index };
     entries.push(current);
   }
 
@@ -1574,8 +1684,9 @@ function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
     if (!entry.name || entry.body.some((line) => /^internal:\s*true\b/.test(line))) {
       continue;
     }
-    const described = entry.body.find((line) => /^(desc|summary):/.test(line));
-    const description = described?.slice(described.indexOf(':') + 1).trim().replace(/^["']|["']$/g, '');
+    // `desc` first: it is the one line `task --list` prints, where `summary` is
+    // the long form behind `task --summary`.
+    const description = taskfileText(entry.raw, 'desc') || taskfileText(entry.raw, 'summary');
     tasks.push({
       name: entry.name,
       command: description || `task ${entry.name}`,
@@ -1584,6 +1695,31 @@ function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
   }
 
   return tasks.length > 0 ? { tasks } : undefined;
+}
+
+/**
+ * The text of one of a task's own string keys — at the task's own depth, so a
+ * `desc:` inside a `vars:` or a `requires:` list is not taken for the task's.
+ *
+ * A block scalar — `summary: |`, the form go-task's own documentation uses —
+ * puts nothing after the colon but its indicator, so the first line of the
+ * block is read instead: the row shows one line either way. Only a line deeper
+ * than the key belongs to the block; an empty block followed by `cmds:` has no
+ * first line, and says nothing.
+ */
+function taskfileText(raw: ReadonlyArray<string>, key: string): string | undefined {
+  const depth = (line: string) => line.length - line.trimStart().length;
+  const own = raw.length > 0 ? Math.min(...raw.map(depth)) : 0;
+  const at = raw.findIndex((line) => depth(line) === own && line.trimStart().startsWith(`${key}:`));
+  if (at < 0) {
+    return undefined;
+  }
+  let value = raw[at].trim().slice(key.length + 1).trim();
+  if (/^[|>][+-]?\d*[+-]?\s*(#.*)?$/.test(value)) {
+    const next = raw[at + 1];
+    value = next !== undefined && depth(next) > own ? next : '';
+  }
+  return value.trim().replace(/^["']|["']$/g, '') || undefined;
 }
 
 // --- Go ----------------------------------------------------------------------
@@ -1603,7 +1739,10 @@ const GO_COMMANDS: Record<string, string[]> = {
 
 async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest | undefined> {
   const module = /^module\s+(\S+)/m.exec(text);
-  const hasMain = await goRootIsProgram(cwd);
+  // The `go 1.N` line is the oldest toolchain that can build the module, so it
+  // is the one release every toolchain that gets to `go run .` has reached.
+  const release = /^go\s+1\.(\d+)/m.exec(text);
+  const hasMain = await goRootIsProgram(cwd, release ? Number(release[1]) : undefined);
 
   const tasks: RawTask[] = [];
   for (const command of settingList('goCommands', DEFAULT_GO_COMMANDS)) {
@@ -1615,7 +1754,8 @@ async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest
     tasks.push({ name: command, command: argv.join(' '), argv });
   }
 
-  return tasks.length > 0 ? { tasks, packageName: module?.[1] } : undefined;
+  // Every row is a `goCommands` entry, and `run` answers to the `.go` files too.
+  return tasks.length > 0 ? { tasks, packageName: module?.[1], shaped: () => true } : undefined;
 }
 
 /**
@@ -1625,11 +1765,14 @@ async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest
  * `main.go` is checked first as the cheap common case; otherwise the root `.go`
  * files (tests excluded) are read for the package and entry-point declarations.
  */
-async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
+async function goRootIsProgram(cwd: vscode.Uri, release: number | undefined): Promise<boolean> {
   const entries = await listDirectory(cwd);
   const sources = entries
     .filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.go') && !name.endsWith('_test.go'))
     .map(([name]) => name)
+    // Before the read rather than after it: a file for another platform is
+    // settled by its name, and reading it would only spend the budget below.
+    .filter(goFileNameApplies)
     // `main.go` first, and read like any other file rather than believed on its
     // name: a library may hold a `main.go` that says `package library`, and
     // `go run .` on that fails with "not a main package". Putting it first is
@@ -1654,9 +1797,11 @@ async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
       continue;
     }
     budget -= text.length;
-    if (!goFileNameApplies(name) || GO_BUILD_IGNORE.test(text) || !goBuildApplies(text)) {
+    if (!goBuildApplies(text, release)) {
       // `//go:build ignore` + `package main` is the `go generate` helper idiom;
-      // it does not make a library a program.
+      // it does not make a library a program. No test of its own for that: `ignore`
+      // is a tag nothing sets, so the evaluator already says no to it — and says
+      // yes to `ignore || darwin` on a Mac, which is what Go does too.
       continue;
     }
     const code = goCode(text);
@@ -1672,7 +1817,6 @@ async function goRootIsProgram(cwd: vscode.Uri): Promise<boolean> {
 const GO_PACKAGE_MAIN = /^package\s+main\s*$/m;
 /** The exact entry point required by the Go specification. */
 const GO_MAIN_FUNCTION = /^func\s+main\s*\(\s*\)\s*\{/m;
-const GO_BUILD_IGNORE = /^\/\/\s*(?:go:build|\+build)\s+ignore\b/m;
 /** How much of a module root is read looking for its package clause. */
 const MAX_GO_ROOT_BYTES = 256_000;
 
@@ -1692,46 +1836,77 @@ const GO_UNIX = new Set([
   'netbsd', 'openbsd', 'solaris',
 ]);
 
-/** Applies Go's platform suffix and ignored-file conventions without spawning Go. */
+/**
+ * Applies Go's platform suffix and ignored-file conventions without spawning Go.
+ *
+ * As `go/build` does it: whatever comes before the first `_` is the file's own
+ * name and never a suffix, so `linux.go` and `windows.go` are built everywhere —
+ * only `x_linux.go` is Linux's alone.
+ */
 function goFileNameApplies(name: string): boolean {
   if (name.startsWith('.') || name.startsWith('_')) {
     return false;
   }
-  const parts = name.slice(0, -3).split('_');
+  const stem = name.slice(0, -3);
+  const at = stem.indexOf('_');
+  if (at < 0) {
+    return true;
+  }
+  const parts = stem.slice(at + 1).split('_');
+  if (parts.at(-1) === 'test') {
+    parts.pop();
+  }
   const last = parts.at(-1) ?? '';
   const before = parts.at(-2) ?? '';
-  if (GO_ARCHES.has(last)) {
-    return last === CURRENT_GOARCH && (!GO_OSES.has(before) || before === CURRENT_GOOS);
+  if (GO_OSES.has(before) && GO_ARCHES.has(last)) {
+    return before === CURRENT_GOOS && last === CURRENT_GOARCH;
   }
-  return !GO_OSES.has(last) || last === CURRENT_GOOS;
+  if (GO_OSES.has(last)) {
+    return last === CURRENT_GOOS;
+  }
+  return !GO_ARCHES.has(last) || last === CURRENT_GOARCH;
 }
 
 /** Applies modern and legacy build constraints using the host's standard tags. */
-function goBuildApplies(text: string): boolean {
+function goBuildApplies(text: string, release?: number): boolean {
+  const term = (tag: string) => goBuildTerm(tag, release);
   const modern = /^\/\/go:build\s+(.+)$/m.exec(text)?.[1];
   if (modern !== undefined) {
-    return goBuildExpression(modern);
+    return goBuildExpression(modern, term);
   }
   const legacy = [...text.matchAll(/^\/\/\s*\+build\s+(.+)$/gm)].map((match) => match[1]);
   return legacy.every((line) =>
-    line.trim().split(/\s+/).some((option) => option.split(',').every(goBuildTerm)),
+    line.trim().split(/\s+/).some((option) => option.split(',').every(term)),
   );
 }
 
-function goBuildTerm(term: string): boolean {
+/**
+ * One tag, as the host's own toolchain would set it — as far as that can be
+ * known without running it. What cannot be known reads as unset, which is the
+ * answer that costs a missing `run` row rather than one that fails.
+ */
+function goBuildTerm(term: string, release?: number): boolean {
   if (term.startsWith('!')) {
-    return !goBuildTerm(term.slice(1));
+    return !goBuildTerm(term.slice(1), release);
+  }
+  // A toolchain sets every `go1.N` up to its own version. The installed one is
+  // not known here, but the module's `go` line is a floor under it.
+  const tag = /^go1\.(\d+)$/.exec(term);
+  if (tag) {
+    return release !== undefined && Number(tag[1]) <= release;
   }
   return (
     term === CURRENT_GOOS ||
     term === CURRENT_GOARCH ||
     term === 'gc' ||
     (term === 'unix' && GO_UNIX.has(CURRENT_GOOS))
+    // `cgo` is not here: it is off under `CGO_ENABLED=0` and wherever no C
+    // compiler is found, which a scan cannot tell apart from on.
   );
 }
 
 /** Recursive-descent evaluator for identifiers, !, &&, || and parentheses. */
-function goBuildExpression(source: string): boolean {
+function goBuildExpression(source: string, term: (tag: string) => boolean): boolean {
   const tokens = source.match(/[A-Za-z0-9_.]+|&&|\|\||[!()]/g) ?? [];
   let index = 0;
   const primary = (): boolean => {
@@ -1747,7 +1922,7 @@ function goBuildExpression(source: string): boolean {
       index++;
       return value;
     }
-    return token !== undefined && goBuildTerm(token);
+    return token !== undefined && term(token);
   };
   const conjunction = (): boolean => {
     let value = primary();
@@ -1867,20 +2042,94 @@ const DEFAULT_COMPOSE_COMMANDS: ReadonlyArray<string> = ['build', 'logs', 'ps'];
  * starts, so ■ has nothing to stop and the spinner lies. `--wait` is compose's
  * alone — `docker run` has no such flag — and costs nothing to test for.
  */
-function detaches(word: string): boolean {
-  return (
-    // A bundle of short options carrying `d`, which is how `docker run` is
-    // conventionally written: `-dit` is in Docker's own documentation, and the
-    // `-d` inside it detaches exactly as a `-d` on its own would. Lower case
-    // only, so the `-D` that means `--debug` is left where it is, and one dash
-    // only, so `--detach-keys=…` — which sets a key sequence rather than
-    // detaching — is not swept up by it.
-    /^-[a-z]*d[a-z]*$/.test(word) ||
-    word === '--detach' ||
-    word.startsWith('--detach=') ||
-    word === '--wait' ||
-    word.startsWith('--wait=')
-  );
+/** Short options of `docker run` and compose that take a value, which ends a bundle. */
+const SHORT_VALUE_OPTIONS = new Set(['a', 'c', 'e', 'f', 'h', 'l', 'm', 'p', 'u', 'v', 'w']);
+
+/**
+ * A word with any request to detach taken out of it, or nothing when that was
+ * all it said.
+ *
+ * A bundle of short options is how `docker run` is conventionally written:
+ * `-dit` is in Docker's own documentation, and `-dT` is compose's `exec`. The
+ * `d` inside one detaches exactly as a `-d` on its own would, so it is the `d`
+ * that goes and the rest of the bundle that stays — `-dit` is still `-it`.
+ * Only up to the first letter that takes a value, since the rest of the word is
+ * that value: the `d` of `-edev` belongs to `dev`. A capital `D` is `--debug`
+ * and stays; `--detach-keys=…` sets a key sequence rather than detaching, and
+ * is not swept up either.
+ */
+function withoutDetach(word: string): string | undefined {
+  if (word === '--detach' || word.startsWith('--detach=') || word === '--wait' || word.startsWith('--wait=')) {
+    return undefined;
+  }
+  if (!/^-[A-Za-z]/.test(word) || word.startsWith('--')) {
+    return word;
+  }
+  let out = '-';
+  for (let at = 1; at < word.length; at++) {
+    const letter = word[at];
+    if (SHORT_VALUE_OPTIONS.has(letter)) {
+      out += word.slice(at);
+      break;
+    }
+    if (letter !== 'd') {
+      out += letter;
+    }
+  }
+  return out === '-' ? undefined : out;
+}
+
+/** `words`, with every request to detach taken out; see `withoutDetach`. */
+function undetached(list: ReadonlyArray<string>): string[] {
+  return list.flatMap((word) => withoutDetach(word) ?? []);
+}
+
+/** compose's own options that take their value as the next word, global ones included. */
+const COMPOSE_VALUE_OPTIONS = new Set([
+  '-f', '--file', '-p', '--project-name', '--profile', '--env-file', '--project-directory',
+  '--ansi', '--progress', '--parallel',
+  '-e', '--env', '--env-from-file', '-l', '--label', '--name', '--publish', '-u', '--user',
+  '-v', '--volume', '-w', '--workdir', '--entrypoint', '--cap-add', '--cap-drop', '--pull', '--index',
+]);
+
+/**
+ * A compose command of the user's own, as words, minus any request to detach —
+ * but only where compose itself reads it. `run` and `exec` stop taking options
+ * at the service name, and everything after it is the command inside the
+ * container: the `-d` of `exec web ls -d /tmp` is `ls`'s, and the `-vd` of
+ * `run web pytest -vd` is pytest's. Every other subcommand takes its options
+ * anywhere, so there a detach is dropped wherever it stands.
+ */
+function composeUserArgs(entry: string): string[] {
+  const all = words(entry);
+  const out: string[] = [];
+  let index = 0;
+  const option = () => {
+    const word = withoutDetach(all[index++]);
+    if (word === undefined) {
+      return;
+    }
+    out.push(word);
+    if (COMPOSE_VALUE_OPTIONS.has(word) && index < all.length) {
+      out.push(all[index++]);
+    }
+  };
+  while (index < all.length && all[index].startsWith('-')) {
+    option();
+  }
+  const verb = all[index];
+  if (verb === undefined) {
+    return out;
+  }
+  out.push(verb);
+  index++;
+  if (verb !== 'run' && verb !== 'exec') {
+    return [...out, ...undetached(all.slice(index))];
+  }
+  while (index < all.length && all[index].startsWith('-') && all[index] !== '--') {
+    option();
+  }
+  return [...out, ...all.slice(index)];
 }
 
 const DOCKER_COMPOSE_COMMANDS: Record<string, string[]> = {
@@ -1993,7 +2242,7 @@ async function parseCompose(
     // truth only by accident — which is the one thing this setting promises
     // never happens, and splitting entries into words is what made `up -d`
     // reach the terminal at all.
-    const args = listed ?? words(entry).filter((word) => !detaches(word));
+    const args = listed ?? composeUserArgs(entry);
     if (args.length === 0) {
       continue;
     }
@@ -2014,7 +2263,9 @@ async function parseCompose(
     }
   }
 
-  return { tasks, packageName: project?.[1] };
+  // `up`, `down` and the per-service `up: <service>` rows are the file's; the
+  // rest are `dockerComposeCommands`. A service deleted from the file is gone.
+  return { tasks, packageName: project?.[1], shaped: (name: string) => !name.startsWith('up: ') };
 }
 
 /** The override file beside a compose manifest, in compose's own order of preference. */
@@ -2107,7 +2358,9 @@ const DOCKERFILE_COMMANDS: Record<string, DockerfileCommand> = {
     hasOption(extra, ['-t', '--tag'])
       ? ['build', '-f', file, ...extra, '.']
       : ['build', '-f', file, ...extra, '-t', tag(optionValue(extra, '--target')), '.'],
-  run: ({ extra, tag }) => ['run', '--rm', '-it', ...extra, tag()],
+  // `-it` is always there, so an `-i`, `-t` or `-it` of the user's own — what is
+  // left of a `-dit` — is not written a second time.
+  run: ({ extra, tag }) => ['run', '--rm', '-it', ...extra.filter((word) => !/^-[it]+$/.test(word)), tag()],
   push: ({ extra, tag }) => (pushNamesImage(extra) ? ['push', ...extra] : ['push', ...extra, tag()]),
 };
 
@@ -2256,7 +2509,7 @@ function parseDockerfile(text: string, file: string, cwd: vscode.Uri): ParsedMan
     // container up, the square with nothing to stop and the spinner telling the
     // truth only by accident — and a row still labelled `run -d` would promise
     // what the terminal never got.
-    const [head, ...extra] = words(entry).filter((word) => !detaches(word));
+    const [head, ...extra] = undetached(words(entry));
     if (!head) {
       continue;
     }
@@ -2308,7 +2561,9 @@ function parseDockerfile(text: string, file: string, cwd: vscode.Uri): ParsedMan
     }
   }
 
-  return { tasks };
+  // `build` and its `build: <stage>` rows are the file's; the rest are
+  // `dockerfileCommands`. A stage deleted from the file is gone.
+  return { tasks, shaped: (name: string) => !name.startsWith('build: ') };
 }
 
 // --- shell scripts -----------------------------------------------------------
@@ -2346,7 +2601,7 @@ const DEFAULT_SHELL_SCRIPTS: ReadonlyArray<string> = [
  * defaults above name four extensions on one readable line, and lets anyone write
  * a braced pattern of their own in the setting.
  */
-function expandBraces(pattern: string): string[] {
+export function expandBraces(pattern: string): string[] {
   let expanded = [pattern];
   // One group per pass, across every pattern the last pass produced, so the work
   // stops at the budget rather than at the end of an expansion nobody asked for:
@@ -2569,8 +2824,15 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
   const runner = shellRunner();
   const runners = shellRunners();
   const entries: ScriptEntry[] = [];
+  // Only the description is kept out of each read: the text can run to a
+  // megabyte, and two hundred of them held until the loop ends is a lot of
+  // memory to spend on one dimmed line each.
+  const descriptions = await inBatches(files, SCAN_CONCURRENCY, async (file) => {
+    const text = await readText(file);
+    return text !== undefined ? shellDescription(text, extensionOf(file)) : undefined;
+  });
 
-  for (const file of files) {
+  for (const [at, file] of files.entries()) {
     const directory = directoryOf(file);
     // The workspace folder root, not the script's own directory: a
     // `scripts/deploy.sh` is written to be run from the root of the repository,
@@ -2592,7 +2854,6 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
     // back a function off `Object.prototype`.
     const words = known(runners, extension)?.trim().split(/\s+/).filter(Boolean) ?? runner;
     const argv = [...words, `./${inside}`];
-    const text = await readText(file);
 
     entries.push({
       // The file name keeps its extension: it is the identity in `scriptKey`,
@@ -2600,7 +2861,7 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
       // `deploy.sh` to `['deploy', 'sh']` so the icon rules still read it.
       key: scriptKey(directory.toString(), path.posix.basename(file.path)),
       name: path.posix.basename(file.path),
-      command: (text !== undefined ? shellDescription(text, extension) : undefined) ?? argv.join(' '),
+      command: descriptions[at] ?? argv.join(' '),
       argv,
       manifest: directory,
       file,
@@ -2699,17 +2960,22 @@ function commandOf(value: unknown): string | undefined {
   return typeof command === 'string' ? command : undefined;
 }
 
-async function readText(uri: vscode.Uri): Promise<string | undefined> {
+/**
+ * A text file, or nothing when it is missing, unreadable or over `maxBytes`.
+ * Exported for the icon theme reader, which wants the same guard with a larger
+ * budget: a pack's theme file runs to megabytes where a manifest never does.
+ */
+export async function readText(uri: vscode.Uri, maxBytes = MAX_MANIFEST_BYTES): Promise<string | undefined> {
   try {
     // Asked of the file system first, so a huge file is never pulled into the
     // extension host only to be thrown away. The check after the read stays: the
     // file can grow between the two calls.
     const info = await vscode.workspace.fs.stat(uri);
-    if (info.size > MAX_MANIFEST_BYTES) {
+    if (info.size > maxBytes) {
       return undefined;
     }
     const bytes = await vscode.workspace.fs.readFile(uri);
-    if (bytes.byteLength > MAX_MANIFEST_BYTES) {
+    if (bytes.byteLength > maxBytes) {
       return undefined;
     }
     const text = Buffer.from(bytes).toString('utf8');
@@ -2883,12 +3149,16 @@ export function resolvePackageManager(script: ScriptEntry): PackageManager {
 }
 
 async function detectPackageManagers(entries: ScriptEntry[], started: number): Promise<void> {
+  // Per directory, for this walk only. A monorepo's packages all climb through
+  // the same parents to the one lock file at the root, and each of those parents
+  // is a dozen stats — asked once here rather than once per package.
+  const lockFiles = new Map<string, PackageManager | undefined>();
   for (const entry of entries) {
     const dir = entry.cwd.toString();
     if (entry.kind !== 'npm' || detected.has(dir)) {
       continue;
     }
-    const found = await detectPackageManager(entry);
+    const found = await detectPackageManager(entry, lockFiles);
     // A `resetSources` during the stat walk has cleared the map. A result
     // computed from the old hints must not land in it: the fresh scan would see
     // the directory as already detected, skip it, and keep launching the
@@ -2904,7 +3174,10 @@ async function detectPackageManagers(entries: ScriptEntry[], started: number): P
   }
 }
 
-async function detectPackageManager(entry: ScriptEntry): Promise<PackageManager | undefined> {
+async function detectPackageManager(
+  entry: ScriptEntry,
+  lockFiles: Map<string, PackageManager | undefined>,
+): Promise<PackageManager | undefined> {
   const hints = nodeHints.get(entry.manifest.toString());
 
   // 1. An explicit "packageManager": "<name>@<version>" field wins.
@@ -2914,21 +3187,37 @@ async function detectPackageManager(entry: ScriptEntry): Promise<PackageManager 
     return fromField;
   }
 
-  // 2. Then the "engines" field, e.g. { "engines": { "pnpm": ">=9" } }.
-  const engines = hints?.engines;
-  if (engines) {
-    const fromEngines = ENGINE_KEYS.find((manager) => typeof engines[manager] === 'string');
-    if (fromEngines) {
-      return fromEngines;
-    }
+  // 2. Then lock and config files, nearest-first: the package itself, then each
+  //    parent up to the workspace folder, where monorepo lock files live. A lock
+  //    file is what the project was actually installed with; `engines` below
+  //    only pins versions, and `"npm": ">=9"` beside a pnpm-lock.yaml is the
+  //    usual way of saying which npm is too old, not that npm is the runner.
+  const fromLock = await lockFileManager(entry, lockFiles);
+  if (fromLock) {
+    return fromLock;
   }
 
-  // 3. Finally lock and config files, nearest-first: the package itself, then
-  //    each parent up to the workspace folder, where monorepo lock files live.
+  // 3. Finally the "engines" field, e.g. { "engines": { "pnpm": ">=9" } }. npm
+  //    is left out: it is the fallback anyway, so naming it here says nothing.
+  const engines = hints?.engines;
+  return engines
+    ? ENGINE_KEYS.find((manager) => manager !== 'npm' && typeof engines[manager] === 'string')
+    : undefined;
+}
+
+async function lockFileManager(
+  entry: ScriptEntry,
+  lockFiles: Map<string, PackageManager | undefined>,
+): Promise<PackageManager | undefined> {
   const root = vscode.workspace.getWorkspaceFolder(entry.manifest)?.uri.path;
   let current = entry.cwd;
   for (;;) {
-    const found = await detectionFileManager(current);
+    const key = current.toString();
+    let found = lockFiles.get(key);
+    if (!lockFiles.has(key)) {
+      found = await detectionFileManager(current);
+      lockFiles.set(key, found);
+    }
     if (found) {
       return found;
     }

@@ -33,8 +33,8 @@ after switching branches, is one click rather than five terminal tabs. Every row
 ### And it knows how to run things
 
 Whether a package wants `npm run`, `yarn`, `pnpm run`, `bun run` or `deno task` is read off the
-project itself — the `packageManager` field, `engines`, or the lock files beside the package and
-above it. Everything else names its own runner by the table it is declared in: a task under
+project itself — the `packageManager` field, the lock files beside the package and above it, or
+`engines`. Everything else names its own runner by the table it is declared in: a task under
 `[tool.pdm.scripts]` is a pdm task wherever it lives. So one list works unchanged across a mixed
 monorepo.
 
@@ -1110,7 +1110,11 @@ them to a future script that happens to take the name back.
 The check is narrow on purpose: a ref goes only when its own manifest was part of that scan. "The
 file is not here right now" is not "the task is gone", so a closed workspace folder, an ecosystem
 switched off in `taskRunnerUltimate.sources`, and a scan cut short at the manifest cap all keep
-everything they had. Hidden packages, folded groups and the order of the headings are keyed by a
+everything they had. The same goes for a row a setting may have taken away: taking `test` out of
+`taskRunnerUltimate.cargoCommands` removes a row from a `Cargo.toml` that is still there, and putting
+it back brings the row back with its star and colour. The rows a file declares by itself are still
+checked — a compose service, a Dockerfile stage, a binary of a crate or a poe task deleted from the
+file takes its marks with it. Hidden packages, folded groups and the order of the headings are keyed by a
 manifest rather than by a task, and are never touched by this — a manifest losing a script says
 nothing about whether the manifest is still there.
 
@@ -1329,10 +1333,11 @@ declared in, or in the file name itself — the one exception, `[project.scripts
 
 1. `taskRunnerUltimate.packageManager`, if set to something other than `auto`.
 2. The `packageManager` field — `"packageManager": "pnpm@9.1.0"`.
-3. The `engines` field — `deno`, `bun`, `pnpm`, `yarn`, then `npm` (so the usual
-   `{ "node": …, "npm": … }` still resolves to npm).
-4. Lock and config files, in the package directory first, then each parent up to the workspace
+3. Lock and config files, in the package directory first, then each parent up to the workspace
    folder — which is where a monorepo keeps its lock file.
+4. The `engines` field — `deno`, `bun`, `pnpm`, then `yarn`. `npm` there is not a signal: the usual
+   `{ "node": …, "npm": ">=9" }` pins a version, and beside a `pnpm-lock.yaml` it must not turn a
+   pnpm project into an npm one. With no lock file it lands on npm anyway, as the fallback.
 
 | Signal | Runner |
 | --- | --- |

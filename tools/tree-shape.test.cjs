@@ -25,7 +25,7 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }) } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }), shaped = [] } = {}) {
   const probes = [];
   const launched = [];
   const terminals = [];
@@ -215,6 +215,9 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
                 ALL_ECOSYSTEMS: [...new Set(Object.values(ECOSYSTEMS))],
                 collectScripts: async () => scan,
                 emptyManifests: () => [],
+                // A path alone is a manifest whose every row a setting decides.
+                settingShapedManifests: () =>
+                  shaped.map((entry) => (Array.isArray(entry) ? [uri(entry[0]), entry[1]] : [uri(entry), () => true])),
                 scriptKey: (manifest, task) => `${manifest}::${task}`,
                 commandFor: (entry) => (entry.argv ?? [entry.name]).join(' '),
                 launchArgv: (entry) => entry.argv ?? [entry.name],
@@ -1955,6 +1958,42 @@ test('a Dockerfile row carries no confirmation toggle, and no flag on it survive
   await h.pruneStaleRefs(rows);
   assert.deepEqual([...h.memento.data.confirmations], ['file:///repo/package.json::deploy']);
   assert.deepEqual([...h.memento.data.favorites], ['file:///repo/Dockerfile::run']);
+});
+
+test('a row a setting took away keeps its marks, a row the file dropped does not', async () => {
+  // `test` gone from `cargoCommands` leaves a Cargo.toml that is still there and
+  // still read — and putting the setting back brings the row back, so its star,
+  // its colour and its rename have to be waiting for it. A package.json declares
+  // its scripts itself, so a script missing from it is gone for real.
+  const rows = [script('/repo/Cargo.toml', 'build', 'cargo'), script('/repo/package.json', 'dev', 'npm')];
+  const h = harness({
+    settings: { grouping: 'flat' },
+    scan: rows,
+    shaped: ['/repo/Cargo.toml'],
+    stored: {
+      favorites: ['file:///repo/Cargo.toml::test', 'file:///repo/package.json::deploy'],
+      colors: { 'file:///repo/Cargo.toml::test': 'charts.red', 'file:///repo/package.json::deploy': 'charts.blue' },
+      titles: { 'file:///repo/Cargo.toml::test': 'Tests' },
+    },
+  });
+  await h.pruneStaleRefs(rows);
+  assert.deepEqual([...h.memento.data.favorites], ['file:///repo/Cargo.toml::test']);
+  assert.deepEqual(Object.keys(h.memento.data.colors), ['file:///repo/Cargo.toml::test']);
+  assert.deepEqual(Object.keys(h.memento.data.titles), ['file:///repo/Cargo.toml::test']);
+});
+
+test('a compose service the file dropped loses its marks, a command the setting hid keeps them', async () => {
+  const rows = composeFile();
+  const h = harness({
+    settings: { grouping: 'flat' },
+    scan: rows,
+    shaped: [['/repo/docker-compose.yml', (name) => !name.startsWith('up: ')]],
+    stored: {
+      favorites: ['file:///repo/docker-compose.yml::up: worker', 'file:///repo/docker-compose.yml::logs'],
+    },
+  });
+  await h.pruneStaleRefs(rows);
+  assert.deepEqual([...h.memento.data.favorites], ['file:///repo/docker-compose.yml::logs']);
 });
 
 test('the Dockerfile menu offers the stages and the extra commands', async () => {
