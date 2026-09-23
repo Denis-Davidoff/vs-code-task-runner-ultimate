@@ -5,6 +5,12 @@ restart without ever going looking for a terminal tab.**
 
 ![Task & Script Explorer in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
+## Change log 0.9.0
+
+- Added [custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks): open the ⋮ menu in the panel header and pick **+ Create custom task**.
+
+## Extension Features
+
 - 📋 **[A panel in the left bar](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#the-task--script-explorer-view)** — every task of the workspace as a
   tree, grouped by the manifest it came from. Nothing moves when a task starts, and the number of
   running tasks rides on the activity bar icon as a real VS Code badge.
