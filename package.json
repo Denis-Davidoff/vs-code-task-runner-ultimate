@@ -1,8 +1,8 @@
 {
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
-  "description": "Run all your monorepo's tasks and scripts from a single list: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.9.0",
+  "description": "A task runner for all your monorepo's scripts, in a single list.: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
+  "version": "0.9.1",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
