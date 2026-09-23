@@ -5,6 +5,12 @@ restart without ever going looking for a terminal tab.**
 
 ![Task & Script Explorer in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
+## Change log 0.9.0
+
+- Added [custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks): open the ⋮ menu in the panel header and pick **+ Create custom task**.
+
+## Extension Features
+
 - 📋 **[A panel in the left bar](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#the-task--script-explorer-view)** — every task of the workspace as a
   tree, grouped by the manifest it came from. Nothing moves when a task starts, and the number of
   running tasks rides on the activity bar icon as a real VS Code badge.
@@ -55,6 +61,10 @@ restart without ever going looking for a terminal tab.**
   claimed wears the shell it is read by, the dimmed text is the script's own first comment, and each
   extension is started by the runner that can start it. **Add to Terminal** puts the command line in a fresh
   terminal unrun, for when a script takes arguments.
+- ✍️ **[Custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks)** — a name and a shell command of your own,
+  `docker compose down -v && docker compose up -d db` included, under one **Custom Tasks** heading at
+  the top of the tree. ⋮ → **Create custom task** makes the first, the heading's **+** the rest. Kept in
+  `.vscode/task-script-explorer.json`: commit it for the team, or keep it to yourself.
 - 🧠 **[Knows how to run things](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
   package from `packageManager`, the lock files and `engines`; everything else named by the table it
   is declared in.

@@ -8,12 +8,18 @@ import {
   enabledEcosystems,
   collectScripts,
   commandFor,
+  CUSTOM_GROUP_NAME,
+  CUSTOM_TASKS_FILE,
+  customTasksFile,
   Ecosystem,
   ecosystemOf,
+  editCustomTasks,
   emptyManifests,
   GO_GLOB,
   launchArgv,
   plainArgument,
+  readCustomTasks,
+  readText,
   resetSources,
   scriptKey,
   ScriptEntry,
@@ -229,6 +235,55 @@ function invalidateSoon(): void {
   }, INVALIDATE_DELAY);
 }
 
+/** One watcher per workspace folder's custom tasks file, rebuilt when the folders change. */
+let customWatchers: vscode.Disposable[] = [];
+
+/**
+ * The text the tree last wrote to each custom tasks file, by URI. A write from
+ * the tree rescans on its own, straight away; the watcher's event for that same
+ * write would be a second full rescan for nothing, so it is recognised by its
+ * content and let go.
+ */
+const customWritten = new Map<string, string>();
+
+/**
+ * Watches each workspace folder's custom tasks file, and nothing else: a
+ * pattern relative to the folder, where a `**` glob would also wake on the
+ * `.vscode` of every package inside it — files the scan never reads.
+ *
+ * This is for the edits made by hand, and by `git pull`.
+ */
+function watchCustomTasks(): void {
+  unwatchCustomTasks();
+  const changed = async (uri: vscode.Uri) => {
+    const ours = customWritten.get(uri.toString());
+    if (ours !== undefined) {
+      if ((await readText(uri)) === ours) {
+        return;
+      }
+      customWritten.delete(uri.toString());
+    }
+    invalidateSoon();
+  };
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, CUSTOM_TASKS_FILE));
+    watcher.onDidCreate(changed);
+    watcher.onDidChange(changed);
+    watcher.onDidDelete((uri) => {
+      customWritten.delete(uri.toString());
+      invalidateSoon();
+    });
+    customWatchers.push(watcher);
+  }
+}
+
+function unwatchCustomTasks(): void {
+  for (const watcher of customWatchers) {
+    watcher.dispose();
+  }
+  customWatchers = [];
+}
+
 /** Drops a rescan that has been scheduled but not run — for `deactivate`. */
 function cancelInvalidate(): void {
   clearTimeout(invalidateTimer);
@@ -359,6 +414,18 @@ export function activate(context: vscode.ExtensionContext): void {
       setConfirmation(node, false),
     ),
     vscode.commands.registerCommand('taskRunnerUltimate.editTitle', (node?: TreeNode) => editTitle(node)),
+    // The custom tasks, which are the one kind of row the tree writes rather than
+    // reads. Creating one works with no row at all — from the ⋯ menu, the palette,
+    // or the + on the heading, which hands its own folder over.
+    vscode.commands.registerCommand('taskRunnerUltimate.createCustomTask', (node?: TreeNode) =>
+      createCustomTask(node),
+    ),
+    vscode.commands.registerCommand('taskRunnerUltimate.editCustomTask', (node?: TreeNode) =>
+      editCustomTask(node),
+    ),
+    vscode.commands.registerCommand('taskRunnerUltimate.deleteCustomTask', (node?: TreeNode) =>
+      deleteCustomTask(node),
+    ),
     // The two eyes on a package heading, one edit to one group each, so they take
     // the row they were clicked on and nothing else. Reordering has no command of
     // its own: a heading is moved by dragging it, which is the gesture the rows
@@ -414,14 +481,20 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
-      provideTasks: async () => (await collectScripts()).map((script) => buildTask(script)),
+      // A custom task nobody has approved is left out: the workbench's own Run
+      // Task list would otherwise be a way round the question `approveLaunch`
+      // asks. See `clearance`.
+      provideTasks: async () =>
+        (await collectScripts())
+          .filter((script) => clearance(script) === 'approved')
+          .map((script) => buildTask(script)),
       resolveTask: async (task) => {
         const key = keyForTask(task);
         if (!key) {
           return undefined;
         }
         const entry = (await collectScripts()).find((item) => item.key === key);
-        return entry ? buildTask(entry) : undefined;
+        return entry && clearance(entry) === 'approved' ? buildTask(entry) : undefined;
       },
     }),
     vscode.tasks.onDidStartTask(({ execution }) => {
@@ -492,14 +565,20 @@ export function activate(context: vscode.ExtensionContext): void {
   shellWatcher.onDidChange(onShellChange);
   shellWatcher.onDidDelete(onShellChange);
 
+  watchCustomTasks();
+
   context.subscriptions.push(
     watcher,
     sourceWatcher,
     goWatcher,
     shellWatcher,
+    { dispose: unwatchCustomTasks },
     // A rescan waiting on its timer must not outlive the extension.
     { dispose: cancelInvalidate },
-    vscode.workspace.onDidChangeWorkspaceFolders(() => invalidate()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      watchCustomTasks();
+      invalidate();
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       // Anything that decides which manifests are read, or what is read out of
       // them, needs the scan done again; the rest only changes how what we
@@ -555,6 +634,7 @@ export function deactivate(): void {
   folded = undefined;
   containers.clear();
   prunedScan = undefined;
+  customWritten.clear();
   // The module outlives a deactivate when the host keeps it loaded, so the flag
   // goes back with it: a second `activate` gets a new `context`, and the entry
   // that disposes the status bar has to be put in that one.
@@ -829,6 +909,7 @@ const COLLAPSED_KEY = 'collapsed';
 const COLORS_KEY = 'colors';
 const ICONS_KEY = 'icons';
 const CONFIRM_KEY = 'confirmations';
+const APPROVALS_KEY = 'approvals';
 
 let storage: vscode.Memento | undefined;
 /** This extension's `publisher.name`, for the query that filters the settings editor. */
@@ -1085,7 +1166,10 @@ function customGroupTitle(script: ScriptEntry): string | undefined {
 
 /** What the lists show for a script: the user's title if it has one, else its name. */
 function displayName(script: ScriptEntry): string {
-  return customTitle(script) ?? script.name;
+  const name = customTitle(script) ?? script.name;
+  // A custom task's name comes out of a file anybody can write, and a row is as
+  // good a place as a dialog to draw a bidi override the wrong way round.
+  return script.kind === 'custom' ? visible(name) : name;
 }
 
 /** The rename dialog, for a script row and for a group heading alike. */
@@ -1095,6 +1179,13 @@ async function editTitle(node: TreeNode | undefined): Promise<void> {
     // disk, so they carry no ref and there is nothing to restore a rename to.
     await renameRef(node.ref, node.label, 'package');
   } else if (node?.kind === 'script') {
+    // A custom task is the one row whose name is ours to change, so there the
+    // rename is a real one. A title laid over a name the user typed themselves
+    // would only draw the same row twice — once as the title, once dimmed.
+    if (node.script.kind === 'custom') {
+      await renameCustomTask(node.script);
+      return;
+    }
     await renameRef(scriptRef(node.script), node.script.name, 'task');
   }
 }
@@ -1291,6 +1382,449 @@ async function renameRef(
   }
   await storage?.update(TITLES_KEY, titles);
   repaint();
+}
+
+// --- custom tasks ------------------------------------------------------------
+
+/**
+ * The workspace folder a custom task goes into, or `undefined` when the user
+ * backs out or there is none.
+ *
+ * A row names its own: the + on a Custom Tasks heading is that heading's folder,
+ * and so is any row under it. With nothing to go by — the ⋯ menu, the palette —
+ * a single folder is the answer and several are a question, asked the way the
+ * workbench asks it for `tasks.json`.
+ */
+async function customFolder(node: TreeNode | undefined): Promise<vscode.WorkspaceFolder | undefined> {
+  const named =
+    node?.kind === 'script' ? node.script.manifest : node?.kind === 'group' ? node.manifest : undefined;
+  const own = named ? vscode.workspace.getWorkspaceFolder(named) : undefined;
+  if (own) {
+    return own;
+  }
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length === 0) {
+    void vscode.window.showWarningMessage('Open a folder first: a custom task is kept in the folder it runs in.');
+    return undefined;
+  }
+  if (folders.length === 1) {
+    return folders[0];
+  }
+  return vscode.window.showWorkspaceFolderPick({ placeHolder: 'Which folder should the task run in?' });
+}
+
+/**
+ * The custom tasks a folder has right now, by name — read off the file itself,
+ * which is one read, where the scan would be every manifest in the workspace to
+ * learn the keys of one file it may already be behind.
+ */
+async function customNames(folder: vscode.WorkspaceFolder): Promise<Set<string>> {
+  return new Set((await readCustomTasks(folder))?.map(([name]) => name));
+}
+
+/** The prompt for a task's name, shared by create and rename so both refuse the same things. */
+function askTaskName(options: { title: string; value?: string; taken: Set<string> }): Thenable<string | undefined> {
+  return vscode.window.showInputBox({
+    title: options.title,
+    prompt: 'What the row is called in this list.',
+    placeHolder: 'e.g. Reset database',
+    value: options.value,
+    validateInput: (value) => {
+      const name = value.trim();
+      if (!name) {
+        return 'A task needs a name.';
+      }
+      if (HIDDEN_CHARACTERS.test(value)) {
+        return 'Line breaks and hidden characters cannot be part of a name.';
+      }
+      // Its own name is not a clash: a rename that changes nothing is a no-op.
+      return name !== options.value && options.taken.has(name) ? `"${name}" is already a custom task here.` : undefined;
+    },
+  });
+}
+
+/** The prompt for a task's command line, shared by create and edit. */
+function askTaskCommand(options: { title: string; value?: string; folder: vscode.WorkspaceFolder }): Thenable<string | undefined> {
+  return vscode.window.showInputBox({
+    title: options.title,
+    prompt: `A shell command, run in ${options.folder.name}. Chains, pipes and variables work as they do in a terminal.`,
+    placeHolder: 'e.g. docker compose down -v && docker compose up -d db',
+    value: options.value,
+    // A pasted line can still carry what a keyboard cannot type, and the tree
+    // refuses to run such a line — so it refuses to save one too.
+    validateInput: (value) =>
+      !value.trim()
+        ? 'A task needs a command to run.'
+        : HIDDEN_CHARACTERS.test(value)
+          ? 'Line breaks and hidden characters cannot be part of a command.'
+          : undefined,
+  });
+}
+
+/**
+ * Writes a folder's custom tasks and rescans, or says why it could not. The
+ * write goes through `editCustomTasks`, which refuses to replace a file it
+ * cannot read, and that refusal is the one failure worth a sentence.
+ */
+async function writeCustomTasks(
+  folder: vscode.WorkspaceFolder,
+  edit: (tasks: Array<[string, string]>) => Array<[string, string]> | undefined,
+  written?: () => Promise<void>,
+): Promise<boolean> {
+  try {
+    const body = await editCustomTasks(folder, edit);
+    if (body === undefined) {
+      return false;
+    }
+    customWritten.set(customTasksFile(folder).toString(), body);
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      `Custom tasks were not saved: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
+  // What the tree files against the new state — an approval, a ref moved to a
+  // new name — goes in before the rescan and not after it. The prune that runs
+  // on that rescan would otherwise read a renamed task's old ref as a deleted
+  // task's and drop it, and a new row would be drawn unapproved for a moment.
+  await written?.();
+  // Straight away rather than through the watcher's delay: the user is looking
+  // at the tree, waiting for the row they just made.
+  invalidate();
+  return true;
+}
+
+/** The ref a custom task of this folder is filed under, before any scan has seen it. */
+function customRef(folder: vscode.WorkspaceFolder, name: string): string {
+  return `${manifestRef(customTasksFile(folder))}::${name}`;
+}
+
+/** A name and a command line, asked one after the other, filed in the folder's custom tasks. */
+async function createCustomTask(node: TreeNode | undefined): Promise<void> {
+  const folder = await customFolder(node);
+  if (!folder) {
+    return;
+  }
+  const taken = await customNames(folder);
+  const name = (await askTaskName({ title: 'New Custom Task (1/2)', taken }))?.trim();
+  if (!name) {
+    return;
+  }
+  const line = (await askTaskCommand({ title: `New Custom Task (2/2): ${name}`, folder }))?.trim();
+  if (!line) {
+    return;
+  }
+  await writeCustomTasks(
+    folder,
+    (tasks) =>
+      // Checked again against the file as it is now: the prompt's list is from
+      // the last scan, and the file may have been edited while it was open.
+      tasks.some(([existing]) => existing === name) ? undefined : [...tasks, [name, line]],
+    // Typed here, so seen here: a task made in the tree never asks to be approved.
+    () => approve(customRef(folder, name), line),
+  );
+}
+
+/** A custom task's command line, edited in place. */
+async function editCustomTask(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'script' || node.script.kind !== 'custom') {
+    return;
+  }
+  const { script } = node;
+  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
+  if (!folder) {
+    return;
+  }
+  const line = (
+    await askTaskCommand({ title: `Edit "${visible(script.name)}"`, value: script.line ?? script.command, folder })
+  )?.trim();
+  if (!line) {
+    return;
+  }
+  // Saved unchanged, which on a row that is not approved yet is the user having
+  // read the line and accepted it — the same thing Run in the approval dialog
+  // records, and the same thing saving a changed line does.
+  if (line === script.line) {
+    if (clearance(script) === 'unapproved') {
+      await approve(scriptRef(script), line);
+      repaint();
+    }
+    return;
+  }
+  await writeCustomTasks(
+    folder,
+    (tasks) =>
+      tasks.some(([name]) => name === script.name)
+        ? tasks.map(([name, value]): [string, string] => [name, name === script.name ? line : value])
+        : undefined,
+    () => approve(scriptRef(script), line),
+  );
+}
+
+/**
+ * A custom task under a new name, in the same place in its file, with everything
+ * the tree had filed against the old one moved to the new: its star, colour,
+ * icon, confirmation and place in a dragged order. Without the move, the prune
+ * after the rescan would read the old name as a deleted task and drop them all.
+ *
+ * Refused while the task runs. Its execution is filed under the name it was
+ * started with, and a row that no longer answers to it would leave a live
+ * process nothing in the tree can stop.
+ */
+async function renameCustomTask(script: ScriptEntry): Promise<void> {
+  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
+  if (!folder) {
+    return;
+  }
+  if (running.has(script.key)) {
+    void vscode.window.showWarningMessage(`Stop "${script.name}" before renaming it.`);
+    return;
+  }
+  const taken = await customNames(folder);
+  // Compared as entered before it is trimmed: a name somebody wrote by hand as
+  // ` b `, confirmed unchanged, is not a request to rename it to `b`.
+  const entered = await askTaskName({ title: `Rename "${visible(script.name)}"`, value: script.name, taken });
+  const name = entered?.trim();
+  if (entered === undefined || entered === script.name || !name || name === script.name) {
+    return;
+  }
+  const from = scriptRef(script);
+  const to = `${groupRef(script)}::${name}`;
+  await writeCustomTasks(
+    folder,
+    (tasks) =>
+      tasks.some(([existing]) => existing === name) || !tasks.some(([existing]) => existing === script.name)
+        ? undefined
+        : tasks.map(([existing, line]): [string, string] => [existing === script.name ? name : existing, line]),
+    // The approval moves with the rest: a rename from the tree changes a name,
+    // not what runs, and that is not a reason to ask again.
+    () => moveRef(from, to),
+  );
+}
+
+/** A custom task taken out of its file, after a confirmation — and stopped first if it runs. */
+async function deleteCustomTask(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'script' || node.script.kind !== 'custom') {
+    return;
+  }
+  const { script } = node;
+  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
+  if (!folder) {
+    return;
+  }
+  const answer = await vscode.window.showWarningMessage(
+    `Delete the custom task "${visible(script.name)}"?`,
+    { modal: true, detail: visible(script.line ?? script.command) },
+    'Delete',
+  );
+  if (answer !== 'Delete') {
+    return;
+  }
+  // The file is asked first, before anything is stopped: a file that has turned
+  // unreadable, or that no longer holds the name, would refuse the write below —
+  // and the task it was meant to delete would have been killed for nothing.
+  const current = await readCustomTasks(folder);
+  if (!current?.some(([name]) => name === script.name)) {
+    void vscode.window.showWarningMessage(
+      current
+        ? `"${visible(script.name)}" is no longer in ${CUSTOM_TASKS_FILE}; nothing was deleted.`
+        : `${CUSTOM_TASKS_FILE} could not be read as a custom tasks file. Fix it by hand, then try again.`,
+    );
+    invalidate();
+    return;
+  }
+  // A row that is gone cannot be stopped from the tree any more, so a run of it
+  // goes first. One that will not stop keeps its row, for the same reason.
+  const execution = running.get(script.key);
+  if (execution && !(await stopExecution(execution))) {
+    return;
+  }
+  // What was filed against it goes with it, through the same prune that follows
+  // a task deleted from any manifest: the file is read, and the name is not in it.
+  await writeCustomTasks(folder, (tasks) =>
+    tasks.some(([name]) => name === script.name) ? tasks.filter(([name]) => name !== script.name) : undefined,
+  );
+}
+
+/** Everything filed against one script ref, filed against another instead. */
+async function moveRef(from: string, to: string): Promise<void> {
+  for (const key of [FAVORITES_KEY, CONFIRM_KEY]) {
+    const refs = storedList(key);
+    if (refs.includes(from)) {
+      await storage?.update(key, refs.map((ref) => (ref === from ? to : ref)));
+    }
+  }
+  for (const key of [TITLES_KEY, COLORS_KEY, ICONS_KEY, APPROVALS_KEY]) {
+    const entries = storedMap(key);
+    if (from in entries) {
+      const { [from]: value, ...rest } = entries;
+      await storage?.update(key, { ...rest, [to]: value });
+    }
+  }
+  const orders = manualOrders();
+  if (Object.values(orders).some((refs) => refs.includes(from))) {
+    await storage?.update(
+      ORDER_KEY,
+      Object.fromEntries(
+        Object.entries(orders).map(([scope, refs]) => [scope, refs.map((ref) => (ref === from ? to : ref))]),
+      ),
+    );
+  }
+}
+
+// --- approving custom tasks --------------------------------------------------
+
+/**
+ * The custom tasks file is the one source whose rows read as the user's own —
+ * they named them, so they click them without reading them — and it sits in the
+ * project, where a `git pull` or any other program can rewrite it. A command
+ * changed behind a familiar name is the case this is here for.
+ *
+ * So a custom task runs straight away only when the line in the file is the
+ * line this machine last approved. The approval is kept in workspace storage,
+ * out of the project, where nothing that can only write the repository can
+ * reach it — which is the whole of its strength; there is no secret to it, and
+ * none is needed. It is the line itself rather than a hash of it, so a changed
+ * task can show what it was beside what it is now.
+ *
+ * A line typed in the tree is approved as it is saved: Create and Edit Command
+ * never ask. What asks is a line that reached the file some other way.
+ *
+ * This is a narrower guard than it may look. The same pull can rewrite a
+ * `package.json` script, and those run unasked, exactly as `npm run` would run
+ * them. The boundary for a repository as a whole is Workspace Trust, and the
+ * extension does not run in Restricted Mode at all.
+ */
+function approvals(): Record<string, string> {
+  return storedMap(APPROVALS_KEY);
+}
+
+async function approve(ref: string, line: string): Promise<void> {
+  await storage?.update(APPROVALS_KEY, { ...approvals(), [ref]: line });
+}
+
+/**
+ * Characters that make a line read one way in a dialog and run another, by
+ * what they are rather than by a list of the ones known so far:
+ *
+ * - control characters (`Cc`) — a line break a shell takes as a second command;
+ * - format characters (`Cf`) — the bidirectional overrides of the Trojan Source
+ *   trick, zero-width joiners, the soft hyphen;
+ * - every space but the ASCII one (`Zs`), and the line and paragraph separators
+ *   (`Zl`, `Zp`) — a no-break or ideographic space draws as blank, so three
+ *   hundred of them push the rest of a line out of the dialog, and `shownLine`
+ *   spells out plain spaces alone;
+ * - whatever Unicode says a renderer may draw as nothing
+ *   (`Default_Ignorable_Code_Point`) — variation selectors, tag characters, the
+ *   Hangul fillers;
+ * - private-use characters, which draw as whatever the font decides;
+ * - the braille blank, the one blank glyph none of the above covers.
+ *
+ * Letters, digits and punctuation of any script pass: `echo привет` is a line
+ * anybody can read. None of what is caught can be typed into the tree's own
+ * prompts, so a line holding one came from somewhere else — and a line the
+ * approval dialog cannot show faithfully is not a line anybody can approve. A
+ * task's name is held to the same rule, since it is drawn in the same dialog.
+ */
+const HIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Default_Ignorable_Code_Point}\u2800]|(?! )\p{Zs}/u;
+const HIDDEN_EVERYWHERE = new RegExp(HIDDEN_CHARACTERS.source, 'gu');
+
+/**
+ * Text with every hidden character written out as its code point, for the
+ * places a blocked task's own name or line has to be shown: a dialog title
+ * holding a line break or a bidi override is the same trick as a command
+ * holding one.
+ */
+function visible(text: string): string {
+  return text.replace(HIDDEN_EVERYWHERE, (char) => `\\u{${(char.codePointAt(0) ?? 0).toString(16)}}`);
+}
+
+/**
+ * Whether a row may run without a word: every row that is not a custom task,
+ * and a custom task whose line is the one approved. `blocked` is a line holding
+ * a hidden character, which is never run whatever has been approved.
+ */
+function clearance(script: ScriptEntry): 'approved' | 'unapproved' | 'blocked' {
+  if (script.kind !== 'custom' || script.line === undefined) {
+    return 'approved';
+  }
+  if (HIDDEN_CHARACTERS.test(script.line) || HIDDEN_CHARACTERS.test(script.name)) {
+    return 'blocked';
+  }
+  return approvals()[scriptRef(script)] === script.line ? 'approved' : 'unapproved';
+}
+
+/**
+ * A line as the approval dialog shows it. A run of spaces is said rather than
+ * drawn: a hundred of them push the rest of the line past the edge of the
+ * dialog, and the rest of the line is the part worth reading.
+ */
+function shownLine(line: string): string {
+  return line.replace(/ {3,}/g, (run) => ` [${run.length} spaces] `);
+}
+
+/**
+ * Whether a row may start: at once for one that is cleared, after the user has
+ * read the whole line and said Run for one that is not — which approves it —
+ * and never for a blocked one.
+ *
+ * Asked before anything is stopped, by the restarts as well: a restart that the
+ * dialog turns down should leave the old run up, not take it down for nothing.
+ */
+async function approveLaunch(script: ScriptEntry): Promise<boolean> {
+  const state = clearance(script);
+  if (state === 'approved' || script.line === undefined) {
+    return true;
+  }
+  const open = 'Open File';
+  if (state === 'blocked') {
+    const answer = await vscode.window.showWarningMessage(
+      `"${visible(script.name)}" will not run.`,
+      {
+        modal: true,
+        detail: [
+          'Its name or command holds a line break or a hidden character, which can make a line run something other than what it shows. Nothing typed into this tree can hold one, so it was written some other way.',
+          '',
+          visible(script.line),
+        ].join('\n'),
+      },
+      open,
+    );
+    if (answer === open) {
+      await openManifest({ kind: 'script', script });
+    }
+    return false;
+  }
+  const before = approvals()[scriptRef(script)];
+  const where = vscode.workspace.getWorkspaceFolder(script.manifest)?.name;
+  const run = 'Run';
+  const answer = await vscode.window.showWarningMessage(
+    before === undefined
+      ? `Run "${script.name}"? It was not added in this tree.`
+      : `"${script.name}" has changed since you last ran it.`,
+    {
+      modal: true,
+      detail: [
+        ...(before === undefined
+          ? [shownLine(script.line)]
+          : ['Was:', shownLine(before), '', 'Now:', shownLine(script.line)]),
+        '',
+        `Runs in ${where ?? 'the workspace folder'}. Once run, it is not asked about again until it changes.`,
+      ].join('\n'),
+    },
+    run,
+    open,
+  );
+  if (answer === open) {
+    await openManifest({ kind: 'script', script });
+    return false;
+  }
+  if (answer !== run) {
+    return false;
+  }
+  await approve(scriptRef(script), script.line);
+  repaint();
+  return true;
 }
 
 // --- row colours -------------------------------------------------------------
@@ -2149,7 +2683,23 @@ async function savedOrder(): Promise<ScriptEntry[]> {
   // The two grouping passes are exclusive by mode, and each is the last word on
   // where a block sits: one gathers ecosystems, the other tucks a project's
   // surroundings in behind it.
-  return orderedByHost(groupedByEcosystem(orderedGroups(orderedScripts(scripts))));
+  return customFirst(orderedByHost(groupedByEcosystem(orderedGroups(orderedScripts(scripts)))));
+}
+
+/**
+ * The scan with the custom tasks at the top, above every package, in both modes.
+ *
+ * They are the rows somebody made for themselves, which is the one list in the
+ * tree nobody has to go looking for — so they do not take part in the order of
+ * the headings, and a drag cannot put them anywhere else. Done here rather than
+ * in the tree for the reason every other pass is: the dropdown and the drag
+ * arithmetic read this same list.
+ */
+function customFirst(scripts: ScriptEntry[]): ScriptEntry[] {
+  const custom = scripts.filter((script) => script.kind === 'custom');
+  return custom.length === 0 || custom.length === scripts.length
+    ? scripts
+    : [...custom, ...scripts.filter((script) => script.kind !== 'custom')];
 }
 
 // --- pruning what the manifests no longer declare -----------------------------
@@ -2248,6 +2798,7 @@ async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
     [TITLES_KEY, customTitles()],
     [COLORS_KEY, customColors()],
     [ICONS_KEY, customIcons()],
+    [APPROVALS_KEY, approvals()],
   ] as const) {
     const kept = Object.fromEntries(Object.entries(entries).filter(([ref]) => !gone(ref)));
     if (Object.keys(kept).length !== Object.keys(entries).length) {
@@ -2516,6 +3067,9 @@ async function showMenu(): Promise<void> {
       CONFIRM_KEY,
       HIDDEN_KEY,
       COLLAPSED_KEY,
+      // Not a customization, but state of the same kind: forgetting it costs a
+      // question per custom task the next time each one runs, and nothing else.
+      APPROVALS_KEY,
     ],
     icon: 'trash',
     name: 'Reset all changes for this project',
@@ -2523,7 +3077,7 @@ async function showMenu(): Promise<void> {
     held: `${allChanges} saved ${allChanges === 1 ? 'change' : 'changes'}`,
     confirm: 'Reset project',
     detail:
-      'Every custom title, colour, icon, favorite, confirmation, hidden package, manual sort order, and saved folded state is cleared for this project.',
+      'Every custom title, colour, icon, favorite, confirmation, hidden package, manual sort order, and saved folded state is cleared for this project. Custom tasks ask to be approved again before they next run.',
     alwaysConfirm: true,
   };
 
@@ -2534,6 +3088,15 @@ async function showMenu(): Promise<void> {
   });
 
   const items: MenuItem[] = [
+    // First, because it is the one entry here that adds to the list rather than
+    // tending it — and until there is a Custom Tasks heading with a + of its own,
+    // this is where a first one is made.
+    {
+      label: '$(add) Create custom task',
+      description: 'a shell command of your own',
+      detail: `Kept in ${CUSTOM_TASKS_FILE}, listed under ${CUSTOM_GROUP_NAME} at the top.`,
+      run: () => createCustomTask(undefined),
+    },
     {
       label: '$(refresh) Refresh scripts',
       description: 'read every manifest again',
@@ -2743,6 +3306,9 @@ const ECOSYSTEMS: Record<Ecosystem, { label: string; icon: string }> = {
   mise: { label: 'mise', icon: 'versions' },
   docker: { label: 'Docker', icon: 'archive' },
   shell: { label: 'Shell', icon: 'terminal-bash' },
+  // A bolt rather than another terminal: these are the shortcuts somebody wrote
+  // for themselves, and the Shell row beside them already owns the terminal.
+  custom: { label: 'Custom', icon: 'zap' },
 };
 
 /**
@@ -2951,9 +3517,16 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
         return;
       }
 
-      const groups = source.flatMap((node) => (node.kind === 'group' && node.ref ? [node] : []));
+      // The custom tasks are not in the order of the headings at all — see
+      // `customFirst` — so a drag of theirs would be a move nothing could show.
+      const groups = source.flatMap((node) =>
+        node.kind === 'group' && node.ref && node.source !== 'custom' ? [node] : [],
+      );
       const first = groups[0];
       if (!first) {
+        if (parent.source === 'custom') {
+          hint(`$(pin) ${CUSTOM_GROUP_NAME} stays at the top — drag the tasks inside it to reorder them`);
+        }
         return;
       }
       const refs = groups.flatMap((node) => (node.ref ? [node.ref] : []));
@@ -3580,11 +4153,18 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
         // `ecosystem` mode is where that row is drawn; in `flat` mode a
         // project's script folders are one `shell` row by the time the tree has
         // them, and that row is named rather than pathed. See `attachToHosts`.
-        folder: script.file
-          ? undefined
-          : colliding.has(headingKey(script, shared))
-            ? packagePath(script)
-            : packageFolder(script),
+        //
+        // The custom tasks take neither either. Their file is always the same
+        // `.vscode/…` path, so it tells the eye nothing; what can differ is the
+        // workspace folder, and only once there is more than one of those.
+        folder:
+          script.kind === 'custom'
+            ? customHeadingFolder(script)
+            : script.file
+              ? undefined
+              : colliding.has(headingKey(script, shared))
+                ? packagePath(script)
+                : packageFolder(script),
         place: script.file ? packagePath(script) : packageHeading(script, shared),
         icon: GROUP_ICON,
         scope: groupRef(script),
@@ -3642,13 +4222,17 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   //
   // A single manifest gets no parent, mirroring the rule `buildItems` follows
   // for package separators: one heading over one heading says nothing.
+  //
+  // The custom tasks stand at the root in both modes, above the rest, which is
+  // where `customFirst` has already put them in the list. A parent row over them
+  // would be a `Custom` heading over a `Custom Tasks` one.
+  const custom = shown.filter((group) => group.source === 'custom');
+  const rest = shown.filter((group) => group.source !== 'custom');
   const roots: TreeNode[] = hierarchical()
     ? // A single manifest under a parent row of its own says nothing, so the one
       // group stands at the root by itself. `attachToHosts` is the other mode's
       // second level and has nothing to do here either way.
-      shown.length > 1
-      ? parentRows(shown)
-      : [...shown]
+      [...custom, ...(rest.length > 1 ? parentRows(rest) : rest)]
     : attachToHosts(shown);
 
   // Tasks that are not backed by a manifest have no group of their own.
@@ -4145,7 +4729,11 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // icon, which said "folder" where the rows inside it say bash, PowerShell and
     // cmd. So it wears the terminal the Shell ecosystem row wears, and follows
     // `groupIcons` like every other heading: `uniform` puts the stack back on it.
-    const stock = node.source === 'shell' && typeIcons() ? ECOSYSTEMS.shell.icon : node.icon;
+    //
+    // The custom tasks are the same case — their file is a `.json` the theme
+    // would draw as every other JSON file — and wear their ecosystem's glyph too.
+    const own = node.source === 'shell' || node.source === 'custom' ? node.source : undefined;
+    const stock = own && typeIcons() ? ECOSYSTEMS[own].icon : node.icon;
     if (alive && isFileItem(node)) {
       // A compose file and a Dockerfile are the two headings that *are* the thing
       // being run — the stack and the image, which is why ▶ sits on the row — so
@@ -4168,7 +4756,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
       // and over `groupIcons` alike — the setting decides what an unanswered
       // heading wears, and this heading was answered for.
       item.iconPath = specimenIcon(specimen);
-    } else if (!picked && node.ref !== undefined && node.source !== 'shell' && typeIcons()) {
+    } else if (!picked && node.ref !== undefined && !own && typeIcons()) {
       item.iconPath = vscode.ThemeIcon.File;
     } else {
       const glyph = picked ?? type?.icon ?? stock;
@@ -4209,12 +4797,17 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // the row is a file that is run rather than a package that holds rows, so the
     // package's menu — Run/Stop on a script, the confirmation toggle — is not the
     // menu it wants.
+    //
+    // The custom tasks take one as well: theirs is the heading a task is added
+    // to, which is the + no other heading has.
     const head =
       node.source === 'docker-compose'
         ? 'compose'
         : node.source === 'dockerfile'
           ? 'dockerfile'
-          : 'group:package';
+          : node.source === 'custom'
+            ? 'custom'
+            : 'group:package';
     // What the file's own action is doing, in the slot compose fills with `:up`
     // and `:down`. A Dockerfile's own action is `build`, and the only thing a
     // `when` clause needs of it is whether *that* is what is running.
@@ -4257,7 +4850,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   // the selection would jump between them. Built from the absolute `key` rather than
   // the storage ref, which trades uniqueness for portability.
   item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
+  // A custom task that will ask before it runs says so before it is clicked,
+  // so the question is not a surprise — and a line pulled in from somewhere is
+  // visible as that the moment it lands. See `approveLaunch`.
+  const cleared = clearance(node.script);
   item.description = [
+    CLEARANCE_NOTE[cleared],
     up ? 'up' : undefined,
     node.origin,
     scriptDescription(node.script, node.inFavorites),
@@ -4272,6 +4870,8 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     commandFor(node.script),
     node.script.location,
     ...(needsConfirmation(node.script) ? ['Asks before it starts or stops.'] : []),
+    ...(cleared === 'unapproved' ? ['Changed outside this tree — shows the command and asks before it runs.'] : []),
+    ...(cleared === 'blocked' ? ['Holds a line break or a hidden character, and will not run.'] : []),
   ].join('\n');
   const tint = nodeColor(node);
   // An icon out of the file icon theme is not a glyph we hold, so it cannot come
@@ -4280,7 +4880,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   // over every other picked icon — a running row is answering a different
   // question — which is why this asks for one only while the row is idle.
   const specimen = isRunning ? undefined : storedSpecimen(scriptRef(node.script));
-  item.iconPath = specimen ? specimenIcon(specimen) : iconFor(node.script, isRunning, tint, up);
+  item.iconPath =
+    !isRunning && cleared !== 'approved'
+      ? clearanceIcon(cleared)
+      : specimen
+        ? specimenIcon(specimen)
+        : iconFor(node.script, isRunning, tint, up);
   // A painted task carries the same decoration trick the headings do, which is
   // the only way a tree label takes a colour at all. The description goes with it
   // — the decoration lands on the whole resource label and `.label-description`
@@ -4310,8 +4915,10 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     isFavorite(node.script) ? 'fav' : 'nofav',
     // What kind of file the row runs, which is what puts Add to Terminal on the
     // shell rows and nowhere else. It goes here rather than after `confirm`
-    // because that one is matched with a `$` anchor — see below.
-    node.script.kind === 'shell' ? 'shell' : 'task',
+    // because that one is matched with a `$` anchor — see below. A custom task
+    // is a third kind: its line is ours to edit and delete, and it can be typed
+    // into a terminal the way a shell row is.
+    node.script.kind === 'shell' ? 'shell' : node.script.kind === 'custom' ? 'custom' : 'task',
     // The last axis, and absent altogether on a row whose file the tree draws as
     // one item — which is the whole of how neither half of the toggle reaches
     // one. Both clauses that offer it end in `:confirm$` or `:noconfirm$`, so a
@@ -4329,6 +4936,21 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     arguments: [node],
   };
   return item;
+}
+
+/** What a custom task that cannot run unasked says first in its dimmed text. */
+const CLEARANCE_NOTE = { approved: undefined, unapproved: 'not approved', blocked: 'blocked' } as const;
+
+/**
+ * The glyph such a row wears instead of its own. It wins over a picked icon and
+ * a colour the way the spinner does: it answers a different question, and it is
+ * the answer worth finding for as long as it holds. A running row keeps the
+ * spinner — what it runs was approved when it started.
+ */
+function clearanceIcon(state: 'unapproved' | 'blocked'): vscode.ThemeIcon {
+  return state === 'blocked'
+    ? new vscode.ThemeIcon('error', new vscode.ThemeColor('problemsErrorIcon.foreground'))
+    : new vscode.ThemeIcon('shield', new vscode.ThemeColor('problemsWarningIcon.foreground'));
 }
 
 /**
@@ -4813,6 +5435,15 @@ function packageFolder(script: ScriptEntry): string {
   return [folder?.name, script.directory].filter(Boolean).join('/');
 }
 
+/**
+ * What a Custom Tasks heading says after its bullet: the workspace folder, when
+ * there is more than one to tell apart, and nothing otherwise.
+ */
+function customHeadingFolder(script: ScriptEntry): string | undefined {
+  const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
+  return multiRoot ? vscode.workspace.getWorkspaceFolder(script.manifest)?.name : undefined;
+}
+
 /** Dimmed part of a group row: the manifest path relative to its workspace folder. */
 function packagePath(script: ScriptEntry): string {
   const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
@@ -4895,7 +5526,7 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
   // Asked once, for the restart, and then carried out through the primitives
   // rather than through `stopNode` and `runNode` — those would ask again, twice,
   // for the halves of the one thing that has already been agreed to.
-  if (!(await confirmScript(node.script, 'restart'))) {
+  if (!(await confirmScript(node.script, 'restart')) || !(await approveLaunch(node.script))) {
     return;
   }
   // A restart that could not stop what is running is not a restart: starting on
@@ -5190,6 +5821,11 @@ async function stopGroup(node: TreeNode | undefined): Promise<void> {
 /** Restarts everything running in one package group. Idle rows stay idle. */
 async function restartGroup(node: TreeNode | undefined): Promise<void> {
   for (const script of runningScriptsOf(node)) {
+    // A line that changed while it ran is asked about before the old run goes:
+    // turning the new one down leaves the one that was approved still up.
+    if (!(await approveLaunch(script))) {
+      continue;
+    }
     // Every copy goes before the one fresh start, so a row that was running
     // twice comes back running once rather than three times. Only this row is
     // skipped when one of them will not stop; the rest of the group has nothing
@@ -5334,6 +5970,15 @@ async function addToTerminal(node: TreeNode | undefined): Promise<void> {
   if (node?.kind !== 'script') {
     return;
   }
+  // Typed, not run — but a line break in the line is an Enter, and whatever
+  // stands before it runs the moment the text lands. A blocked line is refused
+  // here for the same reason it is refused at ▶.
+  if (clearance(node.script) === 'blocked') {
+    void vscode.window.showWarningMessage(
+      `"${visible(node.script.name)}" holds a line break or a hidden character, so it is not typed into a terminal.`,
+    );
+    return;
+  }
   const terminal = vscode.window.createTerminal({
     name: displayName(node.script),
     cwd: node.script.cwd,
@@ -5360,6 +6005,11 @@ async function addToTerminal(node: TreeNode | undefined): Promise<void> {
  * in a line written to be edited by hand.
  */
 function terminalLine(script: ScriptEntry): string {
+  // A custom task is a line somebody typed to be read by a shell, so it is typed
+  // back as it is — quoting it would turn a command into one long file name.
+  if (script.line !== undefined) {
+    return script.line;
+  }
   const quoting = terminalQuoting();
   const argv = launchArgv(script);
   const line = argv.map((value) => (plainArgument(value) ? value : quoteFor(quoting, value))).join(' ');
@@ -5764,18 +6414,25 @@ function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
   const isRunning = running.has(script.key);
   // The user's icon carries over from the tree: the picker and the tree are two
   // views of the same rows, and a row you marked should be findable in both.
-  const icon = isRunning ? 'loading~spin' : storedIcon(scriptRef(script)) ?? categoryFor(script)?.icon ?? 'play';
+  const cleared = clearance(script);
+  const icon = isRunning
+    ? 'loading~spin'
+    : cleared === 'blocked'
+      ? 'error'
+      : cleared === 'unapproved'
+        ? 'shield'
+        : storedIcon(scriptRef(script)) ?? categoryFor(script)?.icon ?? 'play';
   // An icon out of the file icon theme carries over too, and here it has to be
   // the picture itself: a quick pick row has no resource behind it for the
   // workbench to resolve a `ThemeIcon.File` against, the way a tree row does. A
   // pack that draws from a font has no picture to give, and such a row keeps the
   // glyph below — findable in both lists either way, which is the point.
-  const specimen = isRunning ? undefined : storedSpecimen(scriptRef(script));
+  const specimen = isRunning || cleared !== 'approved' ? undefined : storedSpecimen(scriptRef(script));
   const art = specimen ? packArt(specimen.kind, specimen.name) : undefined;
   return {
     label: art ? displayName(script) : `$(${icon}) ${displayName(script)}`,
     iconPath: art,
-    description: scriptDescription(script, inFavorites),
+    description: [CLEARANCE_NOTE[cleared], scriptDescription(script, inFavorites)].filter(Boolean).join(' · '),
     buttons: isRunning ? [restartButton(true), stopButton()] : [restartButton(false)],
     script,
   };
@@ -5815,6 +6472,11 @@ function nodeOf(item: Item): TreeNode | undefined {
  * panel is not brought to it.
  */
 async function startScript(script: ScriptEntry, reveal: boolean): Promise<void> {
+  // Every start of ours comes through here — a click, ▶, the dropdown, a
+  // heading's run — so this is where a custom task nobody approved is stopped.
+  if (!(await approveLaunch(script))) {
+    return;
+  }
   const execution = await vscode.tasks.executeTask(buildTask(script, reveal));
   running.set(script.key, execution);
   onStateChanged();
@@ -5958,8 +6620,15 @@ function buildTask(script: ScriptEntry, reveal = true, verb?: string): vscode.Ta
   // `test`, so what disambiguates the terminal's name is the manifest and not
   // just the directory — except for a Node package, where the file name is
   // always package.json and would only be noise.
-  const where = script.kind === 'npm' || script.kind === 'deno' ? script.directory : script.location;
-  const argv = launchArgv(script);
+  //
+  // A custom task has nothing to disambiguate: its name is one the user chose,
+  // and the file it is kept in is the same file for every one of them.
+  const where =
+    script.kind === 'custom'
+      ? undefined
+      : script.kind === 'npm' || script.kind === 'deno'
+        ? script.directory
+        : script.location;
   // The definition names the row and the title names the work, which are the
   // same word for every task but one: the ■ on a row whose containers somebody
   // else brought up runs `stop` *for that row*, and filing it under a `stop`
@@ -5972,7 +6641,11 @@ function buildTask(script: ScriptEntry, reveal = true, verb?: string): vscode.Ta
     folder ?? vscode.TaskScope.Workspace,
     where ? `${shown} (${where})` : shown,
     TASK_SOURCE,
-    executionFor(argv, script.cwd.fsPath),
+    // A custom task is a command line and goes to the shell whole, as typed —
+    // see `ScriptEntry.line`. Everything else is an argv, quoted word by word.
+    script.line !== undefined
+      ? new vscode.ShellExecution(script.line, { cwd: script.cwd.fsPath })
+      : executionFor(launchArgv(script), script.cwd.fsPath),
   );
   task.presentationOptions = {
     reveal: reveal ? vscode.TaskRevealKind.Always : vscode.TaskRevealKind.Never,

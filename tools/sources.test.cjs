@@ -24,14 +24,19 @@ function uri(at) {
  * @param found    what `findFiles` hands back, by path
  * @param root     the workspace folder every file is inside, or none at all
  */
-function harness({ settings = {}, present = [], found = [], root, directory = {} } = {}) {
+function harness({ settings = {}, present = [], found = [], root, directory = {}, folders, broken = [] } = {}) {
   const onDisk = new Set(present);
   const calls = [];
+  // What was written, by path, and the directories made on the way.
+  const written = {};
+  const made = [];
   const contents = found && !Array.isArray(found) ? found : Object.fromEntries((found ?? []).map((at) => [at, '']));
   const vscode = {
     workspace: {
       getConfiguration: () => ({ get: (key) => settings[key] }),
       getWorkspaceFolder: () => (root ? { uri: uri(root) } : undefined),
+      // The folders the custom tasks are read out of, one file each.
+      workspaceFolders: folders?.map((at, index) => ({ name: path.posix.basename(at), uri: uri(at), index })),
       // The glob is honoured rather than ignored, and the call is recorded. A
       // stub that swallowed its arguments let the pattern list, the exclude and
       // the result cap all be dropped from `collectShellScripts` with every
@@ -48,17 +53,27 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
       },
       fs: {
         stat: async (target) => {
+          // A path in `broken` is there and cannot be read — a permission, a
+          // remote that dropped. Anything else missing is missing the way
+          // VS Code says it: a `FileSystemError` whose code is `FileNotFound`.
+          if (broken.includes(target.path)) {
+            throw Object.assign(new Error(`no permissions: ${target.path}`), { code: 'NoPermissions' });
+          }
           if (!onDisk.has(target.path) && !(target.path in contents)) {
-            throw new Error(`no such file: ${target.path}`);
+            throw Object.assign(new Error(`no such file: ${target.path}`), { code: 'FileNotFound' });
           }
           return { size: Buffer.byteLength(contents[target.path] ?? '', 'utf8') };
         },
         readFile: async (target) => Buffer.from(contents[target.path] ?? '', 'utf8'),
         readDirectory: async (target) => directory[target.path] ?? [],
+        writeFile: async (target, bytes) => {
+          written[target.path] = Buffer.from(bytes).toString('utf8');
+        },
+        createDirectory: async (target) => void made.push(target.path),
       },
     },
     Uri: {
-      joinPath: (target, ...parts) => ({ path: [target.path, ...parts].join('/') }),
+      joinPath: (target, ...parts) => uri([target.path, ...parts].join('/')),
     },
     FileType: { File: 1, Directory: 2 },
   };
@@ -71,11 +86,11 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
+    exports.parsers = { parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
   `,
     context,
   );
-  return { ...context.exports.parsers, calls };
+  return { ...context.exports.parsers, calls, written, made };
 }
 
 const cwd = { path: '/repo' };
@@ -1275,4 +1290,168 @@ test('a Taskfile description is the task\'s own, and an empty block has none', (
       ['nested', 'task nested'],
     ],
   );
+});
+
+// --- custom tasks ------------------------------------------------------------
+
+const CUSTOM = '/repo/.vscode/task-script-explorer.json';
+
+test('a custom tasks file is a name-to-command map, and nothing else is a task', () => {
+  const { parseCustomTasks } = harness();
+  const text = [
+    '{',
+    '  // hand-written, so comments and trailing commas are fine',
+    '  "tasks": {',
+    '    "Reset DB": "docker compose down -v && docker compose up -d db",',
+    '    "blank": "   ",',
+    '    "number": 3,',
+    '    "": "echo nameless",',
+    '    "Tail": "tail -f log | grep ERROR",',
+    '  },',
+    '}',
+  ].join('\n');
+  assert.deepEqual(plain(parseCustomTasks(text)), [
+    ['Reset DB', 'docker compose down -v && docker compose up -d db'],
+    ['Tail', 'tail -f log | grep ERROR'],
+  ]);
+  // A file of ours with no tasks in it is an empty list; one that is not ours is none.
+  assert.deepEqual(plain(parseCustomTasks('{}')), []);
+  assert.equal(parseCustomTasks('[1, 2]'), undefined);
+  assert.equal(parseCustomTasks('{ "tasks": '), undefined);
+});
+
+test('the scan reads each folder\'s custom tasks first, whatever `sources` says', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    settings: { sources: [] },
+    found: { [CUSTOM]: '{ "tasks": { "Tail": "tail -f  log | grep ERROR" } }' },
+  });
+  h.resetSources();
+  const [row, ...rest] = plain(await h.collectScripts());
+  assert.equal(rest.length, 0);
+  assert.equal(row.kind, 'custom');
+  assert.equal(row.name, 'Tail');
+  // The line as typed, for the shell; the dimmed text squeezed to one line.
+  assert.equal(row.line, 'tail -f  log | grep ERROR');
+  assert.equal(row.command, 'tail -f log | grep ERROR');
+  // Run from the folder root, not from `.vscode` where the file is.
+  assert.equal(row.cwd.path, '/repo');
+  assert.equal(row.packageName, 'Custom Tasks');
+  // Read off its known path, not found: `findFiles` never asked for it.
+  assert.equal(h.calls.some((call) => String(call.include).includes('task-script-explorer')), false);
+});
+
+test('writing custom tasks keeps what else the file holds, and makes `.vscode` if it must', async () => {
+  const h = harness({ found: { [CUSTOM]: '{ "note": "mine", "tasks": { "a": "echo a" } }' } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  // The text it wrote comes back, which is how the watcher knows its own write.
+  assert.equal(await h.editCustomTasks(folder, (tasks) => [...tasks, ['b', 'echo b']]), h.written[CUSTOM]);
+  assert.deepEqual(JSON.parse(h.written[CUSTOM]), { note: 'mine', tasks: { a: 'echo a', b: 'echo b' } });
+  assert.deepEqual(plain(h.made), ['/repo/.vscode']);
+  // An edit that answers nothing writes nothing.
+  const quiet = harness({ found: { [CUSTOM]: '{}' } });
+  assert.equal(await quiet.editCustomTasks(folder, () => undefined), undefined);
+  assert.deepEqual(plain(quiet.written), {});
+});
+
+test('a custom tasks file that is not JSON is refused, not written over', async () => {
+  const h = harness({ found: { [CUSTOM]: '{ "tasks": { "a": "echo a", ' } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await assert.rejects(h.editCustomTasks(folder, (tasks) => [...tasks, ['b', 'echo b']]), /not a JSON object/);
+  assert.deepEqual(plain(h.written), {});
+});
+
+test('what the reader skips is still in the file after the tree writes it', async () => {
+  const h = harness({
+    found: {
+      [CUSTOM]: '{ "tasks": { "build": "make", "wip": "", "deploy": { "cmd": "x" }, "test": "make test" } }',
+    },
+  });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  // Delete `build`, rename `test`, add one: the skipped members keep their places.
+  await h.editCustomTasks(folder, (tasks) => [
+    ...tasks.filter(([name]) => name !== 'build').map(([name, line]) => [name === 'test' ? 'check' : name, line]),
+    ['lint', 'make lint'],
+  ]);
+  assert.deepEqual(Object.entries(JSON.parse(h.written[CUSTOM]).tasks), [
+    ['check', 'make test'],
+    ['wip', ''],
+    ['deploy', { cmd: 'x' }],
+    ['lint', 'make lint'],
+  ]);
+});
+
+test('a `tasks` that is not an object is refused, not replaced', async () => {
+  const h = harness({ found: { [CUSTOM]: '{ "tasks": ["make"] }' } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await assert.rejects(h.editCustomTasks(folder, (tasks) => [...tasks, ['b', 'echo b']]), /is not an object/);
+  assert.deepEqual(plain(h.written), {});
+});
+
+test('tasks named like numbers stay where the file puts them, read and written', async () => {
+  const text = '{ "tasks": { "setup": "a", "teardown": "b", "2024-report": "c", "1": "d" } }';
+  const h = harness({ found: { [CUSTOM]: text } });
+  assert.deepEqual(
+    plain(h.parseCustomTasks(text)).map(([name]) => name),
+    ['setup', 'teardown', '2024-report', '1'],
+  );
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await h.editCustomTasks(folder, (tasks) => tasks.map(([name, line]) => [name === 'teardown' ? '2' : name, line]));
+  // Read back by key order in the text, since `JSON.parse` would reorder it.
+  const written = h.written[CUSTOM];
+  assert.deepEqual(
+    plain(h.parseCustomTasks(written)).map(([name]) => name),
+    ['setup', '2', '2024-report', '1'],
+  );
+  assert.ok(written.indexOf('"setup"') < written.indexOf('"2"'));
+});
+
+test('a folder\'s tasks are read fresh off the file, and a broken file answers nothing', async () => {
+  const folder = { name: 'repo', uri: uri('/repo') };
+  assert.deepEqual(plain(await harness({ found: {} }).readCustomTasks(folder)), []);
+  assert.deepEqual(plain(await harness({ found: { [CUSTOM]: '{ "tasks": { "a": "b" } }' } }).readCustomTasks(folder)), [['a', 'b']]);
+  assert.equal(await harness({ found: { [CUSTOM]: '{ nope' } }).readCustomTasks(folder), undefined);
+});
+
+test('a custom tasks file too large to read is refused, not written over as if it were empty', async () => {
+  const big = `{ "tasks": { "keep": "echo keep" }, "x": "${'y'.repeat(1_000_001)}" }`;
+  const h = harness({ found: { [CUSTOM]: big } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await assert.rejects(h.editCustomTasks(folder, (tasks) => [...tasks, ['new', 'echo new']]), /could not be read/);
+  assert.deepEqual(plain(h.written), {});
+  // And the prompts do not read it as a folder with no tasks either.
+  assert.equal(await h.readCustomTasks(folder), undefined);
+});
+
+test('a custom tasks file whose read fails is refused; only a missing one starts from nothing', async () => {
+  const folder = { name: 'repo', uri: uri('/repo') };
+  const failing = harness({ broken: [CUSTOM] });
+  await assert.rejects(failing.editCustomTasks(folder, (tasks) => [...tasks, ['a', 'b']]), /could not be read/);
+  assert.equal(await failing.readCustomTasks(folder), undefined);
+  const missing = harness({});
+  await missing.editCustomTasks(folder, (tasks) => [...tasks, ['a', 'b']]);
+  assert.deepEqual(JSON.parse(missing.written[CUSTOM]), { tasks: { a: 'b' } });
+});
+
+test('a `tasks` that is not an object is not an emptied list, so the scan does not mark the file blank', async () => {
+  for (const tasks of ['null', '[]', '"x"']) {
+    const h = harness({ folders: ['/repo'], root: '/repo', found: { [CUSTOM]: `{ "tasks": ${tasks} }` } });
+    assert.equal(h.parseCustomTasks(`{ "tasks": ${tasks} }`), undefined, tasks);
+    h.resetSources();
+    const scan = await h.collectScripts();
+    // Blank would tell the prune the folder's tasks were deleted.
+    assert.deepEqual(plain(h.emptyManifestsOf(scan)), [], tasks);
+    assert.equal(await h.readCustomTasks({ name: 'repo', uri: uri('/repo') }), undefined, tasks);
+  }
+});
+
+test('a root key written twice is written back once', async () => {
+  const h = harness({ found: { [CUSTOM]: '{ "tasks": { "a": "1" }, "x": 1, "tasks": { "b": "2" }, "x": 2 }' } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await h.editCustomTasks(folder, (tasks) => [...tasks, ['c', '3']]);
+  const written = h.written[CUSTOM];
+  assert.equal(written.match(/"tasks"/g).length, 1);
+  assert.equal(written.match(/"x"/g).length, 1);
+  assert.deepEqual(JSON.parse(written), { tasks: { b: '2', c: '3' }, x: 2 });
 });

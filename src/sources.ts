@@ -24,7 +24,8 @@ export type SourceKind =
   | 'mise'
   | 'docker-compose'
   | 'dockerfile'
-  | 'shell';
+  | 'shell'
+  | 'custom';
 
 /** What the `sources` setting switches on and off: a language or a task runner, not a file. */
 export type Ecosystem =
@@ -38,7 +39,8 @@ export type Ecosystem =
   | 'go'
   | 'mise'
   | 'docker'
-  | 'shell';
+  | 'shell'
+  | 'custom';
 
 /**
  * Every ecosystem, in the order the settings schema lists them. The `sources`
@@ -48,6 +50,10 @@ export type Ecosystem =
  *
  * Not the order the tree draws them in: that one is decided per workspace, by
  * where each ecosystem's first package sits. See `groupedByEcosystem`.
+ *
+ * `custom` is not on it, on purpose. This list is what `sources` switches, and
+ * the custom tasks are rows somebody wrote into the list by hand: a setting
+ * that could make them vanish would be one more place for them to have gone.
  */
 export const ALL_ECOSYSTEMS: ReadonlyArray<Ecosystem> = [
   'node',
@@ -81,6 +87,7 @@ const ECOSYSTEM_OF: Record<SourceKind, Ecosystem> = {
   'docker-compose': 'docker',
   dockerfile: 'docker',
   shell: 'shell',
+  custom: 'custom',
 };
 
 /**
@@ -530,6 +537,14 @@ export interface ScriptEntry {
   directory: string;
   /** Name the manifest gives its package, if it names one. */
   packageName?: string;
+  /**
+   * A command line for the shell to read as it is, which only the custom tasks
+   * have. Everything else is an argv, quoted word by word so that a name out of
+   * a manifest is never read as code — see `launchArgv`. A custom task is the
+   * opposite case: the user typed it to be a command line, `&&` and pipes and
+   * `$VAR` included, and quoting it would run nothing they wrote.
+   */
+  line?: string;
 }
 
 /** What a parser hands back for one manifest. */
@@ -797,6 +812,14 @@ async function runScan(): Promise<ScriptEntry[]> {
   if (enabled.has('shell')) {
     entries.push(...(await collectShellScripts(exclude)));
   }
+
+  // The custom tasks are read last and filed first. They answer to neither
+  // `sources` nor `exclude` — both are about what the scan goes looking for, and
+  // these are not looked for: there is one file per workspace folder, at a path
+  // of our own choosing. See `collectCustomTasks`.
+  const custom = await collectCustomTasks();
+  entries.unshift(...custom.entries);
+  blank.push(...custom.blank);
 
   if (started === generation) {
     await detectPackageManagers(entries, started);
@@ -2875,6 +2898,375 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
   return entries;
 }
 
+// --- custom tasks ------------------------------------------------------------
+
+/**
+ * Where a workspace folder keeps the tasks its user wrote by hand, relative to
+ * the folder. Under `.vscode` because that is where a folder's editor-side
+ * configuration already lives, and named after the extension so that nobody
+ * mistakes it for a file the workbench itself reads.
+ *
+ * The file is the project's: it can be committed and shared, or left out of git
+ * and kept, which is the choice `tasks.json` beside it already offers.
+ *
+ * `tools/generate-contributions.js` reads this line to write the activation
+ * event, so it stays a plain string literal.
+ */
+export const CUSTOM_TASKS_FILE = '.vscode/task-script-explorer.json';
+
+/** The heading the custom tasks are listed under, and the name their group goes by. */
+export const CUSTOM_GROUP_NAME = 'Custom Tasks';
+
+/** The custom tasks file of a workspace folder. */
+export function customTasksFile(folder: vscode.WorkspaceFolder): vscode.Uri {
+  return vscode.Uri.joinPath(folder.uri, ...CUSTOM_TASKS_FILE.split('/'));
+}
+
+/**
+ * A custom tasks file as it is on disk: the whole object, and every member of
+ * its `tasks` in the order the text writes them — the ones that are not a task
+ * included, so a write can put them back where they were.
+ *
+ * The order is read off the text rather than off the parsed object, because an
+ * object puts integer-like keys first whatever the file says: a task named `1`
+ * would jump to the top of the list, and a rename to `2` would move a row.
+ */
+interface CustomTasksText {
+  data: Record<string, unknown>;
+  /** The members of the root object, in text order. */
+  top: string[];
+  /** Every member of `tasks`, in text order, values as parsed. */
+  members: Array<[string, unknown]>;
+  /** Whether a `tasks` is there and is something other than an object. */
+  malformed: boolean;
+}
+
+/** Whether a member of `tasks` is a task: a name, and a command line to run. */
+function isTask(entry: [string, unknown]): entry is [string, string] {
+  return entry[0].trim().length > 0 && typeof entry[1] === 'string' && entry[1].trim().length > 0;
+}
+
+/**
+ * The text read as a custom tasks file, or `undefined` when it is not one at
+ * all — not JSON, or JSON that is not an object.
+ */
+function readCustomTasksText(text: string): CustomTasksText | undefined {
+  const clean = stripJsonc(text);
+  let data: unknown;
+  try {
+    data = JSON.parse(clean);
+  } catch {
+    return undefined;
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return undefined;
+  }
+  const root = data as Record<string, unknown>;
+  const tasks = root.tasks;
+  const isObject = !!tasks && typeof tasks === 'object' && !Array.isArray(tasks);
+  const record = isObject ? (tasks as Record<string, unknown>) : {};
+  const order = isObject ? (jsonKeys(clean, ['tasks']) ?? Object.keys(record)) : [];
+  return {
+    data: root,
+    // Once each: a key the root writes twice is one member of the object, and
+    // listing it twice would write it back twice, on every save from then on.
+    top: [...new Set(jsonKeys(clean, []) ?? Object.keys(root))],
+    // A key written twice is one member, where it was first written, holding
+    // the value `JSON.parse` kept — the last one.
+    members: [...new Set(order)].filter((key) => key in record).map((key) => [key, record[key]]),
+    malformed: tasks !== undefined && !isObject,
+  };
+}
+
+/**
+ * The tasks a custom tasks file declares, name -> command line, in the order it
+ * declares them. `undefined` when the text is not a file of ours at all, which
+ * is different from a file with nothing in it: the first is left alone, the
+ * second is a list that was emptied.
+ *
+ * A name is a key and so is unique by construction, which is the property the
+ * rest of the tree leans on: a script's ref is its manifest plus its name.
+ * Anything that is not a non-empty string is skipped rather than rejected, so
+ * one hand-edited mistake does not take its neighbours down with it — and it is
+ * kept, not dropped, when the tree next writes the file: see `editCustomTasks`.
+ */
+export function parseCustomTasks(text: string): Array<[string, string]> | undefined {
+  const file = readCustomTasksText(text);
+  // A `tasks` that is not an object is a file the writer refuses, so it is not
+  // an emptied list either: read as one, it would have the prune forget every
+  // star and approval of the folder's tasks over one mistyped bracket.
+  return file && !file.malformed ? file.members.filter(isTask) : undefined;
+}
+
+/**
+ * The custom tasks file as the reader and the writer have to tell it apart:
+ * not there at all, there and unreadable — over the size limit, or a read that
+ * failed — or there with this text. `readText` answers the first two the same
+ * way, which is right for a scan and wrong for a write: a file that could not
+ * be read is not a file that can be written over as if it were empty.
+ */
+async function customTasksText(
+  file: vscode.Uri,
+): Promise<{ state: 'absent' } | { state: 'unreadable' } | { state: 'read'; text: string }> {
+  try {
+    await vscode.workspace.fs.stat(file);
+  } catch (error) {
+    return (error as { code?: unknown } | undefined)?.code === 'FileNotFound' ? { state: 'absent' } : { state: 'unreadable' };
+  }
+  const text = await readText(file);
+  return text === undefined ? { state: 'unreadable' } : { state: 'read', text };
+}
+
+/**
+ * A folder's custom tasks as they are on disk right now: `[]` for a folder with
+ * no file, `undefined` for a file that is there and cannot be read as ours.
+ * Read fresh, for the prompts and the checks that must not act on a scan that
+ * is already behind the file.
+ */
+export async function readCustomTasks(folder: vscode.WorkspaceFolder): Promise<Array<[string, string]> | undefined> {
+  const file = await customTasksText(customTasksFile(folder));
+  if (file.state === 'absent') {
+    return [];
+  }
+  if (file.state === 'unreadable') {
+    return undefined;
+  }
+  return file.text.trim() ? parseCustomTasks(file.text) : [];
+}
+
+/**
+ * Rewrites a folder's custom tasks through `edit`, which is handed the tasks as
+ * they are on disk and returns them as they should be — or `undefined` to write
+ * nothing. Answers with the text written, which is how the watcher tells the
+ * tree's own writes from somebody else's, or `undefined` when nothing was.
+ *
+ * Everything the tasks are not is carried over where it was: the other keys of
+ * the file, and the members of `tasks` the reader skipped — an empty command, an
+ * object somebody was halfway through writing. `edit` keeps the tasks in order,
+ * renames in place, drops or appends, so the tasks it hands back fill the slots
+ * the tasks had, one by one, and anything new goes after them. A skipped member
+ * whose name a task now takes is the one thing given up: the name is the task's.
+ *
+ * Comments do not survive, which is the price of writing the file back rather
+ * than patching its text; the tree is the way these are meant to be edited, and
+ * a file edited by hand is still read, comments and all, until the tree next
+ * writes it.
+ *
+ * A file that is there and is not ours to read — broken JSON, an array, a
+ * `tasks` that is not an object, one too large to read or whose read failed —
+ * is refused rather than replaced. Only a file that is not there at all is
+ * started from nothing. Writing over
+ * it would throw away whatever the user was halfway through typing, to add one
+ * line to it.
+ */
+export async function editCustomTasks(
+  folder: vscode.WorkspaceFolder,
+  edit: (tasks: Array<[string, string]>) => Array<[string, string]> | undefined,
+): Promise<string | undefined> {
+  const file = customTasksFile(folder);
+  const found = await customTasksText(file);
+  if (found.state === 'unreadable') {
+    throw new Error(`${CUSTOM_TASKS_FILE} could not be read — it is over 1 MB, or the read failed. Nothing was written.`);
+  }
+  const text = found.state === 'read' ? found.text : '';
+  const current: CustomTasksText | undefined = !text.trim()
+    ? { data: {}, top: [], members: [], malformed: false }
+    : readCustomTasksText(text);
+  if (!current) {
+    throw new Error(`${CUSTOM_TASKS_FILE} is not a JSON object. Fix it by hand, then try again.`);
+  }
+  if (current.malformed) {
+    throw new Error(`"tasks" in ${CUSTOM_TASKS_FILE} is not an object. Fix it by hand, then try again.`);
+  }
+  const next = edit(current.members.filter(isTask).map(([name, line]): [string, string] => [name, line]));
+  if (!next) {
+    return undefined;
+  }
+
+  const taken = new Set(next.map(([name]) => name));
+  const queue = [...next];
+  const members: Array<[string, unknown]> = [];
+  for (const member of current.members) {
+    if (isTask(member)) {
+      const task = queue.shift();
+      if (task) {
+        members.push(task);
+      }
+    } else if (!taken.has(member[0])) {
+      members.push(member);
+    }
+  }
+  members.push(...queue);
+
+  const body = customTasksBody(current.data, current.top, members);
+  // `createDirectory` is `mkdir -p`: a folder with no `.vscode` yet gets one, and
+  // one that has it is left as it is.
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, path.posix.dirname(CUSTOM_TASKS_FILE)));
+  await vscode.workspace.fs.writeFile(file, Buffer.from(body, 'utf8'));
+  return body;
+}
+
+/**
+ * The file's text, written member by member so that the order on disk is the
+ * order given — `JSON.stringify` of an object would put `1` and `2` before
+ * `build`, which is the reordering the reader works to avoid.
+ */
+function customTasksBody(data: Record<string, unknown>, top: string[], tasks: Array<[string, unknown]>): string {
+  const indented = (value: unknown, depth: number) =>
+    JSON.stringify(value, null, 2).replace(/\n/g, `\n${'  '.repeat(depth)}`);
+  const block =
+    tasks.length === 0
+      ? '{}'
+      : `{\n${tasks.map(([name, value]) => `    ${JSON.stringify(name)}: ${indented(value, 2)}`).join(',\n')}\n  }`;
+  const keys = top.includes('tasks') ? top : [...top, 'tasks'];
+  const lines = keys
+    .filter((key) => key === 'tasks' || key in data)
+    .map((key) => `  ${JSON.stringify(key)}: ${key === 'tasks' ? block : indented(data[key], 1)}`);
+  return `{\n${lines.join(',\n')}\n}\n`;
+}
+
+/**
+ * The keys of the object at `at` inside a JSON text, in the order the text
+ * writes them — `undefined` when the path does not lead to an object. Strict
+ * JSON only: the caller strips comments and trailing commas first.
+ *
+ * A scanner rather than a parser: the values are `JSON.parse`'s business, and
+ * the one thing it cannot answer is the order.
+ */
+function jsonKeys(text: string, at: string[]): string[] | undefined {
+  const skipSpace = (i: number) => {
+    while (i < text.length && /\s/.test(text[i])) {
+      i++;
+    }
+    return i;
+  };
+  const stringEnd = (i: number) => {
+    for (let j = i + 1; j < text.length; j++) {
+      if (text[j] === '\\') {
+        j++;
+      } else if (text[j] === '"') {
+        return j + 1;
+      }
+    }
+    return text.length;
+  };
+  const valueEnd = (i: number) => {
+    if (text[i] === '"') {
+      return stringEnd(i);
+    }
+    let depth = 0;
+    for (let j = i; j < text.length; j++) {
+      const char = text[j];
+      if (char === '"') {
+        j = stringEnd(j) - 1;
+      } else if (char === '{' || char === '[') {
+        depth++;
+      } else if (char === '}' || char === ']') {
+        if (depth === 0) {
+          return j;
+        }
+        depth--;
+        if (depth === 0) {
+          return j + 1;
+        }
+      } else if (char === ',' && depth === 0) {
+        return j;
+      }
+    }
+    return text.length;
+  };
+
+  let i = skipSpace(0);
+  for (let step = 0; ; step++) {
+    if (text[i] !== '{') {
+      return undefined;
+    }
+    const keys: string[] = [];
+    let found = -1;
+    i = skipSpace(i + 1);
+    while (i < text.length && text[i] !== '}') {
+      if (text[i] === ',') {
+        i = skipSpace(i + 1);
+        continue;
+      }
+      if (text[i] !== '"') {
+        return undefined;
+      }
+      const end = stringEnd(i);
+      const key = JSON.parse(text.slice(i, end)) as string;
+      i = skipSpace(end);
+      if (text[i] !== ':') {
+        return undefined;
+      }
+      i = skipSpace(i + 1);
+      keys.push(key);
+      // The last of a repeated key, since that is the value `JSON.parse` keeps.
+      if (step < at.length && key === at[step]) {
+        found = i;
+      }
+      i = skipSpace(valueEnd(i));
+    }
+    if (step === at.length) {
+      return keys;
+    }
+    if (found < 0) {
+      return undefined;
+    }
+    i = found;
+  }
+}
+
+/**
+ * One row per task in every workspace folder's custom tasks file, and the files
+ * that were read and declared none — the second half is what lets
+ * `pruneStaleRefs` forget the star on the last task somebody deleted.
+ *
+ * Read straight off its known path rather than found: the file has one place to
+ * be, and a `findFiles` over the whole workspace to learn that would cost every
+ * scan a walk for the answer to a single `stat`. The folders are read side by
+ * side, since over Remote SSH each read is a round trip the scan waits on.
+ *
+ * A task runs where its folder is, not where the file is: `.vscode` is where the
+ * list is kept, and the root of the project is where anybody means when they
+ * type a command at it.
+ */
+async function collectCustomTasks(): Promise<{ entries: ScriptEntry[]; blank: vscode.Uri[] }> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const read = await Promise.all(
+    folders.map(async (folder) => {
+      const manifest = customTasksFile(folder);
+      const text = await readText(manifest);
+      return { folder, manifest, tasks: text === undefined ? undefined : parseCustomTasks(text) };
+    }),
+  );
+  const entries: ScriptEntry[] = [];
+  const blank: vscode.Uri[] = [];
+  for (const { folder, manifest, tasks } of read) {
+    if (!tasks) {
+      continue;
+    }
+    if (tasks.length === 0) {
+      blank.push(manifest);
+      continue;
+    }
+    for (const [name, line] of tasks) {
+      entries.push({
+        key: scriptKey(manifest.toString(), name),
+        name,
+        command: line.replace(/\s+/g, ' ').trim(),
+        line: line.trim(),
+        manifest,
+        kind: 'custom',
+        cwd: folder.uri,
+        location: CUSTOM_TASKS_FILE,
+        directory: path.posix.dirname(CUSTOM_TASKS_FILE),
+        packageName: CUSTOM_GROUP_NAME,
+      });
+    }
+  }
+  return { entries, blank };
+}
+
 // --- shared parsing helpers --------------------------------------------------
 
 /**
@@ -2989,6 +3381,19 @@ export async function readText(uri: vscode.Uri, maxBytes = MAX_MANIFEST_BYTES): 
 
 /** JSON.parse that tolerates comments and trailing commas, as deno.jsonc allows both. */
 export function parseJsonc(text: string): unknown {
+  try {
+    return JSON.parse(stripJsonc(text));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The text with its comments and trailing commas taken out, which is strict
+ * JSON when the text was JSONC — for `parseJsonc`, and for the custom tasks
+ * reader, which also needs the order of the keys in it.
+ */
+function stripJsonc(text: string): string {
   let out = '';
   let inString = false;
   let escaped = false;
@@ -3066,11 +3471,7 @@ export function parseJsonc(text: string): unknown {
     out += char;
   }
 
-  try {
-    return JSON.parse(out);
-  } catch {
-    return undefined;
-  }
+  return out;
 }
 
 async function exists(uri: vscode.Uri): Promise<boolean> {
@@ -3110,7 +3511,7 @@ export function launchArgv(script: ScriptEntry): string[] {
 
 /** The same command as a person reads it: the row's tooltip and the picker. */
 export function commandFor(script: ScriptEntry): string {
-  return launchArgv(script).map(displayArg).join(' ');
+  return script.line ?? launchArgv(script).map(displayArg).join(' ');
 }
 
 /**

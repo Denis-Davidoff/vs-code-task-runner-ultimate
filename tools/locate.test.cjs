@@ -44,3 +44,10 @@ test('a tox environment declared by a braced header is found on that header', ()
   assert.equal(found?.line, 3);
   assert.equal(text.split('\n')[3].slice(found.character, found.character + found.length), 'format');
 });
+
+test('a custom task is found on its key in the tasks object', () => {
+  const text = ['{', '  "tasks": {', '    "Reset DB": "docker compose down -v",', '    "Tail": "tail -f log"', '  }', '}'].join('\n');
+  const found = locateTask(text, 'custom', 'Tail');
+  assert.equal(found?.line, 3);
+  assert.equal(text.split('\n')[3].slice(found.character, found.character + found.length), 'Tail');
+});

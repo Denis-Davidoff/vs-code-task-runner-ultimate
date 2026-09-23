@@ -34,6 +34,9 @@ export function locateTask(text: string, kind: SourceKind, name: string): TaskLo
     case 'composer':
       return jsonKey(text, ['scripts', name]);
     case 'deno':
+    // The custom tasks file is laid out the way deno.json is: one `tasks` object,
+    // name to command.
+    case 'custom':
       return jsonKey(text, ['tasks', name]);
     case 'cargo':
     case 'go':

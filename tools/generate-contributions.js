@@ -342,6 +342,12 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.enableConfirmation', title: 'Enable Confirmation', category: 'Task & Script Explorer', icon: '$(question)' },
   { command: 'taskRunnerUltimate.disableConfirmation', title: 'Disable Confirmation', category: 'Task & Script Explorer', icon: '$(question)' },
   { command: 'taskRunnerUltimate.editTitle', title: 'Rename…', category: 'Task & Script Explorer', icon: '$(edit)' },
+  // The custom tasks, which the tree writes rather than reads. Creating one needs
+  // no row — it is the + on the Custom Tasks heading, the first entry of the ⋯
+  // menu, and a palette command — so it is the one of the three the palette keeps.
+  { command: 'taskRunnerUltimate.createCustomTask', title: 'New Custom Task…', category: 'Task & Script Explorer', icon: '$(add)' },
+  { command: 'taskRunnerUltimate.editCustomTask', title: 'Edit Command…', category: 'Task & Script Explorer', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.deleteCustomTask', title: 'Delete Custom Task', category: 'Task & Script Explorer', icon: '$(trash)' },
   // Putting a group away and bringing it back. Only the second is a button on the
   // row — see the menus below — and the icon on the first is declared all the
   // same: a context menu drops icons, but the command palette and any keybinding
@@ -462,8 +468,11 @@ const HIDDEN_SEG = 'hidden';
 const CARRIED_SEG = 'carried';
 // Hiding and bringing back reach every heading the tree drew from a file, the
 // compose rows included: the pile is where a row goes, whatever its row does.
-const VISIBLE = `/^(group:package|compose|dockerfile)${STATE}(:running)?$/`;
-const HIDDEN = `/^(group:package|compose|dockerfile)${STATE}:${HIDDEN_SEG}(:running)?$/`;
+//
+// The Custom Tasks heading is one more of them: it is a file, and a list that can
+// be put away like any other.
+const VISIBLE = `/^(group:package|compose|dockerfile|custom)${STATE}(:running)?$/`;
+const HIDDEN = `/^(group:package|compose|dockerfile|custom)${STATE}:${HIDDEN_SEG}(:running)?$/`;
 // An ecosystem parent holds groups rather than rows, but it still has things
 // running under it, so it gets the stop-all and restart-all buttons too.
 const PUT_AWAY = `(:(${HIDDEN_SEG}|${CARRIED_SEG}))?`;
@@ -475,11 +484,17 @@ const CARRIED = `(:${CARRIED_SEG})?`;
 // and a pair that drifted apart is a row whose menu denies what its button does.
 const RUNNABLE = '/^script:(idle|up):/';
 const STOPPABLE = '/^(script:(running|up):|foreignTask$)/';
-const RUNNING_PACKAGE = `/^group:(package${STACK}${PUT_AWAY}|eco):running$/`;
+const RUNNING_PACKAGE = `/^(group:(package${STACK}${PUT_AWAY}|eco)|custom${PUT_AWAY}):running$/`;
+// The Custom Tasks heading, in whichever state: the + that adds a task to it is
+// on the row wherever the row is, the pile included.
+const CUSTOM_HEADING = `/^custom${PUT_AWAY}(:running)?$/`;
+// A custom task's own row — the third value of the fourth axis, beside `shell`
+// and `task`.
+const CUSTOM_TASK = '/^script:.+:custom:/';
 // Every row the tree read off a file, whichever kind: the two actions that are
 // about the manifest rather than the task — opening it and renaming it — reach
 // all of them.
-const NAMED_ROW = `(group:package|compose|dockerfile)${STATE}${PUT_AWAY}(:running)?`;
+const NAMED_ROW = `(group:package|compose|dockerfile|custom)${STATE}${PUT_AWAY}(:running)?`;
 // A compose file is a leaf rather than a folder — `getChildren` returns nothing
 // for it — so every action it has must be on the row itself. There is no way in
 // by opening it, which is why these patterns allow the put-away segments too: a
@@ -611,6 +626,10 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.stopDockerfile', group: 'inline@3', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
     { command: 'taskRunnerUltimate.dockerfileActions', group: 'inline@4', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
     { command: 'taskRunnerUltimate.buildImage', group: 'inline@5', when: `${inTree} && viewItem =~ ${DOCKERFILE_IDLE}` },
+    // + on the Custom Tasks heading, in the last slot: inline actions are drawn
+    // right-aligned, so it holds the row's right edge and the ↻ and ■ a running
+    // task puts on the heading appear beside it rather than pushing it along.
+    { command: 'taskRunnerUltimate.createCustomTask', group: 'inline@5', when: `${inTree} && viewItem =~ ${CUSTOM_HEADING}` },
     // Non-inline groups are what the right-click menu shows.
     //
     // The two gestures the row itself answers to, named in the menu so they are
@@ -646,6 +665,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.restartDockerfile', group: '0_actions@2', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
     { command: 'taskRunnerUltimate.stopDockerfile', group: '0_actions@3', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
     { command: 'taskRunnerUltimate.dockerfileActions', group: '0_actions@4', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
+    // The + again, named, for the heading's right-click menu.
+    { command: 'taskRunnerUltimate.createCustomTask', group: '0_actions@1', when: `${inTree} && viewItem =~ ${CUSTOM_HEADING}` },
     //
     // Opening the file is the one action here that is about the manifest rather
     // than the task, and it is deliberately not an inline button: a row already
@@ -665,7 +686,10 @@ manifest.contributes.menus = {
     // wrote down: a manifest task says its own arguments in the manifest, and a
     // compose row's are the subcommand it already is. `:shell:` is the fourth
     // axis of a script row's context value — see `treeItemFor`.
-    { command: 'taskRunnerUltimate.addToTerminal', group: '0_open@4', when: `${inTree} && viewItem =~ /^script:.+:shell:/` },
+    //
+    // And on the custom tasks, which are a command line already: typed into a
+    // terminal unrun, it is the way to run one once with something added to it.
+    { command: 'taskRunnerUltimate.addToTerminal', group: '0_open@4', when: `${inTree} && viewItem =~ /^script:.+:(shell|custom):/` },
     // The file a row stands for, in its own group so the menu draws a separator
     // above it: these four are about where the thing is, not about running it.
     // `0_path` sorts after `0_open` — the entry that opens the file — and before
@@ -700,6 +724,9 @@ manifest.contributes.menus = {
     // for it either.
     { command: 'taskRunnerUltimate.enableConfirmation', group: '1_favorites@2', when: `${inTree} && viewItem =~ /^script:.+:noconfirm$/` },
     { command: 'taskRunnerUltimate.disableConfirmation', group: '1_favorites@2', when: `${inTree} && viewItem =~ /^script:.+:confirm$/` },
+    // A custom task's command line, edited in place, just above the rename —
+    // which on these rows is a real one. See `editTitle`.
+    { command: 'taskRunnerUltimate.editCustomTask', group: '2_modify@0', when: `${inTree} && viewItem =~ ${CUSTOM_TASK}` },
     { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^script:/` },
     // The same command on a package heading. FAVORITES and the foreign-task
     // group are labels of ours rather than names read off disk, and carry the
@@ -714,8 +741,8 @@ manifest.contributes.menus = {
     // One entry opening a list, where this used to be a flyout of fifteen. The
     // list can show what each colour looks like, which a platform menu cannot —
     // see PALETTE — and it is the same gesture the icons next to it already take.
-    { command: 'taskRunnerUltimate.pickColor', group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile)/` },
-    { command: 'taskRunnerUltimate.pickIcon', group: '2_modify@3', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile)/` },
+    { command: 'taskRunnerUltimate.pickColor', group: '2_modify@2', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile|custom)/` },
+    { command: 'taskRunnerUltimate.pickIcon', group: '2_modify@3', when: `${inTree} && viewItem =~ /^(script|group|compose|dockerfile|custom)/` },
     // Bringing a group back is the one of the two that keeps its button: a row
     // under HIDDEN is there to be taken out again, and an eye in its own column is
     // one click where putting it away was a menu you went looking for.
@@ -724,6 +751,9 @@ manifest.contributes.menus = {
     // with a name on them.
     { command: 'taskRunnerUltimate.hideGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${VISIBLE}` },
     { command: 'taskRunnerUltimate.showGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${HIDDEN}` },
+    // Last, and in a group of its own so a separator stands between it and the
+    // entries that only change how the row looks: this one takes it off disk.
+    { command: 'taskRunnerUltimate.deleteCustomTask', group: '3_delete@1', when: `${inTree} && viewItem =~ ${CUSTOM_TASK}` },
   ],
   commandPalette: [
     { command: 'taskRunnerUltimate.restartActive', when: 'false' },
@@ -740,6 +770,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.enableConfirmation', when: 'false' },
     { command: 'taskRunnerUltimate.disableConfirmation', when: 'false' },
     { command: 'taskRunnerUltimate.editTitle', when: 'false' },
+    { command: 'taskRunnerUltimate.editCustomTask', when: 'false' },
+    { command: 'taskRunnerUltimate.deleteCustomTask', when: 'false' },
     { command: 'taskRunnerUltimate.hideGroup', when: 'false' },
     { command: 'taskRunnerUltimate.showGroup', when: 'false' },
     { command: 'taskRunnerUltimate.stopGroup', when: 'false' },
@@ -904,6 +936,22 @@ const DOCKERFILE_GLOBS = ['Dockerfile.*', 'dockerfile.*', '*.Dockerfile', '*.doc
  * nearly every repository, and an extension that wakes up everywhere is one
  * nobody can account for. The third entry is the workspace root alone.
  */
+/*
+ * Where the custom tasks live, read out of src/sources.ts rather than written
+ * again here: this script runs before anything is compiled, so it cannot import
+ * the constant, but it can read the one line that declares it — and a rename of
+ * the file there reaches the activation event the next time this runs, instead
+ * of leaving a folder of custom tasks that never wakes the extension.
+ */
+const CUSTOM_TASKS_FILE = (() => {
+  const source = fs.readFileSync(path.join(root, 'src/sources.ts'), 'utf8');
+  const found = source.match(/^export const CUSTOM_TASKS_FILE = '([^']+)';$/m);
+  if (!found) {
+    throw new Error('CUSTOM_TASKS_FILE is no longer a plain string literal in src/sources.ts');
+  }
+  return found[1];
+})();
+
 const SHELL_FILES = '*.{sh,bash,zsh,ksh,ps1,bat,cmd}';
 const SHELL_FOLDERS = [`**/scripts/**/${SHELL_FILES}`, `**/bin/**/${SHELL_FILES}`, SHELL_FILES];
 
@@ -912,6 +960,9 @@ manifest.activationEvents = [
   ...COMPOSE_GLOBS.map((glob) => `workspaceContains:**/${glob}`),
   ...DOCKERFILE_GLOBS.map((glob) => `workspaceContains:**/${glob}`),
   ...SHELL_FOLDERS.map((glob) => `workspaceContains:${glob}`),
+  // A folder whose only tasks are the ones somebody wrote by hand still has a
+  // list to show.
+  `workspaceContains:${CUSTOM_TASKS_FILE}`,
   'onTaskType:taskRunnerUltimate',
   'onView:taskRunnerUltimate.tree',
   'onView:taskRunnerUltimate.explorer',
