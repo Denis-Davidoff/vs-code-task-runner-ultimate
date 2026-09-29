@@ -5,9 +5,13 @@ restart without ever going looking for a terminal tab.**
 
 ![Task & Script Explorer in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
-## Change log 0.9.0
+## Change log 0.9
 
-- Added [custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks): open the ⋮ menu in the panel header and pick **+ Create custom task**.
+- 0.9.0: Added [custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks): open the ⋮ menu in the panel header and pick **+ Create custom task**.
+
+- 0.9.1: Bug fixes
+
+- 0.9.2: Bug fixes
 
 ## Extension Features
 
