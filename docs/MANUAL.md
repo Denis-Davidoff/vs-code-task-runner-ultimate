@@ -81,7 +81,7 @@ monorepo.
 | Ecosystem | File | Tasks read from | Runs as |
 | --- | --- | --- | --- |
 | **Node** | `package.json` | `scripts` | `npm run` / `yarn run` / `pnpm run` / `bun run` — [detected](#runner-detection) |
-| | `deno.json`, `deno.jsonc` | `tasks` | `deno task <name>` |
+| | `deno.json`, `deno.jsonc` | `tasks` | `deno task --config <file> <name>` |
 | **Rust** | `Cargo.toml` | the crate itself — see [below](#rust) | `cargo run --bin …`, `cargo test`, … |
 | | `Makefile.toml` | `[tasks.*]` (cargo-make) | `cargo make <name>` |
 | **Python** | `pyproject.toml` | `[tool.poetry.scripts]` | `poetry run <name>` |
@@ -1261,7 +1261,9 @@ are dropped entirely, since the only one there would be repeating the picker's o
 **Other tasks** covers running tasks this extension did not start — tasks from `tasks.json`, other
 extensions, or the built-in npm task provider. Tasks that map onto a package.json script (our own and
 `npm:` ones) are shown as that script, in its own package block, rather than duplicated — so a script
-started from the built-in npm list can be stopped from here too.
+started from the built-in npm list can be stopped from here too. A task whose script is no longer in
+the list — deleted from its manifest while it ran, or taken out of the scan by a setting — has no
+block left to be shown in, so it is listed here until it ends.
 
 Each row carries the same category icon as the tree, but not its colour. That one is out of an
 extension's hands: VS Code turns a `ThemeIcon` into a plain codicon class on the way into a quick
@@ -1447,8 +1449,10 @@ Two details worth knowing:
 
 - Deno signals are checked **last** within a directory, so a package.json project that also carries
   a `deno.lock` still runs its scripts with the npm-family runner its own lock file names.
-- A task that came from a `deno.json(c)` always runs as `deno task <name>`, including when
-  `taskRunnerUltimate.packageManager` is pinned to something else — no other runner can execute it.
+- A task that came from a `deno.json(c)` always runs as `deno task --config <file> <name>`,
+  including when `taskRunnerUltimate.packageManager` is pinned to something else — no other runner
+  can execute it. The file is named so that a `deno.json` and a `deno.jsonc` side by side each run
+  their own task.
 
 ### How the badge works
 

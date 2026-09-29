@@ -627,6 +627,8 @@ const nodeHints = new Map<string, NodeHints>();
  * that needs to tell the two apart.
  */
 interface ScanFacts {
+  /** The `generation` the scan started in; see `staleScan`. */
+  generation: number;
   empty: vscode.Uri[];
   /** The manifests whose rows a setting helps decide; see `ParsedManifest.shaped`. */
   shaped: Array<[vscode.Uri, (name: string) => boolean]>;
@@ -659,6 +661,18 @@ export function resetSources(): void {
   generation++;
   detected.clear();
   nodeHints.clear();
+}
+
+/**
+ * Whether a `resetSources` has come since this scan started — its rows are then
+ * a picture of files that have since changed. They are still fine to draw,
+ * since a fresh scan is on its way, but not to act on: a prune against them
+ * would read a task the tree just renamed or created as one the file does not
+ * declare, and forget its approval, star and colour.
+ */
+export function staleScan(scripts: ReadonlyArray<ScriptEntry>): boolean {
+  const facts = scanFacts.get(scripts);
+  return facts !== undefined && facts.generation !== generation;
 }
 
 /** The manifests of this scan that parsed cleanly and declared no tasks. */
@@ -836,7 +850,7 @@ async function runScan(): Promise<ScriptEntry[]> {
   if (started === generation) {
     cache = entries;
   }
-  scanFacts.set(entries, { empty: blank, shaped });
+  scanFacts.set(entries, { generation: started, empty: blank, shaped });
   return entries;
 }
 
@@ -891,7 +905,7 @@ async function parseManifest(
     case 'npm':
       return parsePackageJson(text);
     case 'deno':
-      return parseDenoJson(text);
+      return parseDenoJson(text, file);
     case 'composer':
       return parseComposerJson(text);
     case 'cargo':
@@ -956,17 +970,24 @@ function parsePackageJson(text: string): ParsedManifest | undefined {
   };
 }
 
-function parseDenoJson(text: string): ParsedManifest | undefined {
+/**
+ * `file` is named on the command line for the reason `parseMakefile` names its
+ * own: deno.json and deno.jsonc can sit side by side, each a row group of its
+ * own, and `deno task` left to itself reads whichever one it prefers — so the
+ * other file's rows would run the preferred file's task of the same name.
+ */
+function parseDenoJson(text: string, file = 'deno.json'): ParsedManifest | undefined {
   const json = parseJsonc(text) as Record<string, unknown> | undefined;
   const tasks = json?.tasks;
   if (!tasks || typeof tasks !== 'object' || Array.isArray(tasks)) {
     return undefined;
   }
+  const runner = ['deno', 'task', '--config', file];
   const out: RawTask[] = [];
   for (const [name, value] of Object.entries(tasks as Record<string, unknown>)) {
     const command = commandOf(value);
     if (command !== undefined) {
-      out.push({ name, command });
+      out.push({ name, command, argv: [...runner, name] });
       continue;
     }
     // Deno ≥ 2.1 lets a task be nothing but `dependencies` (or a `description`):
@@ -975,7 +996,11 @@ function parseDenoJson(text: string): ParsedManifest | undefined {
       const meta = value as { description?: unknown; dependencies?: unknown };
       const description = typeof meta.description === 'string' ? meta.description : undefined;
       const deps = Array.isArray(meta.dependencies) ? meta.dependencies.filter((d): d is string => typeof d === 'string') : [];
-      out.push({ name, command: description ?? (deps.length > 0 ? deps.join(', ') : `deno task ${name}`) });
+      out.push({
+        name,
+        command: description ?? (deps.length > 0 ? deps.join(', ') : `deno task ${name}`),
+        argv: [...runner, name],
+      });
     }
   }
   return { tasks: out, packageName: typeof json?.name === 'string' ? json.name : undefined };
@@ -1704,7 +1729,7 @@ function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
 
   const tasks: RawTask[] = [];
   for (const entry of block) {
-    if (!entry.name || entry.body.some((line) => /^internal:\s*true\b/.test(line))) {
+    if (!entry.name || /^true\s*(#.*)?$/.test(taskfileValue(entry.raw, 'internal') ?? '')) {
       continue;
     }
     // `desc` first: it is the one line `task --list` prints, where `summary` is
@@ -1733,7 +1758,7 @@ function parseTaskfile(text: string, file: string): ParsedManifest | undefined {
 function taskfileText(raw: ReadonlyArray<string>, key: string): string | undefined {
   const depth = (line: string) => line.length - line.trimStart().length;
   const own = raw.length > 0 ? Math.min(...raw.map(depth)) : 0;
-  const at = raw.findIndex((line) => depth(line) === own && line.trimStart().startsWith(`${key}:`));
+  const at = taskfileKeyLine(raw, key);
   if (at < 0) {
     return undefined;
   }
@@ -1743,6 +1768,22 @@ function taskfileText(raw: ReadonlyArray<string>, key: string): string | undefin
     value = next !== undefined && depth(next) > own ? next : '';
   }
   return value.trim().replace(/^["']|["']$/g, '') || undefined;
+}
+
+/**
+ * What is written after one of a task's own keys, as it is written — the same
+ * depth rule as `taskfileText`, so `vars: { internal: true }` spelled as a block
+ * is a variable and does not hide the task it belongs to.
+ */
+function taskfileValue(raw: ReadonlyArray<string>, key: string): string | undefined {
+  const at = taskfileKeyLine(raw, key);
+  return at < 0 ? undefined : raw[at].trim().slice(key.length + 1).trim();
+}
+
+function taskfileKeyLine(raw: ReadonlyArray<string>, key: string): number {
+  const depth = (line: string) => line.length - line.trimStart().length;
+  const own = raw.length > 0 ? Math.min(...raw.map(depth)) : 0;
+  return raw.findIndex((line) => depth(line) === own && line.trimStart().startsWith(`${key}:`));
 }
 
 // --- Go ----------------------------------------------------------------------
@@ -3043,9 +3084,12 @@ export async function readCustomTasks(folder: vscode.WorkspaceFolder): Promise<A
  * Everything the tasks are not is carried over where it was: the other keys of
  * the file, and the members of `tasks` the reader skipped — an empty command, an
  * object somebody was halfway through writing. `edit` keeps the tasks in order,
- * renames in place, drops or appends, so the tasks it hands back fill the slots
- * the tasks had, one by one, and anything new goes after them. A skipped member
- * whose name a task now takes is the one thing given up: the name is the task's.
+ * renames in place, drops or appends, so a task it hands back under a name the
+ * file already had stays in that name's slot, a name the file did not have takes
+ * the slot of the first task that went missing — which is what a rename is — and
+ * anything left over goes at the end. A deleted task's slot simply closes, so
+ * the members around it keep their neighbours. A skipped member whose name a
+ * task now takes is the one thing given up: the name is the task's.
  *
  * Comments do not survive, which is the price of writing the file back rather
  * than patching its text; the tree is the way these are meant to be edited, and
@@ -3083,20 +3127,22 @@ export async function editCustomTasks(
     return undefined;
   }
 
-  const taken = new Set(next.map(([name]) => name));
-  const queue = [...next];
+  const lines = new Map(next);
+  const known = new Set(current.members.filter(isTask).map(([name]) => name));
+  const incoming = next.filter(([name]) => !known.has(name));
   const members: Array<[string, unknown]> = [];
   for (const member of current.members) {
     if (isTask(member)) {
-      const task = queue.shift();
+      const kept = lines.get(member[0]);
+      const task: [string, string] | undefined = kept !== undefined ? [member[0], kept] : incoming.shift();
       if (task) {
         members.push(task);
       }
-    } else if (!taken.has(member[0])) {
+    } else if (!lines.has(member[0])) {
       members.push(member);
     }
   }
-  members.push(...queue);
+  members.push(...incoming);
 
   const body = customTasksBody(current.data, current.top, members);
   // `createDirectory` is `mkdir -p`: a folder with no `.vscode` yet gets one, and
@@ -3236,7 +3282,11 @@ async function collectCustomTasks(): Promise<{ entries: ScriptEntry[]; blank: vs
     folders.map(async (folder) => {
       const manifest = customTasksFile(folder);
       const text = await readText(manifest);
-      return { folder, manifest, tasks: text === undefined ? undefined : parseCustomTasks(text) };
+      // An empty file is an emptied list, as `readCustomTasks` and the writer
+      // read it — not a broken one, which would keep every star and approval of
+      // the tasks it held for as long as it stayed empty.
+      const tasks = text === undefined ? undefined : text.trim() ? parseCustomTasks(text) : [];
+      return { folder, manifest, tasks };
     }),
   );
   const entries: ScriptEntry[] = [];
@@ -3519,9 +3569,13 @@ export function commandFor(script: ScriptEntry): string {
  * punctuation task names and paths are normally built from. Anything else — a
  * space, a quote, `$`, a backtick — has to be quoted on its way to one, which
  * is what `buildTask` asks VS Code for.
+ *
+ * `@` is plain only after the first character. PowerShell reads a bare word
+ * that starts with one as splatting — `npm run @build` hands npm the contents
+ * of a variable named `build` — and VS Code's own quoting leaves it bare.
  */
 export function plainArgument(value: string): boolean {
-  return /^[\w.:@/=+-]+$/.test(value);
+  return /^[\w.:/=+-][\w.:@/=+-]*$/.test(value);
 }
 
 /**

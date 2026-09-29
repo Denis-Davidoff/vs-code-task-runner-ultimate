@@ -129,7 +129,9 @@ function jsonKey(text: string, path: ReadonlyArray<string>): TaskLocation | unde
       const start = index;
       const value = readJsonString(text, index);
       index = value.end;
-      const after = skipBlanks(text, index);
+      // JSONC lets a comment sit between a key and its colon — `"tasks" /* … */ :`
+      // is as much a key as `"tasks":`, and `parseJsonc` reads it as one.
+      const after = skipBlanksAndComments(text, index);
       if (text[after] !== ':') {
         continue;
       }
@@ -163,10 +165,18 @@ function readJsonString(text: string, start: number): { text: string; end: numbe
   while (index < text.length) {
     const char = text[index];
     if (char === '\\') {
-      // Only the escape's own character is consumed: the point is to find the
-      // closing quote, not to decode `\u` — a task name needing one is not a
-      // name any of these runners can be asked for on a command line.
-      value += text[index + 1] ?? '';
+      // Decoded the way `JSON.parse` decodes it, since that is how the parser
+      // read the name this is asked to find: `"bui\u006cd"` is the key `build`.
+      const next = text[index + 1] ?? '';
+      if (next === 'u') {
+        const hex = text.slice(index + 2, index + 6);
+        if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+          value += String.fromCharCode(parseInt(hex, 16));
+          index += 6;
+          continue;
+        }
+      }
+      value += JSON_ESCAPES[next] ?? next;
       index += 2;
       continue;
     }
@@ -179,6 +189,14 @@ function readJsonString(text: string, start: number): { text: string; end: numbe
   return { text: value, end: index };
 }
 
+const JSON_ESCAPES: Readonly<Record<string, string>> = {
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+};
+
 function skipComment(text: string, index: number): number {
   if (text[index + 1] === '/') {
     const end = text.indexOf('\n', index);
@@ -188,12 +206,18 @@ function skipComment(text: string, index: number): number {
   return end < 0 ? text.length : end + 2;
 }
 
-function skipBlanks(text: string, index: number): number {
+function skipBlanksAndComments(text: string, index: number): number {
   let at = index;
-  while (at < text.length && /\s/.test(text[at])) {
-    at++;
+  for (;;) {
+    while (at < text.length && /\s/.test(text[at])) {
+      at++;
+    }
+    if (text[at] === '/' && (text[at + 1] === '/' || text[at + 1] === '*')) {
+      at = skipComment(text, at);
+      continue;
+    }
+    return at;
   }
-  return at;
 }
 
 // --- TOML --------------------------------------------------------------------
@@ -251,11 +275,17 @@ function tomlKey(lines: ReadonlyArray<string>, targets: ReadonlyArray<TomlTarget
 
 function tomlPath(lines: ReadonlyArray<string>, path: string[], key: string): TaskLocation | undefined {
   let table: string[] = [];
+  // The multiline string a line opens inside of, if any. A help text that
+  // quotes `[tasks.build]` on a line of its own is not the table, and the
+  // parser, which reads strings whole, never took it for one.
+  let open: MultilineQuote | undefined;
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
+    const inside = open !== undefined;
+    open = multilineAfter(line, open);
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
+    if (inside || !trimmed || trimmed.startsWith('#')) {
       continue;
     }
 
@@ -277,6 +307,60 @@ function tomlPath(lines: ReadonlyArray<string>, path: string[], key: string): Ta
   }
 
   return undefined;
+}
+
+type MultilineQuote = '"""' | "'''";
+
+/**
+ * The multiline string still open at the end of a line, given the one open at
+ * its start. Single-line strings and comments are walked over only so that a
+ * `"""` inside them, or after a `#`, is not taken for an opener.
+ */
+function multilineAfter(line: string, open: MultilineQuote | undefined): MultilineQuote | undefined {
+  let index = 0;
+  let quote = open;
+
+  while (index < line.length) {
+    if (quote) {
+      if (quote === '"""' && line[index] === '\\') {
+        index += 2;
+        continue;
+      }
+      if (line.startsWith(quote, index)) {
+        // A run of quotes at the end closes on its last three, so `"""a""""`
+        // holds `a"` — the extra ones belong to the string, not a new opener.
+        index += 3;
+        while (index < line.length && line[index] === quote[0]) {
+          index++;
+        }
+        quote = undefined;
+        continue;
+      }
+      index++;
+      continue;
+    }
+
+    const char = line[index];
+    if (char === '#') {
+      return undefined;
+    }
+    if (line.startsWith('"""', index) || line.startsWith("'''", index)) {
+      quote = line.slice(index, index + 3) as MultilineQuote;
+      index += 3;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      index++;
+      while (index < line.length && line[index] !== char) {
+        index += char === '"' && line[index] === '\\' ? 2 : 1;
+      }
+      index++;
+      continue;
+    }
+    index++;
+  }
+
+  return quote;
 }
 
 /** `tool.poe."my task"` -> the three keys it names, or undefined if it is not a key path. */

@@ -25,7 +25,7 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }), shaped = [], folder, inputs = [], customFile = [], answer } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }), shaped = [], folder, inputs = [], customFile = [], answer, liveKeys = false } = {}) {
   // What the custom task prompts are answered with, in order, and what each
   // write of the custom tasks file would have put on disk.
   const answers = [...inputs];
@@ -34,6 +34,8 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
   const dialogs = [];
   // Every execution the stubbed stop was asked to end.
   const stopped = [];
+  // The scans a test says a `resetSources` has overtaken; see `staleScan`.
+  const staleScans = new Set();
   const probes = [];
   const launched = [];
   const terminals = [];
@@ -250,6 +252,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
                 ALL_ECOSYSTEMS: [...new Set(Object.values(ECOSYSTEMS))],
                 collectScripts: async () => scan,
                 emptyManifests: () => [],
+                staleScan: (scripts) => staleScans.has(scripts),
                 // A path alone is a manifest whose every row a setting decides.
                 settingShapedManifests: () =>
                   shaped.map((entry) => (Array.isArray(entry) ? [uri(entry[0]), entry[1]] : [uri(entry), () => true])),
@@ -258,7 +261,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
                 launchArgv: (entry) => entry.argv ?? [entry.name],
                 // The real test, verbatim: a stub that called everything plain
                 // would leave the quoting below untested.
-                plainArgument: (value) => /^[\w.:@/=+-]+$/.test(value),
+                plainArgument: (value) => /^[\w.:/=+-][\w.:@/=+-]*$/.test(value),
               }
             : {},
   });
@@ -270,7 +273,10 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // Set by activate in the real thing; the swatches in the colour picker are
     // files inside the extension, and this is where it keeps them.
     extensionUri = extUri;
-    keyForTask = () => undefined;
+    // Stubbed unless a test is about which live executions belong to a row —
+    // the real one reads the definition the way the task system hands it over.
+    const realKeyForTask = keyForTask;
+    keyForTask = ${liveKeys} ? realKeyForTask : () => undefined;
     repaint = () => {};
     confirmScript = async () => true;
     // The real one waits fifteen seconds on a task that will not die. The
@@ -280,7 +286,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
   `,
     Object.assign(context, { memento, extUri: uri('/ext'), stopped }),
   );
-  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked, customWrites, answers, dialogs, stopped };
+  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked, customWrites, answers, dialogs, stopped, staleScans };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -2037,6 +2043,23 @@ test('a row a setting took away keeps its marks, a row the file dropped does not
   assert.deepEqual(Object.keys(h.memento.data.titles), ['file:///repo/Cargo.toml::test']);
 });
 
+test('a scan the custom tasks file has moved past does not prune what the tree just filed', async () => {
+  // Read before a rename to `deploy-prod`, and back after the rename moved the
+  // approval and the star to the new name.
+  const moved = 'file:///repo/.vscode/task-script-explorer.json::deploy-prod';
+  const rows = [custom('deploy', 'make deploy')];
+  const stored = { favorites: [moved], approvals: { [moved]: 'make deploy' } };
+  const stale = harness({ scan: rows, stored });
+  stale.staleScans.add(rows);
+  await stale.pruneStaleRefs(rows);
+  assert.deepEqual([...stale.memento.data.favorites], [moved]);
+  assert.deepEqual(Object.keys(stale.memento.data.approvals), [moved]);
+  // The same list, current, is evidence the name is gone.
+  const current = harness({ scan: rows, stored });
+  await current.pruneStaleRefs(rows);
+  assert.deepEqual([...current.memento.data.favorites], []);
+});
+
 test('a compose service the file dropped loses its marks, a command the setting hid keeps them', async () => {
   const rows = composeFile();
   const h = harness({
@@ -2455,8 +2478,9 @@ test('a custom task goes to the shell as one line, as it was typed', () => {
   assert.equal(task.execution.command, 'tail -f logs/*.log | grep ERROR');
   assert.equal(task.execution.args, undefined);
   assert.equal(task.execution.options.cwd, '/repo');
-  // No `(.vscode/task-script-explorer.json)` after the name: it is every row's.
-  assert.equal(task.name, 'Tail logs');
+  // Named after its file like any other row: a root package.json script of the
+  // same name has no directory to add, and the two terminals would share a name.
+  assert.equal(task.name, 'Tail logs (.vscode/task-script-explorer.json)');
 });
 
 test('Add to Terminal types a custom task back exactly as it was written', async () => {
@@ -2489,6 +2513,22 @@ test('a name the file already holds is not written twice', async () => {
   const h = harness({ folder: FOLDER, scan: [], customFile: [['Build', 'make']], inputs: ['Build', 'make all'] });
   await h.createCustomTask(undefined);
   assert.equal(h.customWrites.length, 0);
+  // And the prompt does not close as if it had saved.
+  assert.match(h.warnings[0], /"Build" was added to \.vscode\/task-script-explorer\.json while you were typing; nothing was saved\./);
+});
+
+test('a name the file holds with spaces around it is taken, as it reads in the tree', async () => {
+  const h = harness({ folder: FOLDER, scan: [], customFile: [[' b ', 'make']], inputs: ['b', 'make all'] });
+  await h.createCustomTask(undefined);
+  assert.equal(h.customWrites.length, 0);
+  assert.equal(h.warnings.length, 1);
+});
+
+test('Edit Command on a task the file lost says nothing was saved', async () => {
+  const h = harness({ folder: FOLDER, customFile: [['Tail logs', LOGS.line]], inputs: ['make reset'] });
+  await h.editCustomTask({ kind: 'script', script: RESET });
+  assert.equal(h.customWrites.length, 0);
+  assert.match(h.warnings[0], /"Reset DB" is no longer in .*; nothing was saved\./);
 });
 
 test('Edit Command rewrites the line and leaves the rest of the file where it was', async () => {
@@ -2732,6 +2772,24 @@ test('Delete stops a running custom task before it takes it out of the file', as
   assert.deepEqual(h.customWrites.map((tasks) => [...tasks]), [[]]);
 });
 
+test('Delete stops every run of a custom task, not only the one the tree started', async () => {
+  // One started from the tree, one from the workbench's Run Task list: the same
+  // task twice, and the map holds a handle for only the first.
+  const run = () => ({
+    task: {
+      name: 'Reset DB',
+      definition: { type: 'taskRunnerUltimate', script: 'Reset DB', manifest: RESET.manifest.toString() },
+    },
+  });
+  const [ours, other] = [run(), run()];
+  const h = harness({ folder: FOLDER, customFile: [['Reset DB', RESET.line]], answer: 'Delete', executions: [ours, other], liveKeys: true });
+  h.running.set(RESET.key, ours);
+  await h.deleteCustomTask({ kind: 'script', script: RESET });
+  assert.equal(h.stopped.length, 2);
+  assert.ok(h.stopped.includes(ours) && h.stopped.includes(other));
+  assert.deepEqual(h.customWrites.map((tasks) => [...tasks]), [[]]);
+});
+
 test('characters Unicode may draw as nothing block a line, and ordinary letters of any script do not', () => {
   const h = harness({});
   const hidden = ['\u2800', '\u3164', '\u115f', '\uffa0', '\u00ad', '\ufe0f', '\u{e0041}', '\u034f', '\u17b4', '\t', '\ue000'];
@@ -2751,6 +2809,16 @@ test('a custom task whose name holds a hidden character is blocked, and drawn wi
   await h.startScript(task, true);
   assert.equal(h.launched.length, 0);
   assert.equal(h.dialogs[0].message, '"a\\u{a}\\u{a}\\u{202e}evil" will not run.');
+});
+
+test('a blocked custom task\'s line is spelled out in its description and its hover too', () => {
+  const task = custom('lint', 'echo ok \u202e;hs.krow/ptth//:sptth | lruc');
+  const h = harness({});
+  const item = h.treeItemFor({ kind: 'script', script: task });
+  assert.ok(item.description.includes('echo ok \\u{202e};hs.krow'), item.description);
+  assert.ok(!item.description.includes('\u202e'));
+  assert.ok(item.tooltip.startsWith('echo ok \\u{202e}'), item.tooltip);
+  assert.ok(!h.scriptItem(task).description.includes('\u202e'));
 });
 
 test('Rename confirmed unchanged leaves a hand-written name with spaces around it alone', async () => {

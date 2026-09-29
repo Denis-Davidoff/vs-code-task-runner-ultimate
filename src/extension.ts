@@ -27,6 +27,7 @@ import {
   SHELL_GLOB,
   SourceKind,
   SOURCE_GLOB,
+  staleScan,
   WATCH_GLOB,
 } from './sources';
 
@@ -717,9 +718,21 @@ function liveExecution(execution: vscode.TaskExecution): vscode.TaskExecution | 
   );
 }
 
-/** Task executions that are running but are not backed by a package.json script. */
-function foreignExecutions(): vscode.TaskExecution[] {
-  return liveExecutions().filter((exec) => !keyForTask(exec.task));
+/**
+ * Task executions that are running and that no row of this list stands for.
+ *
+ * Not "every execution `keyForTask` cannot read": a task of ours, or an npm
+ * task, whose script has since been deleted from its manifest — or whose
+ * manifest a setting has taken out of the scan — still has a key, and no row
+ * to wear it. Left out of here as well, it was a process the badge counted and
+ * neither list could stop or show.
+ */
+function foreignExecutions(scripts: ReadonlyArray<ScriptEntry>): vscode.TaskExecution[] {
+  const rows = new Set(scripts.map((script) => script.key));
+  return liveExecutions().filter((exec) => {
+    const key = keyForTask(exec.task);
+    return key === undefined || !rows.has(key);
+  });
 }
 
 /**
@@ -1166,10 +1179,17 @@ function customGroupTitle(script: ScriptEntry): string | undefined {
 
 /** What the lists show for a script: the user's title if it has one, else its name. */
 function displayName(script: ScriptEntry): string {
-  const name = customTitle(script) ?? script.name;
-  // A custom task's name comes out of a file anybody can write, and a row is as
-  // good a place as a dialog to draw a bidi override the wrong way round.
-  return script.kind === 'custom' ? visible(name) : name;
+  return shownText(script, customTitle(script) ?? script.name);
+}
+
+/**
+ * A custom task's own text — its name, its line — with its hidden characters
+ * spelled out, and anybody else's as it is. A custom task's text comes out of a
+ * file anybody can write, and a row, its dimmed description and its hover are
+ * all as good a place as a dialog to draw a bidi override the wrong way round.
+ */
+function shownText(script: ScriptEntry, text: string): string {
+  return script.kind === 'custom' ? visible(text) : text;
 }
 
 /** The rename dialog, for a script row and for a group heading alike. */
@@ -1419,7 +1439,9 @@ async function customFolder(node: TreeNode | undefined): Promise<vscode.Workspac
  * learn the keys of one file it may already be behind.
  */
 async function customNames(folder: vscode.WorkspaceFolder): Promise<Set<string>> {
-  return new Set((await readCustomTasks(folder))?.map(([name]) => name));
+  // Trimmed, as a typed name is: a hand-written ` b ` is the `b` the tree shows,
+  // and a second `b` beside it would be two rows nobody can tell apart.
+  return new Set((await readCustomTasks(folder))?.map(([name]) => name.trim()));
 }
 
 /** The prompt for a task's name, shared by create and rename so both refuse the same things. */
@@ -1438,7 +1460,7 @@ function askTaskName(options: { title: string; value?: string; taken: Set<string
         return 'Line breaks and hidden characters cannot be part of a name.';
       }
       // Its own name is not a clash: a rename that changes nothing is a no-op.
-      return name !== options.value && options.taken.has(name) ? `"${name}" is already a custom task here.` : undefined;
+      return name !== options.value?.trim() && options.taken.has(name) ? `"${name}" is already a custom task here.` : undefined;
     },
   });
 }
@@ -1464,16 +1486,36 @@ function askTaskCommand(options: { title: string; value?: string; folder: vscode
 /**
  * Writes a folder's custom tasks and rescans, or says why it could not. The
  * write goes through `editCustomTasks`, which refuses to replace a file it
- * cannot read, and that refusal is the one failure worth a sentence.
+ * cannot read, and says so in an error.
+ *
+ * `edit` sees the file as it is now rather than as the prompt saw it, and may
+ * find the edit no longer applies — the name taken, the task gone — while the
+ * prompt was open. It answers with the sentence that says so, and the user is
+ * told: a prompt that closes as if it had saved, having saved nothing, reads as
+ * a save.
  */
 async function writeCustomTasks(
   folder: vscode.WorkspaceFolder,
-  edit: (tasks: Array<[string, string]>) => Array<[string, string]> | undefined,
+  edit: (tasks: Array<[string, string]>) => Array<[string, string]> | string,
   written?: () => Promise<void>,
 ): Promise<boolean> {
+  let refused: string | undefined;
   try {
-    const body = await editCustomTasks(folder, edit);
+    const body = await editCustomTasks(folder, (tasks) => {
+      const next = edit(tasks);
+      if (typeof next === 'string') {
+        refused = next;
+        return undefined;
+      }
+      return next;
+    });
     if (body === undefined) {
+      if (refused !== undefined) {
+        void vscode.window.showWarningMessage(refused);
+      }
+      // The tree was drawn from the file as it was, which is what just proved
+      // out of date.
+      invalidate();
       return false;
     }
     customWritten.set(customTasksFile(folder).toString(), body);
@@ -1487,6 +1529,13 @@ async function writeCustomTasks(
   // new name — goes in before the rescan and not after it. The prune that runs
   // on that rescan would otherwise read a renamed task's old ref as a deleted
   // task's and drop it, and a new row would be drawn unapproved for a moment.
+  //
+  // The scan is let go of on both sides of it. Before: one that read the file
+  // before this write would otherwise come back while the refs are moving and
+  // prune against the old list, dropping the new name's. After, in `invalidate`
+  // below: one started while they were moving has read the new file against the
+  // old refs. Either is stale, and a stale scan does not prune.
+  resetSources();
   await written?.();
   // Straight away rather than through the watcher's delay: the user is looking
   // at the tree, waiting for the row they just made.
@@ -1519,7 +1568,9 @@ async function createCustomTask(node: TreeNode | undefined): Promise<void> {
     (tasks) =>
       // Checked again against the file as it is now: the prompt's list is from
       // the last scan, and the file may have been edited while it was open.
-      tasks.some(([existing]) => existing === name) ? undefined : [...tasks, [name, line]],
+      tasks.some(([existing]) => existing.trim() === name)
+        ? `"${name}" was added to ${CUSTOM_TASKS_FILE} while you were typing; nothing was saved.`
+        : [...tasks, [name, line]],
     // Typed here, so seen here: a task made in the tree never asks to be approved.
     () => approve(customRef(folder, name), line),
   );
@@ -1556,7 +1607,7 @@ async function editCustomTask(node: TreeNode | undefined): Promise<void> {
     (tasks) =>
       tasks.some(([name]) => name === script.name)
         ? tasks.map(([name, value]): [string, string] => [name, name === script.name ? line : value])
-        : undefined,
+        : gone(script),
     () => approve(scriptRef(script), line),
   );
 }
@@ -1576,8 +1627,10 @@ async function renameCustomTask(script: ScriptEntry): Promise<void> {
   if (!folder) {
     return;
   }
-  if (running.has(script.key)) {
-    void vscode.window.showWarningMessage(`Stop "${script.name}" before renaming it.`);
+  // Every run, not only the one `running` holds: one started from the Run Task
+  // list is filed under the old name all the same.
+  if (executionsOf([script]).length > 0) {
+    void vscode.window.showWarningMessage(`Stop "${visible(script.name)}" before renaming it.`);
     return;
   }
   const taken = await customNames(folder);
@@ -1593,9 +1646,11 @@ async function renameCustomTask(script: ScriptEntry): Promise<void> {
   await writeCustomTasks(
     folder,
     (tasks) =>
-      tasks.some(([existing]) => existing === name) || !tasks.some(([existing]) => existing === script.name)
-        ? undefined
-        : tasks.map(([existing, line]): [string, string] => [existing === script.name ? name : existing, line]),
+      !tasks.some(([existing]) => existing === script.name)
+        ? gone(script)
+        : tasks.some(([existing]) => existing !== script.name && existing.trim() === name)
+          ? `"${name}" was added to ${CUSTOM_TASKS_FILE} while you were typing; nothing was renamed.`
+          : tasks.map(([existing, line]): [string, string] => [existing === script.name ? name : existing, line]),
     // The approval moves with the rest: a rename from the tree changes a name,
     // not what runs, and that is not a reason to ask again.
     () => moveRef(from, to),
@@ -1634,16 +1689,23 @@ async function deleteCustomTask(node: TreeNode | undefined): Promise<void> {
     return;
   }
   // A row that is gone cannot be stopped from the tree any more, so a run of it
-  // goes first. One that will not stop keeps its row, for the same reason.
-  const execution = running.get(script.key);
-  if (execution && !(await stopExecution(execution))) {
+  // goes first — every run, the way Stop All in Package stops them, since one
+  // started from the Run Task list is this row's too. One that will not stop
+  // keeps its row, for the same reason.
+  const stopped = await Promise.all(executionsOf([script]).map(stopExecution));
+  if (!stopped.every(Boolean)) {
     return;
   }
   // What was filed against it goes with it, through the same prune that follows
   // a task deleted from any manifest: the file is read, and the name is not in it.
   await writeCustomTasks(folder, (tasks) =>
-    tasks.some(([name]) => name === script.name) ? tasks.filter(([name]) => name !== script.name) : undefined,
+    tasks.some(([name]) => name === script.name) ? tasks.filter(([name]) => name !== script.name) : gone(script),
   );
+}
+
+/** What a custom task's prompt says when the file lost the task while it was open. */
+function gone(script: ScriptEntry): string {
+  return `"${visible(script.name)}" is no longer in ${CUSTOM_TASKS_FILE}; nothing was saved.`;
 }
 
 /** Everything filed against one script ref, filed against another instead. */
@@ -2741,7 +2803,10 @@ let prunedScan: ScriptEntry[] | undefined;
  * script says nothing about whether the manifest is still there.
  */
 async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
-  if (prunedScan === scripts) {
+  // A scan that was already reading when a manifest changed — the custom tasks
+  // file the tree has just written, most pointedly — is evidence about files
+  // that are no longer there. The fresh scan behind it does the pruning.
+  if (prunedScan === scripts || staleScan(scripts)) {
     return;
   }
   prunedScan = scripts;
@@ -4236,7 +4301,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     : attachToHosts(shown);
 
   // Tasks that are not backed by a manifest have no group of their own.
-  const foreign = foreignExecutions();
+  const foreign = foreignExecutions(scripts);
   if (foreign.length > 0) {
     roots.unshift({
       kind: 'group',
@@ -4867,7 +4932,7 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   // nothing about most of them — so the tooltip is where it is readable without
   // opening the context menu that toggles it.
   item.tooltip = [
-    commandFor(node.script),
+    shownText(node.script, commandFor(node.script)),
     node.script.location,
     ...(needsConfirmation(node.script) ? ['Asks before it starts or stops.'] : []),
     ...(cleared === 'unapproved' ? ['Changed outside this tree — shows the command and asks before it runs.'] : []),
@@ -4966,12 +5031,12 @@ function clearanceIcon(state: 'unapproved' | 'blocked'): vscode.ThemeIcon {
 function scriptDescription(script: ScriptEntry, inFavorites = false): string {
   const parts: string[] = [];
   if (customTitle(script)) {
-    parts.push(script.name);
+    parts.push(shownText(script, script.name));
   }
   if (inFavorites) {
     parts.push(packageOrigin(script));
   }
-  parts.push(script.command);
+  parts.push(shownText(script, script.command));
   return parts.join(' · ');
 }
 
@@ -5850,13 +5915,32 @@ let lastClick: { id: string; at: number } | undefined;
 
 /**
  * What the double-click test compares. A script is its own key, which is stable
- * across repaints; a foreign row has only the task behind it to be named by.
+ * across repaints; a foreign row is the execution behind it.
+ *
+ * The execution itself and not its task's name: two folders' `watch`, or a
+ * task started twice, are rows with one name, and a click on each inside the
+ * window would stop the second as a double click on the first. The extension
+ * host hands back the same object for as long as the run lasts, so the identity
+ * holds across the repaints between two clicks.
  */
 function clickId(node: TreeNode): string {
   if (node.kind === 'script') {
     return `script:${node.script.key}`;
   }
-  return node.kind === 'foreign' ? `foreign:${node.execution.task.name}` : node.id;
+  return node.kind === 'foreign' ? `foreign:${executionSerial(node.execution)}` : node.id;
+}
+
+const executionSerials = new WeakMap<vscode.TaskExecution, number>();
+let nextExecutionSerial = 0;
+
+/** A number for an execution object, the same one for as long as it is alive. */
+function executionSerial(execution: vscode.TaskExecution): number {
+  let serial = executionSerials.get(execution);
+  if (serial === undefined) {
+    serial = ++nextExecutionSerial;
+    executionSerials.set(execution, serial);
+  }
+  return serial;
 }
 
 /**
@@ -6317,7 +6401,7 @@ const separator = (label: string): Item => ({ label, kind: vscode.QuickPickItemK
 function buildItems(saved: ScriptEntry[]): Item[] {
   const scripts = pinRunning(saved);
   const items: Item[] = [];
-  const foreign = foreignExecutions();
+  const foreign = foreignExecutions(scripts);
   const multiPackage = new Set(scripts.map((script) => script.manifest.toString())).size > 1;
 
   const favorites = runningFirst(favoriteScripts(scripts));
@@ -6621,14 +6705,11 @@ function buildTask(script: ScriptEntry, reveal = true, verb?: string): vscode.Ta
   // just the directory — except for a Node package, where the file name is
   // always package.json and would only be noise.
   //
-  // A custom task has nothing to disambiguate: its name is one the user chose,
-  // and the file it is kept in is the same file for every one of them.
-  const where =
-    script.kind === 'custom'
-      ? undefined
-      : script.kind === 'npm' || script.kind === 'deno'
-        ? script.directory
-        : script.location;
+  // Deno is not that exception: deno.json and deno.jsonc can share a directory.
+  // Nor is a custom task, however much its name is the user's own: a root
+  // package.json has no directory to add, so its `build` and a custom `build`
+  // would both be the bare word, and `terminalFor` would show either for either.
+  const where = script.kind === 'npm' ? script.directory : script.location;
   // The definition names the row and the title names the work, which are the
   // same word for every task but one: the ■ on a row whose containers somebody
   // else brought up runs `stop` *for that row*, and filing it under a `stop`

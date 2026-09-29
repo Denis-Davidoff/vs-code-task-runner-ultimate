@@ -51,3 +51,39 @@ test('a custom task is found on its key in the tasks object', () => {
   assert.equal(found?.line, 3);
   assert.equal(text.split('\n')[3].slice(found.character, found.character + found.length), 'Tail');
 });
+
+test('a TOML table header quoted inside a multiline string is not the table', () => {
+  const text = [
+    '[tasks.help]',
+    'description = """',
+    'Run it as:',
+    '[tasks.build]',
+    '"""',
+    "notes = '''",
+    '[tasks.build]',
+    "'''",
+    'script = "echo"',
+    '',
+    '[tasks.build]',
+    'run = "cargo build"',
+  ].join('\n');
+  assert.equal(locateTask(text, 'mise', 'build')?.line, 10);
+});
+
+test('a triple quote inside a one-line string or a comment does not open a multiline string', () => {
+  const text = ['[tasks.a]', 'run = "echo \\"\\"\\""  # """', '', '[tasks.build]', 'run = "x"'].join('\n');
+  assert.equal(locateTask(text, 'mise', 'build')?.line, 3);
+});
+
+test('a JSONC key with a comment before its colon is still a key', () => {
+  const text = ['{', '  "tasks" /* the runner */ : {', '    "build" // why', '      : "deno run"', '  }', '}'].join('\n');
+  const found = locateTask(text, 'deno', 'build');
+  assert.equal(found?.line, 2);
+  assert.equal(text.split('\n')[2].slice(found.character, found.character + found.length), 'build');
+});
+
+test('a JSON key spelled with escapes is found by the name it decodes to', () => {
+  const text = ['{', '  "scripts": {', '    "bui\\u006cd": "tsc",', '    "a\\/b": "x"', '  }', '}'].join('\n');
+  assert.equal(locateTask(text, 'npm', 'build')?.line, 2);
+  assert.equal(locateTask(text, 'npm', 'a/b')?.line, 3);
+});

@@ -36,10 +36,11 @@ function harness() {
     confirmScript = async () => true;
     startScript = async (script) => launches.push(script);
     keyForTask = (task) => task.definition.key;
+    showTerminal = async () => {};
     exports.lifecycle = {
       running, executionOf, stopExecution, stopNode, restartNode, markEnded,
       liveExecutions, runningCount, forgetExecution, clearEnded,
-      stopGroup, restartGroup, stopStack,
+      stopGroup, restartGroup, stopStack, activateNode, foreignExecutions,
     };
   `, context);
   const api = context.exports.lifecycle;
@@ -192,6 +193,33 @@ test('a stale foreign row repaints when its stop button finds nothing', async ()
   const h = harness();
   await h.stopNode({ kind: 'foreign', execution: h.execution() });
   assert.ok(h.repaints.length > 0, 'the vanished row must ask for a repaint');
+});
+
+test('two foreign rows of one name are two rows to the double-click test', async () => {
+  const h = harness();
+  // Two folders' `watch`: the same name, and neither one a row of ours.
+  const [a, b] = [h.execution(), h.execution()];
+  for (const run of [a, b]) {
+    run.task = { ...run.task, name: 'watch', definition: {} };
+  }
+  h.tasks.taskExecutions = [a, b];
+  await h.activateNode({ kind: 'foreign', execution: a }, true);
+  await h.activateNode({ kind: 'foreign', execution: b }, true);
+  assert.deepEqual(h.tasks.taskExecutions, [a, b]);
+  // A real double click on one of them still stops it, and only it.
+  await h.activateNode({ kind: 'foreign', execution: b }, true);
+  assert.deepEqual(h.tasks.taskExecutions, [a]);
+});
+
+test('a run whose row the scan no longer has is listed under Other tasks', () => {
+  const h = harness();
+  const kept = h.execution();
+  const orphan = h.execution();
+  orphan.task = { ...orphan.task, name: 'deploy', definition: { key: 'deploy' } };
+  const unknown = h.execution();
+  unknown.task = { ...unknown.task, name: 'watch', definition: {} };
+  h.tasks.taskExecutions = [kept, orphan, unknown];
+  assert.deepEqual(h.foreignExecutions([{ key: 'dev' }]), [orphan, unknown]);
 });
 
 // --- group commands and a row that is running twice ----------------------------

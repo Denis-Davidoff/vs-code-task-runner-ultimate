@@ -86,7 +86,7 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
+    exports.parsers = { parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, plainArgument, staleScan: exports.staleScan, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
   `,
     context,
   );
@@ -892,6 +892,15 @@ test('a deno task made only of dependencies is still a row', () => {
   assert.equal(parsed.tasks[0].command, 'build:client, build:server');
 });
 
+test('a deno task names its own config file, so deno.json and deno.jsonc rows run their own', () => {
+  const { parseDenoJson } = harness();
+  const text = JSON.stringify({ tasks: { build: 'deno run a.ts', all: { dependencies: ['build'] } } });
+  assert.deepEqual(plain(parseDenoJson(text, 'deno.jsonc').tasks.map((task) => task.argv)), [
+    ['deno', 'task', '--config', 'deno.jsonc', 'build'],
+    ['deno', 'task', '--config', 'deno.jsonc', 'all'],
+  ]);
+});
+
 test('a scripts table that is an array names no rows', () => {
   const { parsePackageJson, parseDenoJson } = harness();
   assert.equal(parsePackageJson('{"scripts": ["echo hi", "npm test"]}'), undefined);
@@ -1292,6 +1301,34 @@ test('a Taskfile description is the task\'s own, and an empty block has none', (
   );
 });
 
+test('a variable named internal does not hide the task that declares it', () => {
+  const { parseTaskfile } = harness();
+  const text = [
+    'version: "3"',
+    'tasks:',
+    '  public:',
+    '    vars:',
+    '      internal: true',
+    '    cmds:',
+    '      - echo',
+    '  hidden:',
+    '    internal: true  # helper',
+    '    cmds:',
+    '      - echo',
+    '  shown:',
+    '    internal: false',
+  ].join('\n');
+  const parsed = plain(parseTaskfile(text, 'Taskfile.yml'));
+  assert.deepEqual(parsed.tasks.map((task) => task.name), ['public', 'shown']);
+});
+
+test('an argument that starts with @ is not plain, so PowerShell does not splat it', () => {
+  const { plainArgument } = harness();
+  assert.equal(plainArgument('@build'), false);
+  assert.equal(plainArgument('build@2'), true);
+  assert.equal(plainArgument('docker:build'), true);
+});
+
 // --- custom tasks ------------------------------------------------------------
 
 const CUSTOM = '/repo/.vscode/task-script-explorer.json';
@@ -1444,6 +1481,38 @@ test('a `tasks` that is not an object is not an emptied list, so the scan does n
     assert.deepEqual(plain(h.emptyManifestsOf(scan)), [], tasks);
     assert.equal(await h.readCustomTasks({ name: 'repo', uri: uri('/repo') }), undefined, tasks);
   }
+});
+
+test('an emptied custom tasks file is a blank list, as the reader and the writer read it', async () => {
+  for (const text of ['', '  \n']) {
+    const h = harness({ folders: ['/repo'], root: '/repo', found: { [CUSTOM]: text } });
+    h.resetSources();
+    const scan = await h.collectScripts();
+    assert.deepEqual(plain(h.emptyManifestsOf(scan)).map((at) => at.path), [CUSTOM], JSON.stringify(text));
+    assert.deepEqual(plain(await h.readCustomTasks({ name: 'repo', uri: uri('/repo') })), []);
+  }
+});
+
+test('deleting a task closes its slot, and a skipped member keeps its neighbours', async () => {
+  const h = harness({ found: { [CUSTOM]: '{ "tasks": { "A": "x", "draft": "", "B": "y" } }' } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await h.editCustomTasks(folder, (tasks) => tasks.filter(([name]) => name !== 'A'));
+  assert.deepEqual(Object.keys(JSON.parse(h.written[CUSTOM]).tasks), ['draft', 'B']);
+  // And a rename stays in the slot it was renamed in.
+  const renamed = harness({ found: { [CUSTOM]: '{ "tasks": { "A": "x", "draft": "", "B": "y" } }' } });
+  await renamed.editCustomTasks(folder, (tasks) => tasks.map(([name, line]) => [name === 'A' ? 'C' : name, line]));
+  assert.deepEqual(Object.keys(JSON.parse(renamed.written[CUSTOM]).tasks), ['C', 'draft', 'B']);
+});
+
+test('a scan is stale once the sources are reset after it started', async () => {
+  const h = harness({ folders: ['/repo'], root: '/repo', found: { [CUSTOM]: '{ "tasks": { "a": "b" } }' } });
+  h.resetSources();
+  const scan = await h.collectScripts();
+  assert.equal(h.staleScan(scan), false);
+  h.resetSources();
+  assert.equal(h.staleScan(scan), true);
+  // A list no scan produced says nothing either way, and is not held back.
+  assert.equal(h.staleScan([]), false);
 });
 
 test('a root key written twice is written back once', async () => {
