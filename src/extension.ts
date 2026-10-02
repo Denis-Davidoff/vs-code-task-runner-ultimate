@@ -16,6 +16,7 @@ import {
   editCustomTasks,
   emptyManifests,
   GO_GLOB,
+  goRootChanged,
   launchArgv,
   plainArgument,
   readCustomTasks,
@@ -321,20 +322,6 @@ function iconPackChanged(): void {
   }
 }
 
-/**
- * Whether a `.go` file sits beside a `go.mod` — the only Go files whose contents
- * decide anything, since `go run .` is about the module root and nothing below it.
- */
-async function isModuleRoot(file: vscode.Uri): Promise<boolean> {
-  const directory = file.with({ path: path.posix.dirname(file.path) });
-  try {
-    await vscode.workspace.fs.stat(vscode.Uri.joinPath(directory, 'go.mod'));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function activate(context: vscode.ExtensionContext): void {
   storage = context.workspaceState;
   // The settings entry in the menu filters the settings editor by this id, and
@@ -538,11 +525,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // Go is the exception: its `run` row turns on the `package` clause inside the
   // file, so editing `package server` into `package main` has to reach the tree
   // — and that is a change, not a create. The glob cannot say "beside a
-  // `go.mod`", so the handler asks, and a save anywhere else in a Go repository
-  // costs one `stat` instead of a rescan of the workspace.
+  // `go.mod`", so the handler asks whether the module root's answer moved, and
+  // a save that leaves it where it was — nearly every save — rescans nothing.
   const goWatcher = vscode.workspace.createFileSystemWatcher(GO_GLOB);
   const onGoChange = async (uri: vscode.Uri) => {
-    if (await isModuleRoot(uri)) {
+    if (await goRootChanged(uri)) {
       invalidateSoon();
     }
   };
@@ -6148,7 +6135,10 @@ function quoteFor(quoting: 'posix' | 'powershell' | 'cmd', value: string): strin
   if (quoting === 'cmd') {
     return `"${value.replace(/"/g, '""')}"`;
   }
-  const escaped = quoting === 'powershell' ? value.replace(/'/g, "''") : value.replace(/'/g, "'\\''");
+  // PowerShell takes the typographic single quotes — ‘ ’ ‚ ‛ — for `'` as well,
+  // so each of them ends the string too and is doubled like the plain one.
+  const escaped =
+    quoting === 'powershell' ? value.replace(/['\u2018-\u201b]/g, '$&$&') : value.replace(/'/g, "'\\''");
   return `'${escaped}'`;
 }
 
@@ -6774,13 +6764,14 @@ function executionFor(argv: string[], cwd: string): vscode.ShellExecution | vsco
  *
  * A quote character of either kind is what breaks out of it, whichever shell is
  * in play — `'` for sh and PowerShell, `"` for cmd.exe — so neither is let
- * through. A control character goes with them: a newline inside a cmd.exe
+ * through. Nor are their typographic twins: PowerShell reads ‘ ’ ‚ ‛ as `'` and
+ * “ ” „ as `"`, and the strong quoting VS Code builds escapes none of them. A control character goes with them: a newline inside a cmd.exe
  * command line ends the line, and what follows it is the next command. And on
  * Windows so does `%`, which cmd.exe expands inside double quotes, where the
  * `^` that escapes it elsewhere is itself literal.
  */
 function quotable(value: string): boolean {
-  if (/['"\u0000-\u001f]/.test(value)) {
+  if (/['"\u2018-\u201e\u0000-\u001f]/.test(value)) {
     return false;
   }
   return process.platform !== 'win32' || !value.includes('%');

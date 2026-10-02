@@ -1,4 +1,5 @@
 import { DOCKERFILE_STAGE, expandBraces, JUST_RECIPE, MAKE_TARGET, makeDefineLines, SourceKind, yamlBlockKeys } from './sources';
+import { readTomlKeyPath, TomlKey } from './toml';
 
 /**
  * Where a task is written down in its manifest: a zero-based line, and the span
@@ -110,12 +111,18 @@ function dockerfileStage(lines: string[], name: string): TaskLocation | undefine
  *
  * Only keys at the exact depth of the path match, which is what keeps a script
  * called `scripts` from answering for the table that holds it.
+ *
+ * A duplicated key is answered by its last occurrence, because that is the one
+ * `JSON.parse` keeps and so the one the row runs. The same goes for the tables
+ * above it: a second `"scripts"` replaces the first whole, and a key found in
+ * the first is forgotten when it opens.
  */
 function jsonKey(text: string, path: ReadonlyArray<string>): TaskLocation | undefined {
   // One entry per open brace or bracket, holding the key it is the value of —
   // null for the document's own outermost one, and for anything inside an array.
   const stack: Array<string | null> = [];
   let pending: string | null = null;
+  let found: TaskLocation | undefined;
   let index = 0;
 
   while (index < text.length) {
@@ -135,10 +142,17 @@ function jsonKey(text: string, path: ReadonlyArray<string>): TaskLocation | unde
       if (text[after] !== ':') {
         continue;
       }
-      // A key at the right depth whose path matches to the last segment.
-      if (stack.length === path.length && path.every((key, at) => (at === path.length - 1 ? key === value.text : stack[at + 1] === key))) {
+      // A key whose path matches the path's own up to its depth: the task itself
+      // at the full depth, one of the tables holding it above that.
+      const depth = stack.length;
+      if (
+        depth >= 1 &&
+        depth <= path.length &&
+        value.text === path[depth - 1] &&
+        path.slice(0, depth - 1).every((key, at) => stack[at + 1] === key)
+      ) {
         // The name without its quotes, as every other locator selects it.
-        return at(text, start + 1, index - start - 2);
+        found = depth === path.length ? at(text, start + 1, index - start - 2) : undefined;
       }
       pending = value.text;
       index = after + 1;
@@ -156,7 +170,7 @@ function jsonKey(text: string, path: ReadonlyArray<string>): TaskLocation | unde
     index++;
   }
 
-  return undefined;
+  return found;
 }
 
 function readJsonString(text: string, start: number): { text: string; end: number } {
@@ -289,24 +303,37 @@ function tomlPath(lines: ReadonlyArray<string>, path: string[], key: string): Ta
       continue;
     }
 
-    const header = /^\[\[?\s*(.*?)\s*\]\]?/.exec(trimmed);
-    if (header) {
-      const keys = tomlKeyPath(header[1]);
-      table = keys ?? [];
-      if (keys && under(keys, path)) {
-        return on(lines, index, key);
+    // Read with the parser's own key reader rather than a pattern: a quoted key
+    // may hold a `]`, an `=` or a `\u` escape, and only reading it the way
+    // `parseToml` did finds the same keys in it.
+    const first = line.length - line.trimStart().length;
+    if (line[first] === '[') {
+      const open = line[first + 1] === '[' ? first + 2 : first + 1;
+      const header = readTomlKeyPath(line, open);
+      const keys = header && line.slice(header.end).startsWith(']') ? header.keys : undefined;
+      table = keys?.map((each) => each.key) ?? [];
+      if (keys && under(table, path)) {
+        return onKey(lines, index, keys[path.length - 1], key);
       }
       continue;
     }
 
-    const assignment = /^([^=]+?)\s*=/.exec(trimmed);
-    const keys = assignment ? tomlKeyPath(assignment[1]) : undefined;
-    if (keys && under([...table, ...keys], path)) {
-      return on(lines, index, key);
+    const assignment = readTomlKeyPath(line, first);
+    if (!assignment || line[assignment.end] !== '=') {
+      continue;
+    }
+    const keys = assignment.keys;
+    if (under([...table, ...keys.map((each) => each.key)], path)) {
+      return onKey(lines, index, keys[path.length - 1 - table.length], key);
     }
   }
 
   return undefined;
+}
+
+/** The span a key was written as, when the path's last key is on this line. */
+function onKey(lines: ReadonlyArray<string>, line: number, written: TomlKey | undefined, name: string): TaskLocation {
+  return written ? { line, character: written.start, length: written.end - written.start } : on(lines, line, name);
 }
 
 type MultilineQuote = '"""' | "'''";
@@ -361,47 +388,6 @@ function multilineAfter(line: string, open: MultilineQuote | undefined): Multili
   }
 
   return quote;
-}
-
-/** `tool.poe."my task"` -> the three keys it names, or undefined if it is not a key path. */
-function tomlKeyPath(source: string): string[] | undefined {
-  const keys: string[] = [];
-  let index = 0;
-
-  for (;;) {
-    while (index < source.length && /\s/.test(source[index])) {
-      index++;
-    }
-    const quote = source[index];
-    if (quote === '"' || quote === "'") {
-      index++;
-      let value = '';
-      while (index < source.length && source[index] !== quote) {
-        if (quote === '"' && source[index] === '\\') {
-          index++;
-        }
-        value += source[index++];
-      }
-      index++;
-      keys.push(value);
-    } else {
-      let value = '';
-      while (index < source.length && /[A-Za-z0-9_-]/.test(source[index])) {
-        value += source[index++];
-      }
-      if (!value) {
-        return undefined;
-      }
-      keys.push(value);
-    }
-    while (index < source.length && /\s/.test(source[index])) {
-      index++;
-    }
-    if (source[index] !== '.') {
-      return index === source.length ? keys : undefined;
-    }
-    index++;
-  }
 }
 
 /** True when `keys` is the path itself or something nested inside it. */
@@ -498,10 +484,12 @@ function noxSession(lines: ReadonlyArray<string>, name: string): TaskLocation | 
     if (explicit) {
       named = explicit[1];
     }
-    const definition = /^\s*def\s+([A-Za-z_]\w*)\s*\(/.exec(line);
+    const definition = /^(\s*def\s+)([A-Za-z_]\w*)\s*\(/.exec(line);
     if (definition) {
-      if ((named ?? definition[1]) === name) {
-        return on(lines, index, definition[1]);
+      if ((named ?? definition[2]) === name) {
+        // The function's name, measured off the match: `def e(…)` has an `e` in
+        // `def` first.
+        return { line: index, character: definition[1].length, length: definition[2].length };
       }
       armed = false;
       named = undefined;
@@ -521,6 +509,13 @@ function makeTarget(lines: ReadonlyArray<string>, name: string): TaskLocation | 
     }
     const match = MAKE_TARGET.exec(line);
     if (match && match[1].trim().split(/\s+/).includes(name)) {
+      // The target as a whole word of the target list, not the first place its
+      // text appears: `all a:` has an `a` in `all`, and `a.o a:` one in `a.o`.
+      for (const word of match[1].matchAll(/\S+/g)) {
+        if (word[0] === name) {
+          return { line: index, character: word.index ?? 0, length: name.length };
+        }
+      }
       return on(lines, index, name);
     }
   }
@@ -571,13 +566,37 @@ function loose(lines: ReadonlyArray<string>, name: string): TaskLocation | undef
 
 // --- positions ---------------------------------------------------------------
 
-/** A location on a line, pointing at the name if it is on it and at the line if it is not. */
+/**
+ * A location on a line, pointing at the name if it is on it and at the line if
+ * it is not.
+ *
+ * The name as a word of its own where it is one: a short name is very often a
+ * piece of something else on the same line — the `a` in `tasks` before
+ * `tasks.a`, the `e` in `def` — and the first place its text turns up is then
+ * not the key. Only when it appears nowhere on its own does the first
+ * occurrence do.
+ */
 function on(lines: ReadonlyArray<string>, line: number, name: string): TaskLocation {
-  const character = lines[line]?.indexOf(name) ?? -1;
+  const text = lines[line] ?? '';
+  let character = -1;
+  if (name) {
+    for (let from = text.indexOf(name); from >= 0; from = text.indexOf(name, from + 1)) {
+      if (!NAME_CHAR.test(text[from - 1] ?? '') && !NAME_CHAR.test(text[from + name.length] ?? '')) {
+        character = from;
+        break;
+      }
+    }
+    if (character < 0) {
+      character = text.indexOf(name);
+    }
+  }
   return character < 0
     ? { line, character: 0, length: 0 }
     : { line, character, length: name.length };
 }
+
+/** What a name runs on through: next to one of these, it is part of a longer word. */
+const NAME_CHAR = /[A-Za-z0-9_-]/;
 
 /** The same, from an offset into the whole text. */
 function at(text: string, offset: number, length: number): TaskLocation {

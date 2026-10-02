@@ -13,9 +13,11 @@ const transpile = (file) =>
   }).outputText;
 const sources = vm.createContext({ exports: {}, Buffer, process, require: (name) => (name === 'path' ? path : {}) });
 vm.runInContext(transpile('sources.ts'), sources);
+const toml = vm.createContext({ exports: {} });
+vm.runInContext(transpile('toml.ts'), toml);
 const context = vm.createContext({
   exports: {},
-  require: (name) => (name === './sources' ? sources.exports : {}),
+  require: (name) => ({ './sources': sources.exports, './toml': toml.exports })[name] ?? {},
 });
 vm.runInContext(transpile('locate.ts'), context);
 const { locateTask } = context.exports;
@@ -86,4 +88,41 @@ test('a JSON key spelled with escapes is found by the name it decodes to', () =>
   const text = ['{', '  "scripts": {', '    "bui\\u006cd": "tsc",', '    "a\\/b": "x"', '  }', '}'].join('\n');
   assert.equal(locateTask(text, 'npm', 'build')?.line, 2);
   assert.equal(locateTask(text, 'npm', 'a/b')?.line, 3);
+});
+
+/** The text a location selects on its line. */
+const selected = (text, found) => text.split('\n')[found.line].slice(found.character, found.character + found.length);
+
+test('a short name is selected where it is the key, not inside a longer word', () => {
+  const cases = [
+    ['[tasks.a]\nrun = "x"', 'mise', 'a', 0, 7],
+    ['tasks.s.run = "x"', 'mise', 's', 0, 6],
+    ['[tool.poe.tasks.o]\ncmd = "x"', 'pyproject', 'o', 0, 16],
+    ['all a:\n\techo', 'make', 'a', 0, 4],
+    ['a.o a:\n\techo', 'make', 'a', 0, 4],
+    ['@nox.session\ndef e(session):\n    pass', 'nox', 'e', 1, 4],
+  ];
+  for (const [text, kind, name, line, character] of cases) {
+    assert.deepEqual({ ...locateTask(text, kind, name) }, { line, character, length: name.length }, `${kind} ${name}`);
+  }
+});
+
+test('a duplicated JSON key is found at its last occurrence, the one JSON.parse keeps', () => {
+  const text = '{"scripts":{"build":"a","build":"b"}}';
+  assert.equal(locateTask(text, 'npm', 'build')?.character, 25);
+});
+
+test('a key under a duplicated table is looked for in the last table only', () => {
+  const text = ['{', '  "scripts": { "build": "a" },', '  "scripts": { "test": "b" }', '}'].join('\n');
+  assert.equal(locateTask(text, 'npm', 'build'), undefined);
+  assert.equal(locateTask(text, 'npm', 'test')?.line, 2);
+});
+
+test('a quoted TOML key is read the way the parser reads it', () => {
+  assert.equal(locateTask('[tasks]\n"a=b" = "x"', 'mise', 'a=b')?.line, 1);
+  assert.equal(locateTask('[tasks."a]b"]\nrun = "x"', 'mise', 'a]b')?.line, 0);
+  const escaped = '[tasks]\n"a\\u0062" = "x"';
+  const found = locateTask(escaped, 'mise', 'ab');
+  assert.equal(found?.line, 1);
+  assert.equal(selected(escaped, found), 'a\\u0062');
 });

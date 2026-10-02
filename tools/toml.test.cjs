@@ -23,3 +23,12 @@ test('whitespace between the backslash and the newline changes nothing', () => {
   assert.equal(parseToml('run = """cargo build \\   \n    --release"""').run, 'cargo build --release');
   assert.equal(parseToml('run = """cargo build \\\t \r\n    --release"""').run, 'cargo build --release');
 });
+
+test('a sign is a decimal number\'s only: a signed hex, octal or binary is kept as text', () => {
+  const parsed = parseToml('a = -0x1\nb = +0o7\nc = -0b1\nd = 0x1F\ne = -12.5');
+  assert.equal(parsed.a, '-0x1');
+  assert.equal(parsed.b, '+0o7');
+  assert.equal(parsed.c, '-0b1');
+  assert.equal(parsed.d, 31);
+  assert.equal(parsed.e, -12.5);
+});

@@ -661,6 +661,7 @@ export function resetSources(): void {
   generation++;
   detected.clear();
   nodeHints.clear();
+  goRoots.clear();
 }
 
 /**
@@ -1807,6 +1808,7 @@ async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest
   // is the one release every toolchain that gets to `go run .` has reached.
   const release = /^go\s+1\.(\d+)/m.exec(text);
   const hasMain = await goRootIsProgram(cwd, release ? Number(release[1]) : undefined);
+  goRoots.set(cwd.toString(), { release: release ? Number(release[1]) : undefined, hasMain });
 
   const tasks: RawTask[] = [];
   for (const command of settingList('goCommands', DEFAULT_GO_COMMANDS)) {
@@ -1820,6 +1822,40 @@ async function parseGoMod(text: string, cwd: vscode.Uri): Promise<ParsedManifest
 
   // Every row is a `goCommands` entry, and `run` answers to the `.go` files too.
   return tasks.length > 0 ? { tasks, packageName: module?.[1], shaped: () => true } : undefined;
+}
+
+/**
+ * What the scan made of each module root it read, by directory: the one answer
+ * in a Go module that a `.go` file can change, and the release it was read for.
+ */
+const goRoots = new Map<string, { release: number | undefined; hasMain: boolean }>();
+
+/**
+ * Whether a change to this `.go` file changes a row — that is, whether the
+ * module root it sits in has stopped or started being a program since the scan
+ * looked. A file anywhere else, or one whose edit leaves the answer as it was,
+ * changes nothing, and saving `main.go` over and over is then one directory
+ * read instead of a rescan of the workspace.
+ *
+ * With no finished scan to compare against, the answer is yes: the scan on its
+ * way may already have read the file as it was before this change.
+ */
+export async function goRootChanged(file: vscode.Uri): Promise<boolean> {
+  if (!cache) {
+    return true;
+  }
+  const cwd = file.with({ path: path.posix.dirname(file.path) });
+  const known = goRoots.get(cwd.toString());
+  if (!known) {
+    return false;
+  }
+  const hasMain = await goRootIsProgram(cwd, known.release);
+  // A rescan between the question and the answer has its own reading of the
+  // directory, and that one stands.
+  if (goRoots.get(cwd.toString()) !== known) {
+    return false;
+  }
+  return hasMain !== known.hasMain;
 }
 
 /**
@@ -3606,13 +3642,23 @@ export function resolvePackageManager(script: ScriptEntry): PackageManager {
 async function detectPackageManagers(entries: ScriptEntry[], started: number): Promise<void> {
   // Per directory, for this walk only. A monorepo's packages all climb through
   // the same parents to the one lock file at the root, and each of those parents
-  // is a dozen stats — asked once here rather than once per package.
-  const lockFiles = new Map<string, PackageManager | undefined>();
+  // is a dozen stats — asked once here rather than once per package. The map
+  // holds the question rather than its answer, so packages walked side by side
+  // that meet at the same parent wait on one set of stats instead of each
+  // asking for its own.
+  const lockFiles = new Map<string, Promise<PackageManager | undefined>>();
+  // One entry per package: its scripts all share the directory and the answer.
+  const packages = new Map<string, ScriptEntry>();
   for (const entry of entries) {
     const dir = entry.cwd.toString();
-    if (entry.kind !== 'npm' || detected.has(dir)) {
-      continue;
+    if (entry.kind === 'npm' && !detected.has(dir) && !packages.has(dir)) {
+      packages.set(dir, entry);
     }
+  }
+  // Side by side, as the manifests were read: one package after another is a
+  // round trip per stat in a row, which over Remote SSH or in a container is a
+  // wait of seconds before a large monorepo's tree can draw.
+  await inBatches([...packages], SCAN_CONCURRENCY, async ([dir, entry]) => {
     const found = await detectPackageManager(entry, lockFiles);
     // A `resetSources` during the stat walk has cleared the map. A result
     // computed from the old hints must not land in it: the fresh scan would see
@@ -3626,12 +3672,12 @@ async function detectPackageManagers(entries: ScriptEntry[], started: number): P
     // one — and it is what keeps a 40-script package with no lock file from
     // walking its parent directories 40 times over.
     detected.set(dir, found ?? 'npm');
-  }
+  });
 }
 
 async function detectPackageManager(
   entry: ScriptEntry,
-  lockFiles: Map<string, PackageManager | undefined>,
+  lockFiles: Map<string, Promise<PackageManager | undefined>>,
 ): Promise<PackageManager | undefined> {
   const hints = nodeHints.get(entry.manifest.toString());
 
@@ -3662,17 +3708,18 @@ async function detectPackageManager(
 
 async function lockFileManager(
   entry: ScriptEntry,
-  lockFiles: Map<string, PackageManager | undefined>,
+  lockFiles: Map<string, Promise<PackageManager | undefined>>,
 ): Promise<PackageManager | undefined> {
   const root = vscode.workspace.getWorkspaceFolder(entry.manifest)?.uri.path;
   let current = entry.cwd;
   for (;;) {
     const key = current.toString();
-    let found = lockFiles.get(key);
-    if (!lockFiles.has(key)) {
-      found = await detectionFileManager(current);
-      lockFiles.set(key, found);
+    let asked = lockFiles.get(key);
+    if (!asked) {
+      asked = detectionFileManager(current);
+      lockFiles.set(key, asked);
     }
+    const found = await asked;
     if (found) {
       return found;
     }

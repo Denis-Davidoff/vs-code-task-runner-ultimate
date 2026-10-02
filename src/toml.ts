@@ -20,6 +20,28 @@ export function parseToml(text: string): Record<string, unknown> | undefined {
   }
 }
 
+/** One key of a key path, and the span of the text it was written as. */
+export interface TomlKey {
+  key: string;
+  /** Where the key starts — inside the quotes, for a quoted one. */
+  start: number;
+  end: number;
+}
+
+/**
+ * The key path written at `start` in `text`, read exactly as `parseToml` reads
+ * one — quotes, escapes and all — with the offset just past it. For the
+ * locator, which has to land on the same keys the parser found, and so cannot
+ * afford a second reading of what a quoted key holds.
+ */
+export function readTomlKeyPath(text: string, start = 0): { keys: TomlKey[]; end: number } | undefined {
+  try {
+    return new Reader(text, start).keyPathAt();
+  } catch {
+    return undefined;
+  }
+}
+
 /** Reads `table.of[0].keys` out of a parsed document, tolerating anything missing. */
 export function tomlTable(root: unknown, ...keys: string[]): Record<string, unknown> | undefined {
   let node: unknown = root;
@@ -51,14 +73,17 @@ export function tomlTables(root: unknown, ...keys: string[]): Record<string, unk
 }
 
 const BARE_KEY = /[A-Za-z0-9_-]/;
-const NUMBER = /^[+-]?(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9_]+)?)$/;
+// A sign only on a decimal: TOML allows none on `0x`, `0o` or `0b`, and
+// `Number('-0x1')` is NaN, so a signed one is kept as its raw text instead.
+const NUMBER = /^(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[+-]?[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9_]+)?)$/;
 /** What may follow a line-ending backslash up to its newline; sticky, so it is tried in place. */
 const LINE_END = /[ \t]*\r?\n/y;
 
 class Reader {
-  private index = 0;
-
-  constructor(private readonly text: string) {}
+  constructor(
+    private readonly text: string,
+    private index = 0,
+  ) {}
 
   document(): Record<string, unknown> {
     const root = dictionary();
@@ -135,13 +160,20 @@ class Reader {
   // --- keys -----------------------------------------------------------------
 
   private keyPath(): string[] {
-    const keys: string[] = [];
+    return this.keyPathAt().keys.map((key) => key.key);
+  }
+
+  keyPathAt(): { keys: TomlKey[]; end: number } {
+    const keys: TomlKey[] = [];
     for (;;) {
       this.blank();
-      keys.push(this.key());
+      const quoted = this.char() === '"' || this.char() === "'";
+      const start = this.index;
+      const key = this.key();
+      keys.push({ key, start: quoted ? start + 1 : start, end: quoted ? this.index - 1 : this.index });
       this.blank();
       if (this.char() !== '.') {
-        return keys;
+        return { keys, end: this.index };
       }
       this.index++;
     }
