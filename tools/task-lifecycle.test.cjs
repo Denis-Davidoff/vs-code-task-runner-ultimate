@@ -54,7 +54,7 @@ function harness() {
     };
     return run;
   }
-  return { ...api, tasks, launches, execution, listeners, repaints };
+  return { ...api, vscode, tasks, launches, execution, listeners, repaints };
 }
 
 test('restart discards an absent execution and starts the script', async () => {
@@ -249,6 +249,80 @@ test('a group restart brings a task running twice back running once', async () =
   await h.restartGroup(group);
   assert.deepEqual(h.tasks.taskExecutions, []);
   assert.deepEqual(h.launches, [script]);
+});
+
+test('a group stop and restart reach the foreign runs under OTHER TASKS', async () => {
+  const h = harness();
+  const foreign = h.execution();
+  h.tasks.taskExecutions = [foreign];
+  const group = { kind: 'group', children: [{ kind: 'foreign', execution: foreign }] };
+  await h.restartGroup(group);
+  // Started again as its owner defined it, task and all.
+  assert.deepEqual(h.launches, [foreign.task]);
+  h.tasks.taskExecutions = [foreign];
+  await h.stopGroup(group);
+  assert.deepEqual(h.tasks.taskExecutions, []);
+});
+
+test('a group restart leaves a foreign run that has already ended ended', async () => {
+  const h = harness();
+  const foreign = h.execution();
+  // Drawn at the last repaint, gone from the task system by the time ⟳ lands.
+  h.tasks.taskExecutions = [];
+  await h.restartGroup({ kind: 'group', children: [{ kind: 'foreign', execution: foreign }] });
+  assert.deepEqual(h.launches, []);
+});
+
+test('a twin that ends during a group restart does not restart the run that replaced the other twin', async () => {
+  const h = harness();
+  // Two runs of one task, which `sameTask` cannot tell apart.
+  const first = h.execution();
+  const twin = h.execution();
+  h.tasks.taskExecutions = [first, twin];
+  let fresh;
+  h.tasks.executeTask = async (task) => {
+    h.launches.push(task);
+    // The restart of the first raises a run of the same task — and the twin
+    // ends on its own meanwhile.
+    fresh = h.execution();
+    fresh.terminate = () => assert.fail('The fresh run must be left alone');
+    h.tasks.taskExecutions = [fresh];
+  };
+  await h.restartGroup({
+    kind: 'group',
+    children: [
+      { kind: 'foreign', execution: first },
+      { kind: 'foreign', execution: twin },
+    ],
+  });
+  assert.equal(h.launches.length, 1);
+  assert.deepEqual(h.tasks.taskExecutions, [fresh]);
+});
+
+test('a foreign run that cannot be started again does not stop the rest of the group restart', async () => {
+  const h = harness();
+  const broken = h.execution();
+  const fine = h.execution();
+  broken.task = { ...broken.task, name: 'broken' };
+  h.tasks.taskExecutions = [broken, fine];
+  h.tasks.executeTask = async (task) => {
+    if (task === broken.task) {
+      throw new Error('no provider');
+    }
+    h.launches.push(task);
+  };
+  const warnings = [];
+  h.vscode.window.showWarningMessage = (message) => warnings.push(message);
+  await h.restartGroup({
+    kind: 'group',
+    children: [
+      { kind: 'foreign', execution: broken },
+      { kind: 'foreign', execution: fine },
+    ],
+  });
+  assert.deepEqual(h.launches, [fine.task]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /"broken" was stopped and could not be started again: .*no provider/);
 });
 
 test('compose `down` waits for every copy of `up` to stop', async () => {

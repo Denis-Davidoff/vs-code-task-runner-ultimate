@@ -457,6 +457,49 @@ test('favorites, OTHER TASKS and the hidden pile stay at the root', () => {
   assert.equal(roots[2].label, 'Node (1)');
 });
 
+test('Favorites, OTHER TASKS and the pile take the stop-all and restart-all buttons while something runs', () => {
+  const h = harness({
+    settings: { grouping: 'ecosystem' },
+    stored: {
+      favorites: ['file:///repo/web/package.json::dev'],
+      hidden: ['file:///repo/api/package.json'],
+    },
+    executions: [{ task: { name: 'watch', source: 'npm' } }],
+  });
+  const value = (id) => h.treeItemFor(h.buildTreeRoots([WEB, API, ENGINE, TOOLS]).find((n) => n.id === id)).contextValue;
+  assert.equal(value('group:favorites'), 'group:favorites');
+  assert.equal(value('group:hidden'), 'group:pile');
+  // Every row under OTHER TASKS is drawn because it runs.
+  assert.equal(value('group:foreign'), 'group:foreign:running');
+  h.running.set(WEB.key, { task: { name: 'dev' } });
+  h.running.set(API.key, { task: { name: 'start' } });
+  assert.equal(value('group:favorites'), 'group:favorites:running');
+  assert.equal(value('group:hidden'), 'group:pile:running');
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const offered = (command, value) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}` && entry.group.startsWith('inline'))
+      .some((entry) => new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]).test(value));
+  for (const heading of ['eco', 'favorites', 'pile', 'foreign']) {
+    assert.equal(offered('stopSection', `group:${heading}:running`), true, heading);
+    assert.equal(offered('restartSection', `group:${heading}:running`), true, heading);
+    // Idle, there is nothing for them to do.
+    assert.equal(offered('stopSection', `group:${heading}`), false, heading);
+    assert.equal(offered('restartSection', `group:${heading}`), false, heading);
+    // And not under the package's own name, which would call the heading one.
+    assert.equal(offered('stopGroup', `group:${heading}:running`), false, heading);
+  }
+  assert.equal(offered('stopSection', 'group:package:running'), false);
+  // The list headings are never put away themselves, so no hidden or carried
+  // shape of theirs is a shape the buttons answer to.
+  for (const value of ['group:pile:hidden:running', 'group:favorites:carried:running']) {
+    assert.equal(offered('stopSection', value), false, value);
+    assert.equal(offered('restartSection', value), false, value);
+  }
+  assert.equal(offered('stopGroup', 'group:package:running'), true);
+});
+
 test('in ecosystem mode the starred rows sit under a Favorites heading', () => {
   const { buildTreeRoots } = harness({
     settings: { grouping: 'ecosystem' },

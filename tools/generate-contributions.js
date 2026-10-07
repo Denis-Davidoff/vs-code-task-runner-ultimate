@@ -375,6 +375,10 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.restartDockerfile', title: 'Restart Docker Tasks', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
   { command: 'taskRunnerUltimate.dockerfileActions', title: 'Docker Commands…', category: 'Task & Script Explorer', icon: '$(menu)' },
   { command: 'taskRunnerUltimate.restartGroup', title: 'Restart All in Package', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
+  // The same pair on a heading that is not a package: an ecosystem, Favorites,
+  // the hidden pile and OTHER TASKS.
+  { command: 'taskRunnerUltimate.stopSection', title: 'Stop All in Group', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartSection', title: 'Restart All in Group', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
   { command: 'taskRunnerUltimate.showGroup', title: 'Show Package', category: 'Task & Script Explorer', icon: '$(eye)' },
   { command: 'taskRunnerUltimate.openScript', title: 'Go to Script Definition', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
   { command: 'taskRunnerUltimate.openManifest', title: 'Open Manifest File', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
@@ -473,8 +477,6 @@ const CARRIED_SEG = 'carried';
 // be put away like any other.
 const VISIBLE = `/^(group:package|compose|dockerfile|custom)${STATE}(:running)?$/`;
 const HIDDEN = `/^(group:package|compose|dockerfile|custom)${STATE}:${HIDDEN_SEG}(:running)?$/`;
-// An ecosystem parent holds groups rather than rows, but it still has things
-// running under it, so it gets the stop-all and restart-all buttons too.
 const PUT_AWAY = `(:(${HIDDEN_SEG}|${CARRIED_SEG}))?`;
 // The half of `PUT_AWAY` a row keeps when it is in the pile only because its
 // project is — the slot the buttons that refuse a hidden row still allow.
@@ -484,7 +486,11 @@ const CARRIED = `(:${CARRIED_SEG})?`;
 // and a pair that drifted apart is a row whose menu denies what its button does.
 const RUNNABLE = '/^script:(idle|up):/';
 const STOPPABLE = '/^(script:(running|up):|foreignTask$)/';
-const RUNNING_PACKAGE = `/^(group:(package${STACK}${PUT_AWAY}|eco)|custom${PUT_AWAY}):running$/`;
+const RUNNING_PACKAGE = `/^(group:package${STACK}${PUT_AWAY}|custom${PUT_AWAY}):running$/`;
+// The headings with nothing on disk behind them that still hold running rows:
+// an ecosystem parent, Favorites, the hidden pile and OTHER TASKS. They get the
+// stop-all and restart-all buttons too, under titles that do not say "package".
+const RUNNING_SECTION = '/^group:(eco|favorites|pile|foreign):running$/';
 // The Custom Tasks heading, in whichever state: the + that adds a task to it is
 // on the row wherever the row is, the pile included.
 const CUSTOM_HEADING = `/^custom${PUT_AWAY}(:running)?$/`;
@@ -596,6 +602,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.stopItem', group: 'inline@2', when: `${inTree} && viewItem =~ ${STOPPABLE}` },
     { command: 'taskRunnerUltimate.restartGroup', group: 'inline@2', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
     { command: 'taskRunnerUltimate.stopGroup', group: 'inline@3', when: `${inTree} && viewItem =~ ${RUNNING_PACKAGE}` },
+    { command: 'taskRunnerUltimate.restartSection', group: 'inline@2', when: `${inTree} && viewItem =~ ${RUNNING_SECTION}` },
+    { command: 'taskRunnerUltimate.stopSection', group: 'inline@3', when: `${inTree} && viewItem =~ ${RUNNING_SECTION}` },
     // A compose file is run and stopped from the row itself, because the row is
     // all there is: ▶ brings the stack up and ■ takes it down, whichever way
     // Docker last answered. ■ stays on the row while our own `up` runs — it is
@@ -776,6 +784,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.showGroup', when: 'false' },
     { command: 'taskRunnerUltimate.stopGroup', when: 'false' },
     { command: 'taskRunnerUltimate.restartGroup', when: 'false' },
+    { command: 'taskRunnerUltimate.stopSection', when: 'false' },
+    { command: 'taskRunnerUltimate.restartSection', when: 'false' },
     { command: 'taskRunnerUltimate.runGroup', when: 'false' },
     { command: 'taskRunnerUltimate.stopStack', when: 'false' },
     { command: 'taskRunnerUltimate.composeActions', when: 'false' },

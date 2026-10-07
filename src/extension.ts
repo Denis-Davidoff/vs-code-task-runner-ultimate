@@ -439,6 +439,11 @@ export function activate(context: vscode.ExtensionContext): void {
       restartGroup(node),
     ),
     vscode.commands.registerCommand('taskRunnerUltimate.restartGroup', (node?: TreeNode) => restartGroup(node)),
+    // And the same pair on the headings that are not a package — an ecosystem,
+    // the starred rows, the pile, OTHER TASKS — under a name that does not call
+    // them one.
+    vscode.commands.registerCommand('taskRunnerUltimate.stopSection', (node?: TreeNode) => stopGroup(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.restartSection', (node?: TreeNode) => restartGroup(node)),
     // One command per colour, though the menu points at none of them any more:
     // the picker below is a list, and a list needs one command for all fifteen.
     //
@@ -1124,7 +1129,7 @@ type ConfirmAction = keyof typeof CONFIRM_ACTIONS;
  * confirmation on it, and after a modal for one that has.
  *
  * Only the actions aimed at a single row ask. Stop All, and the stop and restart
- * on a package heading, are already the deliberate gesture the flag exists to
+ * on a heading — a package, an ecosystem, Favorites, the hidden pile — are already the deliberate gesture the flag exists to
  * make you perform — a dialog per row there would turn one decision into ten.
  */
 async function confirmScript(script: ScriptEntry, action: ConfirmAction): Promise<boolean> {
@@ -2620,6 +2625,20 @@ async function saveGroupOrder(refs: string[]): Promise<void> {
  */
 const HIDDEN_KEY = 'hidden';
 const HIDDEN_GROUP_ID = 'group:hidden';
+
+/** The id OTHER TASKS is drawn under: the runs nothing in the workspace declares. */
+const FOREIGN_GROUP_ID = 'group:foreign';
+
+/**
+ * The headings with no manifest behind them that still hold rows, by the
+ * segment their context value takes — see `treeItemFor`. The menus key the
+ * stop-all and restart-all buttons on it.
+ */
+const LIST_HEADINGS: Readonly<Record<string, string>> = {
+  [FAVORITES_GROUP_ID]: 'favorites',
+  [HIDDEN_GROUP_ID]: 'pile',
+  [FOREIGN_GROUP_ID]: 'foreign',
+};
 
 /**
  * The colour the pile itself wears: the theme's own word for "not now", open or
@@ -4292,7 +4311,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   if (foreign.length > 0) {
     roots.unshift({
       kind: 'group',
-      id: 'group:foreign',
+      id: FOREIGN_GROUP_ID,
       label: `OTHER TASKS (${foreign.length})`,
       // Nothing here comes from a manifest, so there is no runner to name. What
       // the group has in common is that all of it is already running.
@@ -4774,8 +4793,9 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // still puts the one stack glyph on every heading.
     const picked = storedIcon(node.ref ?? node.id);
     // Whether anything under this heading is running, which the icon and the
-    // buttons both read. One walk for the two of them.
-    const alive = runningScriptsOf(node).length > 0;
+    // buttons both read. One walk for the two of them — and only OTHER TASKS
+    // holds foreign rows, each of which is drawn because it runs.
+    const alive = node.id === FOREIGN_GROUP_ID ? node.children.length > 0 : runningScriptsOf(node).length > 0;
     // A folder of shell scripts is the one heading with no file behind it, and a
     // theme can only match on a file name — it used to borrow the theme's folder
     // icon, which said "folder" where the rows inside it say bash, PowerShell and
@@ -4829,6 +4849,15 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // stop-all and restart-all buttons.
     if (node.ecosystem && !node.ref) {
       item.contextValue = alive ? 'group:eco:running' : 'group:eco';
+      return item;
+    }
+    // The headings that are lists of ours rather than anything on disk — the
+    // starred rows, the pile and OTHER TASKS. Nothing to rename, hide or open,
+    // but each can hold running rows, and those are what the stop-all and
+    // restart-all buttons are for, wherever the rows happen to be drawn.
+    const list = LIST_HEADINGS[node.id];
+    if (list) {
+      item.contextValue = alive ? `group:${list}:running` : `group:${list}`;
       return item;
     }
     // A compose row says whether its stack is up: `up` is what Docker last
@@ -5665,6 +5694,32 @@ function runningScriptsOf(node: TreeNode | undefined): ScriptEntry[] {
 }
 
 /**
+ * The foreign runs under a heading — OTHER TASKS, the one heading that holds
+ * them — that the task system still lists. The node was built at the last
+ * repaint, and a run that has ended since is not one to stop or start again.
+ */
+function runningForeignOf(node: TreeNode | undefined): vscode.TaskExecution[] {
+  if (node?.kind !== 'group') {
+    return [];
+  }
+  return node.children.flatMap((child) => {
+    if (child.kind === 'group') {
+      return runningForeignOf(child);
+    }
+    const live = child.kind === 'foreign' ? liveExecution(child.execution) : undefined;
+    return live ? [live] : [];
+  });
+}
+
+/**
+ * Every run under a heading: each copy of its running rows, and the foreign
+ * runs OTHER TASKS holds. What a stop on a heading ends.
+ */
+function executionsUnder(node: TreeNode | undefined): vscode.TaskExecution[] {
+  return [...executionsOf(runningScriptsOf(node)), ...runningForeignOf(node)];
+}
+
+/**
  * The bare `up` action of a compose item — the whole file, no service named.
  *
  * It is what ▶ runs, and the action Docker's answer is read off. Nothing else
@@ -5867,11 +5922,14 @@ function executionsOf(scripts: ReadonlyArray<ScriptEntry>): vscode.TaskExecution
 
 /** Stops everything running in one package group; the rest of the tree keeps going. */
 async function stopGroup(node: TreeNode | undefined): Promise<void> {
-  await Promise.all(executionsOf(runningScriptsOf(node)).map(stopExecution));
+  await Promise.all(executionsUnder(node).map(stopExecution));
 }
 
 /** Restarts everything running in one package group. Idle rows stay idle. */
 async function restartGroup(node: TreeNode | undefined): Promise<void> {
+  // Taken before anything is stopped, as Restart All does: the rows' own
+  // restarts below take long enough for a foreign run to end on its own.
+  const foreign = runningForeignOf(node);
   for (const script of runningScriptsOf(node)) {
     // A line that changed while it ran is asked about before the old run goes:
     // turning the new one down leaves the one that was approved still up.
@@ -5887,6 +5945,25 @@ async function restartGroup(node: TreeNode | undefined): Promise<void> {
       continue;
     }
     await startScript(script, false);
+  }
+  // A foreign run is restarted as its owner defined it — see `restartNode`.
+  // One that has ended while the rest were restarting stays ended: starting it
+  // would raise something nobody was running any more. Asked by identity: the
+  // handles were current when they were taken, and the match `liveExecution`
+  // falls back on would find the fresh run of a twin restarted a moment ago.
+  for (const execution of foreign) {
+    if (!liveExecutions().includes(execution)) {
+      continue;
+    }
+    // One task its provider can no longer start is that task's failure, and
+    // the rest of the heading is restarted all the same.
+    try {
+      await restartNode({ kind: 'foreign', execution }, false);
+    } catch (error) {
+      void vscode.window.showWarningMessage(
+        `"${execution.task.name}" was stopped and could not be started again: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 }
 

@@ -897,7 +897,8 @@ There the stars get a **Favorites** folder of their own, pinned above everything
 ```
 
 It folds, paints and takes an icon like any other heading, and dropping a task on it stars that task
-at the end of the list.
+at the end of the list. While any starred task runs, it carries the same ■ and ⟳ a package heading does, stopping or
+restarting the starred tasks that are running and leaving the idle ones alone.
 
 A favorite is a second way in, not a move: the script stays in its own package group as well. Since
 the starred row is listed away from that group heading, it says where it came from in its dimmed
@@ -940,8 +941,8 @@ double click, **Run** and **Stop** in the right-click menu, the dropdown, and Sh
 asks **once**, for the restart, rather than once for the stop and again for the start.
 
 What it deliberately does not cover is the actions that are already about more than this row:
-**Stop All Running Tasks**, **Restart All Running Tasks**, and the stop and restart on a package
-heading. Those are the deliberate gesture the flag exists to make you perform, and a dialog per row
+**Stop All Running Tasks**, **Restart All Running Tasks**, and the stop and restart on a heading — a
+package, an ecosystem, the **Favorites** folder, the hidden pile. Those are the deliberate gesture the flag exists to make you perform, and a dialog per row
 there would turn one decision into ten.
 
 The flag is a task at a time, and only tasks — a package heading runs nothing itself, and a task
@@ -1151,6 +1152,8 @@ live where there is a row to invoke them on:
 | Disable Confirmation | right-click only, on a script row — the other half, shown while the row [asks first](#asking-before-a-task-starts-or-stops) |
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
 | Open Manifest File | right-click only, on a package heading — the same action one level up, opening the file the heading names at the top; OTHER TASKS names no file and does not offer it |
+| Stop All in Package / Restart All in Package | ■ and ⟳ inline on hover, on a package heading while something under it runs. They act on its running rows only — an idle task is not started by restarting its neighbours |
+| Stop All in Group / Restart All in Group | the same pair on the headings that are not a package — an [ecosystem](#grouping-by-ecosystem) row, the **Favorites** folder, the hidden pile and OTHER TASKS — while something under them runs |
 | Show Terminal | a click on a running row, and right-click — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
 | Compose Up | ▶ inline on hover and right-click, on a [compose item](#docker-compose) only — the file's own bare `up`. Not offered while one of ours is already running it, and not on a row sitting in the hidden pile |
 | Compose Down | ■ inline on hover and right-click, on a compose item — it ends whatever of ours the file has running and then runs `docker compose down`, and does neither if something refuses to stop |

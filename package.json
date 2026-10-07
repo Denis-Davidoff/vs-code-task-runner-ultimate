@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "A task runner for all your monorepo's scripts, in a single list.: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -270,6 +270,18 @@
       {
         "command": "taskRunnerUltimate.restartGroup",
         "title": "Restart All in Package",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "taskRunnerUltimate.stopSection",
+        "title": "Stop All in Group",
+        "category": "Task & Script Explorer",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "taskRunnerUltimate.restartSection",
+        "title": "Restart All in Group",
         "category": "Task & Script Explorer",
         "icon": "$(debug-restart)"
       },
@@ -553,12 +565,22 @@
         {
           "command": "taskRunnerUltimate.restartGroup",
           "group": "inline@2",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:(package(:(up|down))?(:(hidden|carried))?|eco)|custom(:(hidden|carried))?):running$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package(:(up|down))?(:(hidden|carried))?|custom(:(hidden|carried))?):running$/"
         },
         {
           "command": "taskRunnerUltimate.stopGroup",
           "group": "inline@3",
-          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:(package(:(up|down))?(:(hidden|carried))?|eco)|custom(:(hidden|carried))?):running$/"
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^(group:package(:(up|down))?(:(hidden|carried))?|custom(:(hidden|carried))?):running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.restartSection",
+          "group": "inline@2",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(eco|favorites|pile|foreign):running$/"
+        },
+        {
+          "command": "taskRunnerUltimate.stopSection",
+          "group": "inline@3",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^group:(eco|favorites|pile|foreign):running$/"
         },
         {
           "command": "taskRunnerUltimate.stopStack",
@@ -837,6 +859,14 @@
         },
         {
           "command": "taskRunnerUltimate.restartGroup",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.stopSection",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.restartSection",
           "when": "false"
         },
         {

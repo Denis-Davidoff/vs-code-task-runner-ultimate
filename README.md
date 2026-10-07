@@ -13,6 +13,10 @@ restart without ever going looking for a terminal tab.**
 
 - 0.9.2: Bug fixes
 
+- 0.9.3: **Go to Script Definition** is more precise: a duplicated JSON key goes to the occurrence that counts, quoted TOML keys are found, and a short script name is selected as the key rather than inside a longer word. Typographic quotes in a command are kept from breaking PowerShell, Go projects are rescanned less often, and signed hex, octal and binary numbers in TOML are kept as text.
+
+- 0.9.4: Stop all and restart all buttons on more headings: the [Favorites](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#favorites) folder in ecosystem mode, the hidden pile and OTHER TASKS. Hover a heading while something under it runs to see ■ and ⟳.
+
 ## Extension Features
 
 - 📋 **[A panel in the left bar](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#the-task--script-explorer-view)** — every task of the workspace as a
