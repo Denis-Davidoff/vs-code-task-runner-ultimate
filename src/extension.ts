@@ -17,11 +17,14 @@ import {
   emptyManifests,
   GO_GLOB,
   goRootChanged,
+  IGNORE_GLOB,
+  ignoreFilesRead,
   launchArgv,
   plainArgument,
   readCustomTasks,
   readText,
   resetSources,
+  respectsGitignore,
   scriptKey,
   ScriptEntry,
   settingShapedManifests,
@@ -155,6 +158,7 @@ const DEFAULT_CATEGORIES: ReadonlyArray<CategoryRule> = [
 /** Settings a scan reads, so a change to one has to throw the cached list away. */
 const SCAN_SETTINGS = [
   'exclude',
+  'respectGitignore',
   'sources',
   'cargoCommands',
   'goCommands',
@@ -284,6 +288,56 @@ function unwatchCustomTasks(): void {
     watcher.dispose();
   }
   customWatchers = [];
+}
+
+/**
+ * Watchers on the ignore files a scan read from outside the workspace, by URI —
+ * the global git config and excludes file, a linked worktree's shared
+ * `info/exclude`. `IGNORE_GLOB` only reaches inside the workspace folders.
+ */
+const ignoreWatchers = new Map<string, vscode.FileSystemWatcher>();
+
+/** One of git's ignore files changed: a rescan, while the scan reads them at all. */
+function ignoreFileChanged(): void {
+  if (respectsGitignore()) {
+    invalidateSoon();
+  }
+}
+
+/**
+ * Watches exactly these files, each through a pattern relative to its own
+ * directory, which is how a file outside every workspace folder is heard. Kept
+ * in step with each scan: a config that starts naming another excludes file is
+ * followed, and a file the scan no longer reads is let go.
+ */
+function watchIgnoreFiles(files: ReadonlyArray<vscode.Uri>): void {
+  const wanted = new Map(files.map((file) => [file.toString(), file]));
+  for (const [key, watcher] of ignoreWatchers) {
+    if (!wanted.has(key)) {
+      watcher.dispose();
+      ignoreWatchers.delete(key);
+    }
+  }
+  for (const [key, file] of wanted) {
+    if (ignoreWatchers.has(key)) {
+      continue;
+    }
+    const directory = file.with({ path: path.posix.dirname(file.path) });
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(directory, path.posix.basename(file.path)),
+    );
+    watcher.onDidCreate(ignoreFileChanged);
+    watcher.onDidChange(ignoreFileChanged);
+    watcher.onDidDelete(ignoreFileChanged);
+    ignoreWatchers.set(key, watcher);
+  }
+}
+
+function unwatchIgnoreFiles(): void {
+  for (const watcher of ignoreWatchers.values()) {
+    watcher.dispose();
+  }
+  ignoreWatchers.clear();
 }
 
 /** Drops a rescan that has been scheduled but not run — for `deactivate`. */
@@ -558,6 +612,15 @@ export function activate(context: vscode.ExtensionContext): void {
   shellWatcher.onDidChange(onShellChange);
   shellWatcher.onDidDelete(onShellChange);
 
+  // git's ignore files decide which manifests are read at all — see
+  // `respectGitignore`. Built whatever the setting says, for the same reason as
+  // the shell watcher: the handler is what the setting switches off. The ones
+  // outside the workspace get watchers of their own; see `watchIgnoreFiles`.
+  const ignoreWatcher = vscode.workspace.createFileSystemWatcher(IGNORE_GLOB);
+  ignoreWatcher.onDidCreate(ignoreFileChanged);
+  ignoreWatcher.onDidChange(ignoreFileChanged);
+  ignoreWatcher.onDidDelete(ignoreFileChanged);
+
   watchCustomTasks();
 
   context.subscriptions.push(
@@ -565,7 +628,9 @@ export function activate(context: vscode.ExtensionContext): void {
     sourceWatcher,
     goWatcher,
     shellWatcher,
+    ignoreWatcher,
     { dispose: unwatchCustomTasks },
+    { dispose: unwatchIgnoreFiles },
     // A rescan waiting on its timer must not outlive the extension.
     { dispose: cancelInvalidate },
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -2748,6 +2813,7 @@ async function savedOrder(): Promise<ScriptEntry[]> {
   // go through, and it is the only place that holds a fresh list and the stores
   // that annotate it at the same time.
   await pruneStaleRefs(scripts);
+  watchIgnoreFiles(ignoreFilesRead(scripts));
   // The two grouping passes are exclusive by mode, and each is the last word on
   // where a block sits: one gathers ecosystems, the other tucks a project's
   // surroundings in behind it.

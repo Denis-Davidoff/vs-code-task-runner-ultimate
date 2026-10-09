@@ -17,6 +17,8 @@ restart without ever going looking for a terminal tab.**
 
 - 0.9.4: Stop all and restart all buttons on more headings: the [Favorites](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#favorites) folder in ecosystem mode, the hidden pile and OTHER TASKS. Hover a heading while something under it runs to see ■ and ⟳.
 
+- 0.9.5: Git worktrees that coding agents check out inside the repository, such as Claude Code's `.claude/worktrees/`, no longer show up as extra copies of every task. Manifests and scripts that git ignores, through `.gitignore`, `.git/info/exclude` or your global excludes file, are [left out of the list](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#what-git-ignores). Set `taskRunnerUltimate.respectGitignore` to `false` to list them again.
+
 ## Extension Features
 
 - 📋 **[A panel in the left bar](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#the-task--script-explorer-view)** — every task of the workspace as a

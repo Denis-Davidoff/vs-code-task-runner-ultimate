@@ -14,9 +14,22 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
+// The ignore rules are a module of their own that touches nothing, so it is run
+// bare once and handed to every harness as what `./gitignore` resolves to.
+const gitignore = (() => {
+  const text = fs.readFileSync(path.join(__dirname, '../src/gitignore.ts'), 'utf8');
+  const context = vm.createContext({ exports: {} });
+  vm.runInContext(
+    ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
+      .outputText,
+    context,
+  );
+  return context.exports;
+})();
+
 /** A URI as much as the scan ever asks one to be. */
 function uri(at) {
-  return { path: at, fsPath: at, toString: () => `file://${at}`, with: (c) => uri(c.path ?? at) };
+  return { scheme: 'file', path: at, fsPath: at, toString: () => `file://${at}`, with: (c) => uri(c.path ?? at) };
 }
 
 /**
@@ -24,7 +37,7 @@ function uri(at) {
  * @param found    what `findFiles` hands back, by path
  * @param root     the workspace folder every file is inside, or none at all
  */
-function harness({ settings = {}, present = [], found = [], root, directory = {}, folders, broken = [] } = {}) {
+function harness({ settings = {}, present = [], found = [], root, directory = {}, folders, broken = [], env = {} } = {}) {
   const onDisk = new Set(present);
   const calls = [];
   // What was written, by path, and the directories made on the way.
@@ -34,7 +47,11 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
   const vscode = {
     workspace: {
       getConfiguration: () => ({ get: (key) => settings[key] }),
-      getWorkspaceFolder: () => (root ? { uri: uri(root) } : undefined),
+      // The one `root`, or with several `folders` the one a path is inside.
+      getWorkspaceFolder: (target) => {
+        const at = root ?? folders?.find((folder) => target.path.startsWith(`${folder}/`));
+        return at ? { uri: uri(at) } : undefined;
+      },
       // The folders the custom tasks are read out of, one file each.
       workspaceFolders: folders?.map((at, index) => ({ name: path.posix.basename(at), uri: uri(at), index })),
       // The glob is honoured rather than ignored, and the call is recorded. A
@@ -44,10 +61,13 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
       // thing they could not see.
       findFiles: async (include, exclude, max) => {
         calls.push({ include, exclude, max });
-        const inside = (at) => (root ? path.posix.relative(root, at) : at);
+        const folder = (at) => root ?? folders?.find((one) => at.startsWith(`${one}/`));
+        const inside = (at) => (folder(at) ? path.posix.relative(folder(at), at) : at);
+        // `dot`, as VS Code's own search has it: `.claude/worktrees` is walked
+        // into like any other directory unless an exclude says otherwise.
         return Object.keys(contents)
-          .filter((at) => minimatch(inside(at), include))
-          .filter((at) => !exclude || !minimatch(inside(at), exclude))
+          .filter((at) => minimatch(inside(at), include, { dot: true }))
+          .filter((at) => !exclude || !minimatch(inside(at), exclude, { dot: true }))
           .slice(0, max ?? Infinity)
           .map(uri);
       },
@@ -73,20 +93,25 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
       },
     },
     Uri: {
-      joinPath: (target, ...parts) => uri([target.path, ...parts].join('/')),
+      // Normalised as the real one is: joined onto `/`, a name is `/name`.
+      joinPath: (target, ...parts) => uri(path.posix.join(target.path, ...parts)),
+      file: (at) => uri(at),
     },
     FileType: { File: 1, Directory: 2 },
   };
   const context = vm.createContext({
     exports: {},
     Buffer,
-    process,
-    require: (name) => (name === 'vscode' ? vscode : name === 'path' ? path : {}),
+    // The real process with an environment of the test's own, so the global
+    // excludes file is looked for where the test says the home directory is —
+    // never in the home directory of whoever runs the suite.
+    process: Object.create(process, { env: { value: env } }),
+    require: (name) => (name === 'vscode' ? vscode : name === 'path' ? path : name === './gitignore' ? gitignore : {}),
   });
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, plainArgument, staleScan: exports.staleScan, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
+    exports.parsers = { WorkspaceIgnores, ignoreFilesRead: exports.ignoreFilesRead, parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, plainArgument, staleScan: exports.staleScan, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
   `,
     context,
   );
@@ -1523,4 +1548,297 @@ test('a root key written twice is written back once', async () => {
   assert.equal(written.match(/"tasks"/g).length, 1);
   assert.equal(written.match(/"x"/g).length, 1);
   assert.deepEqual(JSON.parse(written), { tasks: { b: '2', c: '3' }, x: 2 });
+});
+
+// --- respectGitignore --------------------------------------------------------
+
+const PACKAGE = '{ "scripts": { "dev": "vite" } }';
+
+/** The manifests a scan's rows came from, each once, in the order the rows came. */
+const manifestsOf = (rows) => [...new Set(rows.map((row) => row.manifest.path))];
+
+test('a worktree Claude Code checks out inside the repository is not listed a second time', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    found: {
+      '/repo/package.json': PACKAGE,
+      '/repo/.claude/worktrees/agent-1/package.json': PACKAGE,
+      '/repo/.claude/worktrees/agent-1/e2e/package.json': PACKAGE,
+      // Where Claude Code writes it: not a `.gitignore`, which nobody else reads.
+      '/repo/.git/info/exclude': '# git ls-files --others --exclude-from=.git/info/exclude\n.claude/worktrees/\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), ['/repo/package.json']);
+  // Left out of the walk itself, so the copies never count against the budget.
+  assert.ok(h.calls.every((call) => call.exclude.includes('.claude/worktrees/**')));
+});
+
+test('with `respectGitignore` off, what git ignores is listed as before', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    settings: { respectGitignore: false },
+    found: {
+      '/repo/package.json': PACKAGE,
+      '/repo/.claude/worktrees/agent-1/package.json': PACKAGE,
+      '/repo/.git/info/exclude': '.claude/worktrees/\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), [
+    '/repo/package.json',
+    '/repo/.claude/worktrees/agent-1/package.json',
+  ]);
+  assert.equal(h.calls[0].exclude.includes('.claude'), false);
+});
+
+test('what no glob can say is judged file by file, `!` and all', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    found: {
+      '/repo/package.json': PACKAGE,
+      '/repo/apps/web/scratch/package.json': PACKAGE,
+      '/repo/packages/keep/package.json': PACKAGE,
+      '/repo/packages/drop/package.json': PACKAGE,
+      '/repo/.gitignore': 'scratch/\npackages/*\n!packages/keep\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), ['/repo/package.json', '/repo/packages/keep/package.json']);
+  // `scratch/` is told to `findFiles` for the top of the folder only; the one
+  // under `apps/web` is left out by the per-file check. The other two are not
+  // plain names at all.
+  assert.ok(h.calls[0].exclude.endsWith(',scratch/**}'));
+  assert.equal(h.calls[0].exclude.includes('packages'), false);
+});
+
+test('a nested `.gitignore` reaches only below its own directory', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    found: {
+      '/repo/fixtures/package.json': PACKAGE,
+      '/repo/apps/web/fixtures/package.json': PACKAGE,
+      '/repo/apps/web/.gitignore': '/fixtures\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), ['/repo/fixtures/package.json']);
+});
+
+test('a directory a later `!` brings back is neither hidden nor kept from `findFiles`', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    // There, as `stat` sees a directory: one that is not would be safe to leave out.
+    present: ['/repo/.claude/worktrees'],
+    found: {
+      '/repo/.claude/worktrees/agent-1/package.json': PACKAGE,
+      '/repo/.git/info/exclude': '.claude/worktrees/\n',
+      '/repo/.gitignore': '!.claude/worktrees/\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), ['/repo/.claude/worktrees/agent-1/package.json']);
+  assert.equal(h.calls[0].exclude.includes('.claude'), false);
+});
+
+test('a folder that is itself a linked worktree reads the repository\'s `info/exclude`', async () => {
+  const h = harness({
+    folders: ['/wt'],
+    root: '/wt',
+    found: {
+      '/wt/package.json': PACKAGE,
+      '/wt/generated/package.json': PACKAGE,
+      '/wt/.git': 'gitdir: /main/.git/worktrees/wt\n',
+      '/main/.git/worktrees/wt/commondir': '../..\n',
+      '/main/.git/info/exclude': '/generated/\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), ['/wt/package.json']);
+});
+
+test('nothing above the workspace folder is read, so a dotfiles `*` cannot empty the list', async () => {
+  const h = harness({
+    folders: ['/home/me/project'],
+    root: '/home/me/project',
+    found: {
+      '/home/me/project/package.json': PACKAGE,
+      '/home/me/.gitignore': '*\n',
+      '/home/me/.git/info/exclude': '*\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), ['/home/me/project/package.json']);
+});
+
+test('the global excludes file is read where the git config names it, or where git looks by default', async () => {
+  const worktrees = {
+    '/repo/package.json': PACKAGE,
+    '/repo/.worktrees/feature/package.json': PACKAGE,
+  };
+  const named = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    env: { HOME: '/home/me' },
+    found: {
+      ...worktrees,
+      '/home/me/.gitconfig': '[core]\n\texcludesFile = ~/.gitignore_global\n',
+      '/home/me/.gitignore_global': '.worktrees/\n',
+    },
+  });
+  named.resetSources();
+  assert.deepEqual(manifestsOf(await named.collectScripts()), ['/repo/package.json']);
+
+  const fallback = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    env: { HOME: '/home/me', XDG_CONFIG_HOME: '/config' },
+    found: { ...worktrees, '/config/git/ignore': '.worktrees/\n' },
+  });
+  fallback.resetSources();
+  assert.deepEqual(manifestsOf(await fallback.collectScripts()), ['/repo/package.json']);
+
+  // A config that names a file overrules the default, even one that is not there.
+  const missing = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    env: { HOME: '/home/me', XDG_CONFIG_HOME: '/config' },
+    found: {
+      ...worktrees,
+      '/config/git/ignore': '.worktrees/\n',
+      '/home/me/.gitconfig': '[core]\n\texcludesFile = /nowhere\n',
+    },
+  });
+  missing.resetSources();
+  assert.equal(manifestsOf(await missing.collectScripts()).length, 2);
+});
+
+test('shell scripts git ignores are not listed', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    found: {
+      '/repo/scripts/deploy.sh': '#!/bin/sh\n',
+      '/repo/scripts/tmp/try.sh': '#!/bin/sh\n',
+      '/repo/.gitignore': 'tmp/\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(plain((await h.collectScripts()).map((row) => row.name)), ['deploy.sh']);
+});
+
+test('in a multi-root workspace each folder keeps its own rules, and `findFiles` only what all agree on', async () => {
+  const h = harness({
+    folders: ['/a', '/b'],
+    // A directory as `stat` sees it: there in `/b`, and not ignored there.
+    present: ['/b/.claude/worktrees'],
+    found: {
+      '/a/package.json': PACKAGE,
+      '/a/.claude/worktrees/x/package.json': PACKAGE,
+      '/a/.git/info/exclude': '.claude/worktrees/\n',
+      '/b/package.json': PACKAGE,
+      '/b/.claude/worktrees/y/package.json': PACKAGE,
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), [
+    '/a/package.json',
+    '/b/package.json',
+    '/b/.claude/worktrees/y/package.json',
+  ]);
+  assert.equal(h.calls[0].exclude.includes('.claude'), false);
+});
+
+test('Claude Code\'s own `info/exclude` block keeps the worktrees out of `findFiles` too', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    found: {
+      '/repo/package.json': PACKAGE,
+      '/repo/.claude/worktrees/agent-1/package.json': PACKAGE,
+      // As Claude Code writes it today, a `**` in front of every line.
+      '/repo/.git/info/exclude':
+        '# claude-code-runtime\n**/.claude/scheduled_tasks.lock\n**/.claude/worktrees/\n**/.claude/checkpoints/\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), ['/repo/package.json']);
+  assert.ok(h.calls.every((call) => call.exclude.includes('.claude/worktrees/**')));
+  // A name that may be a file is not added, and neither is one deeper down.
+  assert.equal(h.calls[0].exclude.includes('scheduled_tasks.lock'), false);
+});
+
+test('a workspace opened at `/` is scanned, not asked about itself until the stack runs out', async () => {
+  const h = harness({
+    folders: ['/'],
+    root: '/',
+    found: {
+      '/srv/app/package.json': PACKAGE,
+      '/srv/app/tmp/package.json': PACKAGE,
+      '/.gitignore': 'tmp/\n',
+    },
+  });
+  h.resetSources();
+  assert.deepEqual(manifestsOf(await h.collectScripts()), ['/srv/app/package.json']);
+});
+
+test('a drive root and a drive letter in either case find the folder\'s rules', async () => {
+  // A drive root keeps its trailing slash in the URI; nothing below it does.
+  const root = harness({ root: '/D:/', found: { '/d:/.gitignore': 'scratch/\n' } });
+  const atRoot = new root.WorkspaceIgnores({ rules: [], read: [] });
+  assert.equal(await atRoot.ignores(uri('/d:/scratch/package.json')), true);
+  assert.equal(await atRoot.ignores(uri('/d:/package.json')), false);
+  // A folder opened as `C:\repo` against results `findFiles` built from `fsPath`.
+  const typed = harness({ root: '/C:/repo', found: { '/c:/repo/.gitignore': 'scratch/\n' } });
+  const asTyped = new typed.WorkspaceIgnores({ rules: [], read: [] });
+  assert.equal(await asTyped.ignores(uri('/c:/repo/scratch/package.json')), true);
+  assert.equal(await asTyped.ignores(uri('/c:/repo/package.json')), false);
+});
+
+test('`excludesFile` set to nothing turns global excludes off, the default file included', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    env: { HOME: '/home/me', XDG_CONFIG_HOME: '/config' },
+    found: {
+      '/repo/package.json': PACKAGE,
+      '/repo/.worktrees/feature/package.json': PACKAGE,
+      '/config/git/ignore': '.worktrees/\n',
+      '/home/me/.gitconfig': '[core]\n\texcludesFile =\n',
+    },
+  });
+  h.resetSources();
+  assert.equal(manifestsOf(await h.collectScripts()).length, 2);
+});
+
+test('the ignore files outside the workspace are handed on for watching', async () => {
+  const h = harness({
+    folders: ['/wt'],
+    root: '/wt',
+    env: { HOME: '/home/me' },
+    found: {
+      '/wt/package.json': PACKAGE,
+      '/wt/.git': 'gitdir: /main/.git/worktrees/wt\n',
+      '/main/.git/worktrees/wt/commondir': '../..\n',
+      '/main/.git/info/exclude': '/generated/\n',
+      '/home/me/.gitconfig': '[core]\n\texcludesFile = ~/.gitignore_global\n',
+    },
+  });
+  h.resetSources();
+  const rows = await h.collectScripts();
+  assert.deepEqual(plain(h.ignoreFilesRead(rows).map((file) => file.path)), [
+    '/home/me/.config/git/config',
+    '/home/me/.gitconfig',
+    '/home/me/.gitignore_global',
+    '/main/.git/info/exclude',
+  ]);
+  // Off, nothing is read and nothing needs watching.
+  const off = harness({ folders: ['/wt'], root: '/wt', settings: { respectGitignore: false }, env: { HOME: '/home/me' } });
+  off.resetSources();
+  assert.equal(off.ignoreFilesRead(await off.collectScripts()).length, 0);
 });

@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { excludesFileOf, ignoredBy, IgnoreFile, IgnoreRule, parseIgnore } from './gitignore';
 import { parseToml, tomlTable, tomlTables } from './toml';
 
 /**
@@ -632,6 +633,8 @@ interface ScanFacts {
   empty: vscode.Uri[];
   /** The manifests whose rows a setting helps decide; see `ParsedManifest.shaped`. */
   shaped: Array<[vscode.Uri, (name: string) => boolean]>;
+  /** The ignore files read that no workspace watcher hears; see `WorkspaceIgnores.files`. */
+  ignoreFiles: vscode.Uri[];
 }
 
 /**
@@ -674,6 +677,15 @@ export function resetSources(): void {
 export function staleScan(scripts: ReadonlyArray<ScriptEntry>): boolean {
   const facts = scanFacts.get(scripts);
   return facts !== undefined && facts.generation !== generation;
+}
+
+/**
+ * The ignore files this scan read from where `IGNORE_GLOB` cannot hear them —
+ * the global git config and excludes file, a linked worktree's shared
+ * `info/exclude` — for watchers of their own. Empty with `respectGitignore` off.
+ */
+export function ignoreFilesRead(scripts: ReadonlyArray<ScriptEntry>): ReadonlyArray<vscode.Uri> {
+  return scanFacts.get(scripts)?.ignoreFiles ?? [];
 }
 
 /** The manifests of this scan that parsed cleanly and declared no tasks. */
@@ -735,7 +747,12 @@ async function runScan(): Promise<ScriptEntry[]> {
   // would take the whole scan down inside `findFiles` with nothing naming the
   // setting; fall back to the default rather than fail.
   const configuredExclude = setting<unknown>('exclude');
-  const exclude = typeof configuredExclude === 'string' && configuredExclude ? configuredExclude : DEFAULT_EXCLUDE;
+  const configured = typeof configuredExclude === 'string' && configuredExclude ? configuredExclude : DEFAULT_EXCLUDE;
+  const ignores = respectsGitignore() ? new WorkspaceIgnores(await globalExcludes()) : undefined;
+  // The directories git ignores outright go to `findFiles` as well, so a worktree
+  // copy of the repository is never walked and never spends the manifest budget.
+  // Everything subtler is judged file by file below.
+  const exclude = ignores ? excludeWith(configured, await ignores.directories()) : configured;
   const enabled = enabledEcosystems();
   const glob = manifestGlob(enabled);
   const manifests = glob ? await vscode.workspace.findFiles(glob, exclude, MAX_MANIFESTS) : [];
@@ -763,6 +780,11 @@ async function runScan(): Promise<ScriptEntry[]> {
   const results = await inBatches(manifests, SCAN_CONCURRENCY, async (manifest) => {
     const kind = manifestKind(manifest);
     if (!kind || !enabled.has(ECOSYSTEM_OF[kind])) {
+      return undefined;
+    }
+    // Before the read: a manifest git ignores is never opened, as though
+    // `exclude` had matched it.
+    if (await ignores?.ignores(manifest)) {
       return undefined;
     }
     const cwd = directoryOf(manifest);
@@ -825,13 +847,13 @@ async function runScan(): Promise<ScriptEntry[]> {
   // Shell scripts are matched by pattern rather than by file name, so they do
   // not go through `MANIFEST_KINDS` and get a pass — and a budget — of their own.
   if (enabled.has('shell')) {
-    entries.push(...(await collectShellScripts(exclude)));
+    entries.push(...(await collectShellScripts(exclude, ignores)));
   }
 
-  // The custom tasks are read last and filed first. They answer to neither
-  // `sources` nor `exclude` — both are about what the scan goes looking for, and
-  // these are not looked for: there is one file per workspace folder, at a path
-  // of our own choosing. See `collectCustomTasks`.
+  // The custom tasks are read last and filed first. They answer to none of
+  // `sources`, `exclude` and `respectGitignore` — all three are about what the
+  // scan goes looking for, and these are not looked for: there is one file per
+  // workspace folder, at a path of our own choosing. See `collectCustomTasks`.
   const custom = await collectCustomTasks();
   entries.unshift(...custom.entries);
   blank.push(...custom.blank);
@@ -851,7 +873,7 @@ async function runScan(): Promise<ScriptEntry[]> {
   if (started === generation) {
     cache = entries;
   }
-  scanFacts.set(entries, { generation: started, empty: blank, shaped });
+  scanFacts.set(entries, { generation: started, empty: blank, shaped, ignoreFiles: ignores?.files() ?? [] });
   return entries;
 }
 
@@ -875,6 +897,343 @@ function settingList(key: string, fallback: ReadonlyArray<string>): string[] {
 export function enabledEcosystems(): Set<Ecosystem> {
   const configured = settingList('sources', ALL_ECOSYSTEMS);
   return new Set(configured.filter((item): item is Ecosystem => ALL_ECOSYSTEMS.includes(item as Ecosystem)));
+}
+
+// --- ignore files ------------------------------------------------------------
+
+/**
+ * Whether patterns match without regard to case: what `git init` sets
+ * `core.ignorecase` to on the file systems macOS and Windows ship with. Read
+ * off the platform rather than each repository's config — one file fewer per
+ * repository, for the rare clone made on a disk formatted otherwise.
+ */
+const IGNORE_CASE = process.platform === 'darwin' || process.platform === 'win32';
+
+/** Whether the scan leaves out what git ignores. On unless set to `false`, as it ships. */
+export function respectsGitignore(): boolean {
+  return setting<unknown>('respectGitignore') !== false;
+}
+
+/**
+ * The files the scan reads git's rules out of, for the watcher. `info/exclude`
+ * is spelled with its `.git` in front, so that a file merely named `exclude`
+ * is not heard.
+ */
+export const IGNORE_GLOB = '**/{.gitignore,.git/info/exclude}';
+
+/**
+ * What git ignores in each workspace folder, for one scan.
+ *
+ * Built fresh for every scan rather than kept, so an edited `.gitignore` needs
+ * nothing of its own beyond the rescan its watcher asks for; within one scan
+ * every directory is read once, however many manifests sit below it.
+ */
+class WorkspaceIgnores {
+  private readonly folders = new Map<string, FolderIgnores>();
+  private readonly global: IgnoreRule[];
+  private readonly outside = new Map<string, vscode.Uri>();
+
+  constructor(global: GlobalExcludes) {
+    this.global = global.rules;
+    global.read.forEach(this.note);
+  }
+
+  /**
+   * The files this scan took rules from that `IGNORE_GLOB` cannot hear: the
+   * global git config and excludes file, and an `info/exclude` reached through
+   * a `.git` file — a linked worktree's lives in the main repository's git
+   * directory, which is often outside every workspace folder.
+   */
+  files(): vscode.Uri[] {
+    return [...this.outside.values()];
+  }
+
+  private readonly note = (file: vscode.Uri): void => {
+    this.outside.set(file.toString(), file);
+  };
+
+  /** Whether git ignores this file, judged inside the workspace folder it belongs to. */
+  ignores(file: vscode.Uri): Promise<boolean> {
+    const folder = vscode.workspace.getWorkspaceFolder(file);
+    return folder ? this.of(folder.uri).ignores(file, false) : Promise.resolve(false);
+  }
+
+  /**
+   * Directories every workspace folder ignores outright, relative to the folder
+   * — for `findFiles`, which takes one exclude for all of them.
+   *
+   * Only a pattern that names a directory in plain text qualifies — Claude
+   * Code's worktrees directory, as `.claude/worktrees/` or led by the `**`
+   * segment it writes now, `/build`, `out/` — and only for that directory at the
+   * top of the folder. Each is checked against the full rules before it counts, since a
+   * later `!` can bring it back. Deeper matches stay with the per-file check, and
+   * so does a directory another folder has and does not ignore. A name with no
+   * trailing slash qualifies only as a single exact path, like `/build`: one that
+   * may match at any depth is as often a file, like `.DS_Store` or
+   * `scheduled_tasks.lock`, and would only lengthen the glob.
+   */
+  async directories(): Promise<string[]> {
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri);
+    const named = new Set<string>();
+    for (const folder of folders) {
+      for (const file of await this.of(folder).rulesIn(folder)) {
+        for (const rule of file.rules) {
+          if (
+            !rule.negated &&
+            rule.literal &&
+            (rule.directoryOnly || (rule.anchored && rule.pattern === rule.literal)) &&
+            plainPath(rule.literal)
+          ) {
+            named.add(rule.literal);
+          }
+        }
+      }
+    }
+    const everywhere: string[] = [];
+    for (const directory of named) {
+      let ignored = true;
+      for (const folder of folders) {
+        const target = vscode.Uri.joinPath(folder, directory);
+        if (!(await this.of(folder).ignores(target, true)) && (await exists(target))) {
+          ignored = false;
+          break;
+        }
+      }
+      if (ignored) {
+        everywhere.push(directory);
+      }
+    }
+    return everywhere;
+  }
+
+  private of(folder: vscode.Uri): FolderIgnores {
+    let found = this.folders.get(folder.toString());
+    if (!found) {
+      // The global file only for a folder on this machine's disk, which is the
+      // one disk the home directory it came from is on.
+      found = new FolderIgnores(folder, folder.scheme === 'file' ? this.global : [], this.note);
+      this.folders.set(folder.toString(), found);
+    }
+    return found;
+  }
+}
+
+/**
+ * git's rules inside one workspace folder.
+ *
+ * Read from the folder down and never from above it. The rules a folder would
+ * inherit from a repository it sits inside are the ones a scan can least afford
+ * to trust: a dotfiles repository in the home directory commonly ignores `*` and
+ * adds its files back one by one, and every project under it without a `.git`
+ * of its own would have come up empty. A monorepo opened at one of its packages
+ * loses only the root `.gitignore`, which mostly says what `exclude` says.
+ */
+class FolderIgnores {
+  private readonly inForce = new Map<string, Promise<IgnoreFile[]>>();
+  private readonly hidden = new Map<string, Promise<boolean>>();
+  /** The folder's path, spelled as `comparable` spells every path here. */
+  private readonly root: string;
+  private readonly prefix: string;
+
+  constructor(
+    folder: vscode.Uri,
+    private readonly global: IgnoreRule[],
+    private readonly note: (file: vscode.Uri) => void,
+  ) {
+    this.root = comparable(folder).path;
+    this.prefix = this.root.endsWith('/') ? this.root : `${this.root}/`;
+  }
+
+  /**
+   * Whether git ignores this path: the path itself, or any directory between it
+   * and the folder. Git never looks inside an ignored directory, so nothing in
+   * one comes back, `!` or not.
+   */
+  async ignores(target: vscode.Uri, directory: boolean): Promise<boolean> {
+    const at = comparable(target);
+    // The folder itself never is — whoever opened it meant to — and this is also
+    // where the walk up stops. It has to be said outright: `/` is under its own
+    // prefix and is its own parent, and a folder opened at `/` asked about
+    // itself until the stack ran out.
+    if (at.path === this.root || !at.path.startsWith(this.prefix)) {
+      return false;
+    }
+    const parent = directoryOf(at);
+    const [hidden, rules] = await Promise.all([this.hiddenDirectory(parent), this.rulesIn(parent)]);
+    return hidden || ignoredBy(rules, at.path, directory);
+  }
+
+  /** Every rule in force for the entries of this directory, lowest precedence first. */
+  rulesIn(directory: vscode.Uri): Promise<IgnoreFile[]> {
+    const at = comparable(directory);
+    return remember(this.inForce, at, async () => {
+      if (at.path === this.root) {
+        const own = await ignoreFilesIn(at, this.note);
+        return this.global.length > 0 ? [{ base: at.path, rules: this.global }, ...own] : own;
+      }
+      if (!at.path.startsWith(this.prefix)) {
+        return [];
+      }
+      const [above, own] = await Promise.all([this.rulesIn(directoryOf(at)), ignoreFilesIn(at, this.note)]);
+      return [...above, ...own];
+    });
+  }
+
+  private hiddenDirectory(directory: vscode.Uri): Promise<boolean> {
+    return remember(this.hidden, directory, () => this.ignores(directory, true));
+  }
+}
+
+/**
+ * A path as the ignore rules compare it: no trailing slash, and a Windows drive
+ * letter in lower case.
+ *
+ * `findFiles` builds its results from `fsPath`, which lowers the drive letter,
+ * while a folder opened from the command line or a dialog keeps it as typed —
+ * and `/C:/repo` beside `/c:/repo/package.json` reads as two unrelated paths,
+ * which left every file unfiltered. The trailing slash is what a drive root like
+ * `D:\` carries and nothing below it does, so its children never found it as
+ * their parent. `/` keeps its slash: it is the whole path.
+ */
+function comparable(uri: vscode.Uri): vscode.Uri {
+  const spelled = uri.path
+    .replace(/^\/([A-Z]):/, (_, drive: string) => `/${drive.toLowerCase()}:`)
+    .replace(/(.)\/+$/, '$1');
+  return spelled === uri.path ? uri : uri.with({ path: spelled });
+}
+
+/** One answer per directory, shared by every manifest that asks while it is coming. */
+function remember<T>(answers: Map<string, Promise<T>>, directory: vscode.Uri, work: () => Promise<T>): Promise<T> {
+  let answer = answers.get(directory.path);
+  if (!answer) {
+    answer = work();
+    answers.set(directory.path, answer);
+  }
+  return answer;
+}
+
+/**
+ * What a directory adds to the rules in force above it, both relative to it:
+ * the `info/exclude` of a repository whose working tree starts here, then the
+ * directory's own `.gitignore`.
+ */
+async function ignoreFilesIn(directory: vscode.Uri, note: (file: vscode.Uri) => void): Promise<IgnoreFile[]> {
+  const texts = await Promise.all([
+    repositoryExclude(directory, note),
+    readText(vscode.Uri.joinPath(directory, '.gitignore')),
+  ]);
+  return texts
+    .filter((text): text is string => text !== undefined)
+    .map((text) => ({ base: directory.path, rules: parseIgnore(text, IGNORE_CASE) }));
+}
+
+/**
+ * `info/exclude` of the repository whose working tree starts at this directory,
+ * if one does. This is the file Claude Code writes its worktrees directory into,
+ * so a scan that read only `.gitignore` files would miss the one case it is for.
+ *
+ * `.git` is a directory in a clone, and a file holding `gitdir: <path>` in a
+ * linked worktree or a submodule. A worktree's own git directory keeps no
+ * `info` of its own: its `commondir` names the repository's. A file reached
+ * that way is handed to `note`, since it is not where `IGNORE_GLOB` looks.
+ */
+async function repositoryExclude(directory: vscode.Uri, note: (file: vscode.Uri) => void): Promise<string | undefined> {
+  const dotGit = vscode.Uri.joinPath(directory, '.git');
+  const [own, pointer] = await Promise.all([readText(vscode.Uri.joinPath(dotGit, 'info', 'exclude')), readText(dotGit)]);
+  const written = own === undefined ? pointer?.match(/^gitdir:[ \t]*(.+?)[ \t]*$/m)?.[1] : undefined;
+  if (!written) {
+    return own;
+  }
+  const gitDir = resolveGitPath(directory, written);
+  const common = (await readText(vscode.Uri.joinPath(gitDir, 'commondir')))?.trim();
+  const exclude = vscode.Uri.joinPath(common ? resolveGitPath(gitDir, common) : gitDir, 'info', 'exclude');
+  note(exclude);
+  return readText(exclude);
+}
+
+/** A path git wrote into one of its files, resolved against the directory it is relative to. */
+function resolveGitPath(from: vscode.Uri, written: string): vscode.Uri {
+  const slashed = written.replace(/\\/g, '/');
+  // `C:/…` is absolute on Windows, and a URI path carries a slash before the drive.
+  if (/^[A-Za-z]:\//.test(slashed)) {
+    return from.with({ path: `/${slashed}` });
+  }
+  return from.with({ path: path.posix.resolve(from.path, slashed) });
+}
+
+/** The global excludes, and every file that went into finding them — for the watchers. */
+interface GlobalExcludes {
+  rules: IgnoreRule[];
+  read: vscode.Uri[];
+}
+
+/**
+ * The user's global excludes file: the one `core.excludesFile` names in the
+ * global git config, or git's default, `$XDG_CONFIG_HOME/git/ignore`, when it
+ * is not set. Set to nothing, it turns global excludes off, the default file
+ * included, as in git. Read once per scan; the configs and the file are handed
+ * back so that an edit to any of them is heard, although none is in the
+ * workspace.
+ */
+async function globalExcludes(): Promise<GlobalExcludes> {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  const homeDirectory = home ? vscode.Uri.file(home) : undefined;
+  const configHome = process.env.XDG_CONFIG_HOME
+    ? vscode.Uri.file(process.env.XDG_CONFIG_HOME)
+    : homeDirectory && vscode.Uri.joinPath(homeDirectory, '.config');
+  // In the order git reads them, so a setting in the second wins.
+  const configs = [
+    configHome && vscode.Uri.joinPath(configHome, 'git', 'config'),
+    homeDirectory && vscode.Uri.joinPath(homeDirectory, '.gitconfig'),
+  ].filter((config): config is vscode.Uri => config !== undefined);
+  let named: string | undefined;
+  for (const config of configs) {
+    const text = await readText(config);
+    const value = text === undefined ? undefined : excludesFileOf(text);
+    if (value !== undefined) {
+      named = value;
+    }
+  }
+  const file =
+    named === undefined
+      ? configHome && vscode.Uri.joinPath(configHome, 'git', 'ignore')
+      : named
+        ? configuredPath(named, homeDirectory)
+        : undefined;
+  const text = file && (await readText(file));
+  return { rules: text ? parseIgnore(text, IGNORE_CASE) : [], read: file ? [...configs, file] : configs };
+}
+
+/** A path out of the user's git config: `~/` is the home directory, and a relative one is not followed. */
+function configuredPath(written: string, home: vscode.Uri | undefined): vscode.Uri | undefined {
+  if (written.startsWith('~/')) {
+    return home && vscode.Uri.joinPath(home, written.slice(2));
+  }
+  return path.isAbsolute(written) ? vscode.Uri.file(written) : undefined;
+}
+
+/** A literal pattern that can go into a glob as it is: no glob syntax, and no `.` or `..` segment. */
+function plainPath(literal: string): boolean {
+  return !/[{}\],]/.test(literal) && literal.split('/').every((part) => part !== '' && part !== '.' && part !== '..');
+}
+
+/**
+ * `exclude` with these directories added, as one flat `{…}` group — see
+ * `expandBraces` for why a group cannot hold another. An exclude too big to
+ * open is kept as it is, without them: the per-file check still leaves out what
+ * is in them, only after `findFiles` has counted it against the budget.
+ */
+function excludeWith(exclude: string, directories: ReadonlyArray<string>): string {
+  const alternatives = directories.length > 0 ? expandBraces(exclude) : [];
+  return alternatives.length > 0
+    ? `{${[...alternatives, ...directories.map((directory) => `${directory}/**`)].join(',')}}`
+    : exclude;
+}
+
+/** The files git does not ignore, in the order they came. */
+async function unignored(files: vscode.Uri[], ignores: WorkspaceIgnores): Promise<vscode.Uri[]> {
+  const ignored = await inBatches(files, SCAN_CONCURRENCY, (file) => ignores.ignores(file));
+  return files.filter((_, at) => !ignored[at]);
 }
 
 // --- parsing -----------------------------------------------------------------
@@ -2899,7 +3258,7 @@ export function shellDescription(text: string, extension?: string): string | und
  * `<folder>/scripts`, and a real manifest's always ends in a file name, so the
  * only way the two collide is a directory literally named `package.json`.
  */
-async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
+async function collectShellScripts(exclude: string, ignores?: WorkspaceIgnores): Promise<ScriptEntry[]> {
   const patterns = settingList('shellScripts', DEFAULT_SHELL_SCRIPTS);
   if (patterns.length === 0) {
     return [];
@@ -2911,7 +3270,8 @@ async function collectShellScripts(exclude: string): Promise<ScriptEntry[]> {
     return [];
   }
   const glob = alternatives.length === 1 ? alternatives[0] : `{${alternatives.join(',')}}`;
-  const files = await vscode.workspace.findFiles(glob, exclude, MAX_SHELL_SCRIPTS);
+  const found = await vscode.workspace.findFiles(glob, exclude, MAX_SHELL_SCRIPTS);
+  const files = ignores ? await unignored(found, ignores) : found;
   // By directory first, so a group's scripts are one run and the shallower
   // folders come first — the same shape the manifest sort above produces — and
   // alphabetically inside one, which is the order a folder is read in.

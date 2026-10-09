@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "Task & Script Explorer🏆",
   "description": "A task runner for all your monorepo's scripts, in a single list.: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -1082,6 +1082,11 @@
           "type": "string",
           "default": "**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**",
           "description": "Glob pattern of manifest locations to ignore while scanning."
+        },
+        "taskRunnerUltimate.respectGitignore": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Leave out manifests and scripts that git ignores: by a `.gitignore`, by the repository's `.git/info/exclude`, or by your global excludes file (`core.excludesFile`). This is what keeps the git worktrees coding agents check out inside the repository — Claude Code's `.claude/worktrees/` — out of the list.\n\nRules are read from each workspace folder down, never from a repository above it. The folder itself is always scanned, and the custom tasks file is read whatever git says about it. Turn this off to list everything `#taskRunnerUltimate.exclude#` lets through."
         },
         "taskRunnerUltimate.sources": {
           "type": "array",

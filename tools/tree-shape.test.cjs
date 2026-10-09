@@ -252,6 +252,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
                 ALL_ECOSYSTEMS: [...new Set(Object.values(ECOSYSTEMS))],
                 collectScripts: async () => scan,
                 emptyManifests: () => [],
+                ignoreFilesRead: () => [],
                 staleScan: (scripts) => staleScans.has(scripts),
                 // A path alone is a manifest whose every row a setting decides.
                 settingShapedManifests: () =>

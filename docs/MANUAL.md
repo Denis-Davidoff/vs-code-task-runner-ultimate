@@ -112,8 +112,8 @@ has its own idea of which one wins: `make` prefers a `GNUmakefile` to a `Makefil
 `Taskfile.yml` to `Taskfile.yaml`, and `just` refuses to choose at all. So a row from one of them
 names the file it came from — `make -f Makefile build` — and runs that file's task rather than
 whichever the runner would have opened. It is named every time, including where the directory looks
-like it holds only one: a file left out by `exclude`, or beyond the 2000-manifest cap, is invisible
-to the scan and still there for the runner.
+like it holds only one: a file left out by `exclude` or by git's ignore rules, or beyond the
+2000-manifest cap, is invisible to the scan and still there for the runner.
 
 Descriptions are used where a format has them (`desc:` in a Taskfile, `description` in cargo-make
 and tox, `help` in a pdm script, `## text` on a Make target, the comment above a `just` recipe), and
@@ -487,7 +487,8 @@ The tasks are kept per workspace folder in **`.vscode/task-script-explorer.json`
 ```
 
 Commit it and the whole team has the same list; add it to `.gitignore` and it stays yours — the
-choice `.vscode/tasks.json` beside it already offers. It is watched, so an edit by hand or a
+choice `.vscode/tasks.json` beside it already offers. It is listed either way: `respectGitignore`
+does not reach it. It is watched, so an edit by hand or a
 `git pull` reaches the tree on its own, and **Go to Script Definition** opens it at the task's line.
 The tree rewrites the file as plain JSON when it saves a change: keys it does not know are kept, and
 so are entries under `tasks` it cannot run — an empty command, an object — in the places they were.
@@ -496,8 +497,9 @@ included. A file that is there but is not valid JSON, whose `tasks` is not an ob
 1 MB or that could not be read is never written over — the tree says so, and waits for it to be
 fixed. Only a file that is not there at all is started from nothing.
 
-Neither `taskRunnerUltimate.sources` nor `taskRunnerUltimate.exclude` applies to it: both are about
-what the scan goes looking for, and this file is not looked for — it has one place to be.
+None of `taskRunnerUltimate.sources`, `taskRunnerUltimate.exclude` and
+`taskRunnerUltimate.respectGitignore` applies to it: all three are about what the scan goes looking
+for, and this file is not looked for — it has one place to be.
 
 #### Approving a command you did not type
 
@@ -1336,6 +1338,7 @@ gets to choose for the machine that opens it. Those three are set in your own se
 | `shellRunner` | `bash` | What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through. Empty runs the path on its own. |
 | `shellRunners` | `powershell -NoProfile -File` for `.ps1`, nothing for `.bat` and `.cmd` | What each extension is run through, keyed by extension. One that is not named here falls back to `shellRunner`. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
+| `respectGitignore` | `true` | Skips manifests and scripts that git ignores — see [What git ignores](#what-git-ignores). Off lists everything `exclude` lets through. |
 | `showInEditorTitle` | `true` | The ▶ icon in the editor title bar. |
 | `showInStatusBar` | `true` | The `Tasks` entry (and its Restart all / Stop all buttons) in the status bar. |
 | `showInFileExplorer` | `true` | The `Task & Script Explorer` section at the foot of the File Explorer. It ships collapsed, so it takes one header row until you open it. |
@@ -1393,14 +1396,56 @@ pair the row's own buttons use. `stop`, `kill`, `teardown` and `destroy` read as
 - A scan is capped at 2000 manifests. Reaching the cap is reported once, rather than quietly
   handing you a short list.
 
+### What git ignores
+
+A manifest or script that git ignores is not listed. This is mostly about the git worktrees that
+coding agents check out *inside* the repository. Claude Code puts each subagent's worktree in
+`.claude/worktrees/<name>`, and each one is a full copy of the repository, every `package.json`
+included. Without this rule each copy would add a second set of headings until it was deleted. The
+same rule hides vendored and generated code that git ignores, such as Cordova's `plugins/`.
+
+The rules are the ones git reads:
+
+- every `.gitignore` from the workspace folder down to the file;
+- the repository's `.git/info/exclude`. This is where Claude Code records its worktrees directory,
+  as `**/.claude/worktrees/` (older versions wrote `.claude/worktrees/`), so reading only
+  `.gitignore` would miss it. For a folder that is itself a linked worktree, the main repository's
+  file is used;
+- your global excludes file, the one `core.excludesFile` names in `~/.gitconfig` or
+  `$XDG_CONFIG_HOME/git/config`, or `~/.config/git/ignore` when it is not set. Setting it to nothing
+  turns global excludes off, as in git. `[include]` is not followed.
+
+The matching is git's own algorithm (`wildmatch`), carried over step for step: the last pattern that
+matches decides, `!` brings a path back, and nothing comes back from inside an ignored directory.
+Patterns are compared byte for byte and ignore the case of ASCII letters on macOS and Windows, as
+`core.ignorecase` does there by default. A run of wildcards in a hostile `.gitignore` is answered as
+quickly as git answers it.
+
+Nothing above the workspace folder is read, and the folder itself is always scanned. A dotfiles
+repository in the home directory often ignores `*` and adds its files back one by one; reading it
+would leave every project under it without its own `.git` with an empty list. A package of a
+monorepo opened on its own therefore does not see the root `.gitignore`.
+
+A directory that a `.gitignore` or `info/exclude` names in plain text — `.claude/worktrees/`,
+`**/.claude/worktrees/`, `/build` — is also passed to the file search for the top of the folder, so
+its contents are never walked and never count towards the 2000-manifest cap. Every other rule, and
+the same directory deeper down, is checked per file, after the search.
+
+Set `taskRunnerUltimate.respectGitignore` to `false` to list everything `exclude` lets through. The
+[custom tasks](#custom-tasks) file is read either way.
+
 ### Staying up to date
 
 The list is cached, and the cache is dropped whenever anything a scan depends on changes: any
 manifest in [the table above](#what-gets-scanned), and equally a lock or config file —
 `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `package-lock.json`, `deno.lock`, `uv.lock`,
 `poetry.lock` and the rest of the [detection signals](#runner-detection). Adding or removing a task
-shows up on its own, in both the tree and an open dropdown. A setting that decides what is scanned —
-`sources`, `exclude`, `cargoCommands`, `goCommands`, `pythonRunner` — does the same, and so does one
+shows up on its own, in both the tree and an open dropdown. While
+[`respectGitignore`](#what-git-ignores) is on, so does an edit to any file git's rules were read
+from: a `.gitignore`, `.git/info/exclude`, and the ones outside the workspace — the global git
+config and excludes file, and the main repository's `info/exclude` when the folder is a linked
+worktree. A setting that decides what is scanned —
+`sources`, `exclude`, `respectGitignore`, `cargoCommands`, `goCommands`, `pythonRunner` — does the same, and so does one
 that decides how a row is *launched* when the answer is written into the row at scan time rather than
 worked out when it starts: `dockerCompose`, `dockerComposeCommands`, `dockerfileCommands`,
 `shellScripts`, `shellRunner` and `shellRunners`.
