@@ -14,10 +14,11 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-// The ignore rules are a module of their own that touches nothing, so it is run
-// bare once and handed to every harness as what `./gitignore` resolves to.
-const gitignore = (() => {
-  const text = fs.readFileSync(path.join(__dirname, '../src/gitignore.ts'), 'utf8');
+// The ignore rules and the TOML reader are modules of their own that touch
+// nothing, so each is run bare once and handed to every harness as what
+// `./gitignore` and `./toml` resolve to.
+const bare = (file) => {
+  const text = fs.readFileSync(path.join(__dirname, '../src', file), 'utf8');
   const context = vm.createContext({ exports: {} });
   vm.runInContext(
     ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
@@ -25,7 +26,9 @@ const gitignore = (() => {
     context,
   );
   return context.exports;
-})();
+};
+const gitignore = bare('gitignore.ts');
+const toml = bare('toml.ts');
 
 /** A URI as much as the scan ever asks one to be. */
 function uri(at) {
@@ -106,12 +109,12 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
     // excludes file is looked for where the test says the home directory is —
     // never in the home directory of whoever runs the suite.
     process: Object.create(process, { env: { value: env } }),
-    require: (name) => (name === 'vscode' ? vscode : name === 'path' ? path : name === './gitignore' ? gitignore : {}),
+    require: (name) => (name === 'vscode' ? vscode : name === 'path' ? path : name === './gitignore' ? gitignore : name === './toml' ? toml : {}),
   });
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { WorkspaceIgnores, ignoreFilesRead: exports.ignoreFilesRead, parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, plainArgument, staleScan: exports.staleScan, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
+    exports.parsers = { WorkspaceIgnores, ignoreFilesRead: exports.ignoreFilesRead, parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parsePyproject, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, plainArgument, staleScan: exports.staleScan, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
   `,
     context,
   );
@@ -890,6 +893,33 @@ test('a Makefile define…endef body is text, not rules', () => {
   const { parseMakefile } = harness();
   const text = 'define HELP\nUsage: make <target>\nTargets: build test\nendef\n\nbuild:\n\techo\n';
   assert.deepEqual(names(parseMakefile(text, 'Makefile')), ['build']);
+});
+
+test('a Makefile directive or function call with a colon in it is not a rule', () => {
+  const { parseMakefile } = harness();
+  const text = [
+    'ifndef ENV',
+    '$(error Usage: make deploy ENV=prod)',
+    'endif',
+    '$(info Building version: $(VERSION))',
+    'ifeq ($(GOOS):$(GOARCH),linux:amd64)',
+    'vpath %.h include:third_party',
+    'endif',
+    '$(eval $(call rule,foo:bar))',
+    'include: ## a rule named like the directive',
+    '\techo',
+    'deploy:',
+    '\techo deploying',
+  ].join('\n');
+  assert.deepEqual(names(parseMakefile(text, 'Makefile')), ['include', 'deploy']);
+});
+
+test('a colon inside a reference in the target list does not end it', () => {
+  // GNU make reads `$(OBJS:.o=.d)` as one word, so these are rules for `all`
+  // and `test` — whose first colon happens to be the substitution's.
+  const { parseMakefile } = harness();
+  const text = 'all $(OBJS:.o=.d): deps\n\techo\ntest ${TESTS:%=run-%}: build\n\techo\n';
+  assert.deepEqual(names(parseMakefile(text, 'Makefile')), ['all', 'test']);
 });
 
 test('a grouped target marker is not a target of its own', () => {
@@ -1841,4 +1871,16 @@ test('the ignore files outside the workspace are handed on for watching', async 
   const off = harness({ folders: ['/wt'], root: '/wt', settings: { respectGitignore: false }, env: { HOME: '/home/me' } });
   off.resetSources();
   assert.equal(off.ignoreFilesRead(await off.collectScripts()).length, 0);
+});
+
+test('a private poe task is not listed', async () => {
+  const { parsePyproject } = harness();
+  const text = [
+    '[tool.poe.tasks]',
+    '_install-hooks = "pre-commit install"',
+    'setup = ["_install-hooks", "sync"]',
+    'sync = "uv sync"',
+  ].join('\n');
+  const parsed = await parsePyproject(text, { fsPath: '/repo', path: '/repo', scheme: 'file', toString: () => 'file:///repo' });
+  assert.deepEqual(names(parsed), ['setup', 'sync']);
 });

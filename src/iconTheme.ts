@@ -48,8 +48,8 @@ export interface PackIcon {
 
 /**
  * Which set of associations a pack is read through. A theme file carries a base
- * set and optional `light`, `highContrast` and `highContrastLight` blocks that
- * override it, and the workbench picks between them by the *colour* theme — so
+ * set and optional `light` and `highContrast` blocks that override it, and the
+ * workbench picks between them by the *colour* theme — so
  * the same pack is a different catalogue in a light theme than in a dark one.
  */
 type Variant = 'dark' | 'light' | 'hcDark' | 'hcLight';
@@ -271,7 +271,6 @@ interface ThemeFile extends Associations {
   iconDefinitions?: Record<string, { iconPath?: string; fontCharacter?: string } | undefined>;
   light?: Associations;
   highContrast?: Associations;
-  highContrastLight?: Associations;
 }
 
 /**
@@ -484,19 +483,19 @@ function lowered(
 }
 
 /**
- * The block that stands in front of the base set for this colour theme. A high
- * contrast theme falls back to the ordinary light or dark block when the pack
- * carries no block of its own — which is what the workbench does with it, and
- * what nearly every pack expects, since almost none ship one.
+ * The block that stands in front of the base set for this colour theme, as the
+ * workbench picks it: `light` under a light theme, and `highContrast` under both
+ * high contrast themes, the light one included. The format has no block for
+ * light high contrast, and the `light` block is never applied there — a pack
+ * without a `highContrast` block draws its base set in either.
  */
 function overrides(spec: ThemeFile, variant: Variant): Associations | undefined {
   switch (variant) {
     case 'light':
       return spec.light;
     case 'hcDark':
-      return spec.highContrast;
     case 'hcLight':
-      return spec.highContrastLight ?? spec.light;
+      return spec.highContrast;
     default:
       return undefined;
   }

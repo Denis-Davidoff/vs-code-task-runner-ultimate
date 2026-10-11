@@ -1659,6 +1659,11 @@ async function parsePyproject(text: string, cwd: vscode.Uri): Promise<ParsedMani
   // is reached through poetry when the project uses poetry.
   const poe = tomlTable(toml, 'tool', 'poetry') ? ['poetry', 'run', 'poe'] : ['poe'];
   for (const [name, value] of tableEntries(toml, 'tool', 'poe', 'tasks')) {
+    // A leading `_` is poe's private task: run only as part of another task,
+    // and refused by name on the command line — as `_x` is in a justfile.
+    if (name.startsWith('_')) {
+      continue;
+    }
     add(name, value, [...poe, name], `${poe.join(' ')} ${name}`);
   }
 
@@ -1853,13 +1858,81 @@ function parseNoxfile(text: string): ParsedManifest | undefined {
  * Target lines: one or more names, a single or double colon, then prerequisites.
  * The `(?!=)` is what keeps `CFLAGS := -O2` out, and disallowing `=` in the name
  * does the same for the other assignment forms.
- *
- * Exported so `locate.ts` finds the line a target is on with the same rule that
- * put it in the list.
  */
 // `(?![:=])` after the colon(s) keeps `FOO ::= x` and `FOO :::= x` — immediate
 // assignments — from reading as a rule for `FOO`.
-export const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?![:=])\s*(.*)$/;
+const MAKE_TARGET = /^([^\s:#=][^:=#]*?)\s*::?(?![:=])\s*(.*)$/;
+/**
+ * The directives make reads before it looks for a rule. Each takes a space or the
+ * end of the line after it, so `include:` and `export-docs:` are still rules.
+ */
+const MAKE_DIRECTIVE = /^(?:-?include|sinclude|vpath|ifn?eq|ifn?def|else|endif|export|unexport|override|undefine)(?:\s|$)/;
+
+/**
+ * A rule line's targets and what follows its colon, or nothing for a line that
+ * only has the shape of one.
+ *
+ * Two kinds of line carry a colon without being a rule: a directive
+ * (`ifeq ($(OS):$(ARCH),linux:amd64)`, `vpath %.h include:lib`), and a function
+ * call standing on its own (`$(error Usage: make deploy ENV=prod)`,
+ * `$(info Building version: $(VERSION))`). Read as rules they listed `ifeq`,
+ * `vpath`, `Usage` and `Building` — rows make answers with "No rule to make
+ * target".
+ *
+ * A colon inside a `$(…)` or `${…}` is the reference's, not the rule's, so the
+ * line is read with those masked out — as make itself reads a word whole. That
+ * keeps the function call out, and keeps `all $(OBJS:.o=.d): deps` in, a rule
+ * for `all` whose first colon is the substitution's.
+ *
+ * Exported so `locate.ts` finds the line a target is on with the same rule that
+ * put it in the list. The parts are the line's own text, at the same offsets.
+ */
+export function makeRule(line: string): readonly [line: string, targets: string, rest: string] | undefined {
+  if (MAKE_DIRECTIVE.test(line)) {
+    return undefined;
+  }
+  const match = MAKE_TARGET.exec(maskMakeReferences(line));
+  if (!match) {
+    return undefined;
+  }
+  return [line, line.slice(0, match[1].length), line.slice(line.length - match[2].length)];
+}
+
+/**
+ * The line with every `:`, `=` and `#` inside a variable reference or function
+ * call replaced, one character for one, so nothing moves. `$$` is a literal `$`
+ * and opens nothing.
+ */
+function maskMakeReferences(line: string): string {
+  const closers: string[] = [];
+  let out = '';
+  for (let at = 0; at < line.length; at++) {
+    const char = line[at];
+    const next = line[at + 1];
+    if (char === '$' && next === '$') {
+      out += '$$';
+      at++;
+      continue;
+    }
+    if (char === '$' && (next === '(' || next === '{')) {
+      closers.push(next === '(' ? ')' : '}');
+      out += char + next;
+      at++;
+      continue;
+    }
+    if (closers.length > 0) {
+      if (char === closers[closers.length - 1]) {
+        closers.pop();
+      } else if (char === '(' || char === '{') {
+        closers.push(char === '(' ? ')' : '}');
+      }
+      out += char === ':' || char === '=' || char === '#' ? '_' : char;
+      continue;
+    }
+    out += char;
+  }
+  return out;
+}
 /** `build: deps ## Build everything` — the convention every self-documenting Makefile uses. */
 const MAKE_DOC = /##\s*(.*)$/;
 /**
@@ -1921,7 +1994,7 @@ function parseMakefile(text: string, file: string): ParsedManifest | undefined {
       continue;
     }
 
-    const match = MAKE_TARGET.exec(line);
+    const match = makeRule(line);
     if (!match) {
       doc = '';
       continue;
@@ -1957,7 +2030,7 @@ function parseMakefile(text: string, file: string): ParsedManifest | undefined {
  * colon and dependencies after it. `(?!=)` keeps out `x := "y"`, which covers
  * assignments, `alias b := build` and the `set` directives in one go.
  *
- * Exported for `locate.ts`, as MAKE_TARGET above is.
+ * Exported for `locate.ts`, as `makeRule` above is.
  */
 export const JUST_RECIPE = /^@?([A-Za-z_][A-Za-z0-9_-]*)([^:\n]*):(?!=)/;
 
@@ -3256,7 +3329,9 @@ export function shellDescription(text: string, extension?: string): string | und
  *
  * The group's `manifest` is therefore the directory. Its ref is
  * `<folder>/scripts`, and a real manifest's always ends in a file name, so the
- * only way the two collide is a directory literally named `package.json`.
+ * only way the two collide is a directory literally named `package.json`. The
+ * group of a folder's own root takes the folder's name — see `manifestRef` in
+ * extension.ts for how a subfolder of that same name is kept apart from it.
  */
 async function collectShellScripts(exclude: string, ignores?: WorkspaceIgnores): Promise<ScriptEntry[]> {
   const patterns = settingList('shellScripts', DEFAULT_SHELL_SCRIPTS);

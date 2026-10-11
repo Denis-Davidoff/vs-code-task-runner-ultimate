@@ -19,6 +19,8 @@ restart without ever going looking for a terminal tab.**
 
 - 0.9.5: Git worktrees that coding agents check out inside the repository, such as Claude Code's `.claude/worktrees/`, no longer show up as extra copies of every task. Manifests and scripts that git ignores, through `.gitignore`, `.git/info/exclude` or your global excludes file, are [left out of the list](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#what-git-ignores). Set `taskRunnerUltimate.respectGitignore` to `false` to list them again.
 
+- 0.9.6: Bug fixes
+
 ## Extension Features
 
 - 📋 **[A panel in the left bar](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#the-task--script-explorer-view)** — every task of the workspace as a

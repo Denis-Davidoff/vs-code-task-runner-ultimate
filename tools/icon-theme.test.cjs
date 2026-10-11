@@ -214,7 +214,7 @@ test('the word a pack marks its light artwork with is not part of the name', () 
   );
 });
 
-test('a high contrast theme falls back to the block the pack actually ships', () => {
+test('both high contrast themes read the pack the way the workbench draws it', () => {
   const base = theme({ fileExtensions: { ts: '_ts' } });
   const spec = {
     ...base,
@@ -223,9 +223,13 @@ test('a high contrast theme falls back to the block the pack actually ships', ()
     highContrast: { fileExtensions: { ts: '_hc' } },
   };
   assert.equal([...iconsFrom(spec, new Map(), 'hcDark')][0].art, './hc.svg');
-  // Almost no pack ships a light high contrast block, and the workbench falls
-  // back to the light one rather than to the dark artwork.
-  assert.equal([...iconsFrom(spec, new Map(), 'hcLight')][0].art, './l.svg');
+  // The workbench applies `highContrast` under `.hc-light` as well, and never
+  // the `light` block, so a preview drawn from `light` would show artwork the
+  // row does not wear.
+  assert.equal([...iconsFrom(spec, new Map(), 'hcLight')][0].art, './hc.svg');
+  // And with no `highContrast` block at all, the base set — not `light`.
+  const { highContrast, ...plain } = spec;
+  assert.equal([...iconsFrom(plain, new Map(), 'hcLight')][0].art, base.iconDefinitions._ts.iconPath);
 });
 
 // --- themes that are hostile, or merely odd ------------------------------------

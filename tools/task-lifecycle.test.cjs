@@ -41,6 +41,7 @@ function harness() {
       running, executionOf, stopExecution, stopNode, restartNode, markEnded,
       liveExecutions, runningCount, forgetExecution, clearEnded,
       stopGroup, restartGroup, stopStack, activateNode, foreignExecutions,
+      restartAllTasks, stopAllCommand,
     };
   `, context);
   const api = context.exports.lifecycle;
@@ -359,4 +360,139 @@ test('a replaced handle and the one the listing holds are one run, stopped once'
   h.running.set('dev', stale);
   await h.stopGroup({ kind: 'group', children: [{ kind: 'script', script: { key: 'dev', name: 'dev' } }] });
   assert.equal(stops, 1);
+});
+
+// --- a row running twice, and stops that land while a restart waits -----------
+
+/** A run that takes a moment to die, which is when a second command lands. */
+function slow(run) {
+  const terminate = run.terminate;
+  run.terminate = () => setTimeout(terminate, 10);
+  return run;
+}
+
+/** A run of another row, keyed `name`. */
+function runOf(h, name) {
+  const run = h.execution();
+  run.task = { ...run.task, name, definition: { key: name } };
+  return run;
+}
+
+test('a row restart brings a task running twice back running once', async () => {
+  const h = harness();
+  const { script } = twice(h);
+  await h.restartNode({ kind: 'script', script }, false);
+  assert.deepEqual(h.tasks.taskExecutions, []);
+  assert.deepEqual(h.launches, [script]);
+});
+
+test('a row stop ends every run behind the row', async () => {
+  const h = harness();
+  const { script } = twice(h);
+  await h.stopNode({ kind: 'script', script });
+  assert.deepEqual(h.tasks.taskExecutions, []);
+  assert.equal(h.runningCount(), 0);
+});
+
+test('a stop pressed while a restart waits on the old run is the last word', async () => {
+  const h = harness();
+  const run = slow(h.execution());
+  h.tasks.taskExecutions = [run];
+  h.running.set('dev', run);
+  const node = { kind: 'script', script: { key: 'dev', name: 'dev' } };
+  const restarting = h.restartNode(node, false);
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  await h.stopNode(node);
+  await restarting;
+  assert.deepEqual(h.launches, []);
+});
+
+test('Stop All pressed while Restart All waits leaves everything stopped', async () => {
+  const h = harness();
+  const run = slow(h.execution());
+  h.tasks.taskExecutions = [run];
+  const restarting = h.restartAllTasks();
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  await h.stopAllCommand();
+  await restarting;
+  assert.deepEqual(h.launches, []);
+});
+
+test('a group restart leaves a row stopped by hand meanwhile stopped', async () => {
+  const h = harness();
+  const a = slow(runOf(h, 'a'));
+  const b = runOf(h, 'b');
+  h.tasks.taskExecutions = [a, b];
+  h.running.set('a', a);
+  h.running.set('b', b);
+  const rows = [{ key: 'a', name: 'a' }, { key: 'b', name: 'b' }];
+  const group = { kind: 'group', children: rows.map((script) => ({ kind: 'script', script })) };
+  const restarting = h.restartGroup(group);
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  await h.stopNode({ kind: 'script', script: rows[1] });
+  await restarting;
+  assert.deepEqual(h.launches, [rows[0]]);
+});
+
+test('a group restart leaves a row that finished on its own meanwhile idle', async () => {
+  const h = harness();
+  const a = slow(runOf(h, 'a'));
+  const b = runOf(h, 'b');
+  h.tasks.taskExecutions = [a, b];
+  h.running.set('a', a);
+  h.running.set('b', b);
+  const rows = [{ key: 'a', name: 'a' }, { key: 'b', name: 'b' }];
+  const group = { kind: 'group', children: rows.map((script) => ({ kind: 'script', script })) };
+  const restarting = h.restartGroup(group);
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  // `b` is a build that ends while `a` is still going down.
+  b.terminate();
+  await restarting;
+  assert.deepEqual(h.launches, [rows[0]]);
+});
+
+test('Restart All starts the rest when one task cannot be started again', async () => {
+  const h = harness();
+  const broken = runOf(h, 'broken');
+  const fine = runOf(h, 'fine');
+  h.tasks.taskExecutions = [broken, fine];
+  h.tasks.executeTask = async (task) => {
+    if (task === broken.task) {
+      throw new Error('Task not found');
+    }
+    h.launches.push(task);
+  };
+  const warnings = [];
+  h.vscode.window.showWarningMessage = (message) => warnings.push(message);
+  await h.restartAllTasks();
+  assert.deepEqual(h.launches, [fine.task]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /"broken" was stopped and could not be started again: .*Task not found/);
+});
+
+test('a stop on one foreign run does not call off the restart of its namesake', async () => {
+  // Two folders' `watch`: one name, one source, two runs nothing of ours keys.
+  const h = harness();
+  const [a, b] = [h.execution(), slow(h.execution())];
+  for (const run of [a, b]) {
+    run.task = { ...run.task, name: 'watch', definition: {} };
+  }
+  h.tasks.taskExecutions = [a, b];
+  const restarting = h.restartNode({ kind: 'foreign', execution: b }, false);
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  await h.stopNode({ kind: 'foreign', execution: a });
+  await restarting;
+  assert.deepEqual(h.launches, [b.task]);
+});
+
+test('a stop on a foreign run still calls off its own restart', async () => {
+  const h = harness();
+  const run = slow(h.execution());
+  run.task = { ...run.task, name: 'watch', definition: {} };
+  h.tasks.taskExecutions = [run];
+  const restarting = h.restartNode({ kind: 'foreign', execution: run }, false);
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  await h.stopNode({ kind: 'foreign', execution: run });
+  await restarting;
+  assert.deepEqual(h.launches, []);
 });

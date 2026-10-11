@@ -189,6 +189,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     Uri: {
       from: (parts) => ({ ...parts, toString: () => `${parts.scheme}:${parts.path}` }),
       joinPath: (base, ...rest) => uri([base.path, ...rest].join('/')),
+      parse: (text) => uri(text.replace(/^file:\/\//, '')),
     },
   };
 
@@ -283,7 +284,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async (execution) => (stopped.push(execution), ${stops});
-    exports.tree = { startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS };
+    exports.tree = { startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
   `,
     Object.assign(context, { memento, extUri: uri('/ext'), stopped }),
   );
@@ -1005,7 +1006,7 @@ test('flat mode draws compose and script folders inside the project they serve',
     [
       'script:dev',
       'group:file:///repo/docker-compose.yml',
-      'group:shell:group:file:///repo/package.json',
+      'group:shell:file:///repo/package.json',
     ],
   );
   // A compose file is named by its file, and drops the path the heading above
@@ -1159,9 +1160,9 @@ test('a project takes in what sits in the folders below it, not beside it', () =
   ]);
   // Each script folder went to the nearest project above it, not to the root —
   // as the one `shell` row of that project.
-  assert.deepEqual(ids(roots[0].children.slice(1)), ['group:shell:group:file:///repo/package.json']);
+  assert.deepEqual(ids(roots[0].children.slice(1)), ['group:shell:file:///repo/package.json']);
   assert.deepEqual(ids(roots[1].children.slice(1)), [
-    'group:shell:group:file:///repo/apps/web/package.json',
+    'group:shell:file:///repo/apps/web/package.json',
   ]);
   assert.equal(roots[1].children[1].ref, 'file:///repo/apps/web/scripts');
 });
@@ -1319,7 +1320,7 @@ test('the dropdown lists the blocks in the order the tree nests them', async () 
   ]);
   assert.deepEqual(ids(roots[0].children.slice(1)), [
     'group:file:///repo/docker-compose.yml',
-    'group:shell:group:file:///repo/package.json',
+    'group:shell:file:///repo/package.json',
   ]);
 
   // The same blocks, in the same order, flattened.
@@ -1611,14 +1612,21 @@ test('a compose heading says whether its stack is up, and no other heading does'
   h.containers.set('file:///repo/docker-compose.yml', new Set(['web']));
   assert.equal(heading(), 'compose:up');
 
-  // A run of ours outranks it, the way it does on the row: ⟳ and ■ take the slot.
+  // The file's own `up` or `down` running is said apart from anything else
+  // under it running: only those are what ▶ refuses.
   h.running.set(rows[0].key, { task: { name: 'up' } });
+  assert.equal(heading(), 'compose:up:busy:running');
+  h.running.clear();
+  h.running.set(rows[2].key, { task: { name: 'down' } });
+  assert.equal(heading(), 'compose:up:busy:running');
+  h.running.clear();
+  h.running.set(rows[1].key, { task: { name: 'up: web' } });
   assert.equal(heading(), 'compose:up:running');
   h.running.clear();
 
   // Every clause that matched a package row before still matches one, compose or
   // not — the state rides in front of the anchored tail.
-  assert.match(heading(), /^compose:(up|down)(:(hidden|carried))?(:running)?$/);
+  assert.match(heading(), /^compose:(up|down)(:busy)?(:(hidden|carried))?(:running)?$/);
   const npm = h.treeItemFor(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
   assert.equal(npm.contextValue, 'group:package');
 });
@@ -1729,16 +1737,18 @@ test('every action a compose row has stays on it once the row is put away', () =
   const matches = (command, value) =>
     clauses(command).some((pattern) => new RegExp(pattern).test(value));
 
-  for (const state of ['compose:up', 'compose:down', 'compose:up:hidden:running', 'compose:down:carried']) {
+  for (const state of ['compose:up', 'compose:down', 'compose:up:hidden:running', 'compose:down:busy:carried:running']) {
     assert.equal(matches('stopStack', state), true, `stopStack on ${state}`);
     assert.equal(matches('composeActions', state), true, `composeActions on ${state}`);
     assert.equal(matches('openManifest', state), true, `openManifest on ${state}`);
   }
   // ▶ is the one exception, and both halves of it are deliberate: a row in the
-  // pile is out of the way until it is taken out, and a row with a run of ours
-  // on it already has its `up`.
+  // pile is out of the way until it is taken out, and a row whose own `up` or
+  // `down` is a run of ours is busy with the stack. Something else of the file's
+  // running — a `logs -f` being followed — is no reason to withhold it.
   assert.equal(matches('runGroup', 'compose:down'), true);
-  assert.equal(matches('runGroup', 'compose:up:running'), false);
+  assert.equal(matches('runGroup', 'compose:up:running'), true);
+  assert.equal(matches('runGroup', 'compose:up:busy:running'), false);
   assert.equal(matches('runGroup', 'compose:down:hidden'), false);
   // And a package heading keeps every clause it had; `compose` is not a prefix
   // of it, nor it of `compose`.
@@ -2359,6 +2369,35 @@ test('the count is of the files just asked about, not of every file ever asked',
   assert.deepEqual([...h.containers.keys()], [MANIFEST], 'a file the scan no longer has is dropped');
 });
 
+test('a compose file is not marked up by a sibling file of the same project', async () => {
+  // Two compose files in one folder are one compose project, and `ps` for
+  // either lists the containers of both. Only what a file declares is its own.
+  const dev = '/repo/docker-compose.dev.yml';
+  const h = harness({
+    scan: [
+      C_UP,
+      composeRow('/repo/docker-compose.yml', 'up: web', ['up', 'web']),
+      composeRow(dev, 'up', ['up']),
+      composeRow(dev, 'up: worker', ['up', 'worker']),
+    ],
+    probeReply: () => ({ running: new Set(['web']) }),
+  });
+  await h.checkContainers(false);
+  assert.deepEqual([...(h.containers.get(MANIFEST) ?? [])], ['web']);
+  assert.deepEqual([...(h.containers.get(`file://${dev}`) ?? [])], []);
+});
+
+test('a service a compose file brings in through include or its override is still its own', async () => {
+  // `db` comes from an `include:` (or `docker-compose.override.yml`), so it is
+  // in no `up: <service>` row — and no other compose file here declares it.
+  const h = harness({
+    scan: [C_UP, composeRow('/repo/docker-compose.yml', 'up: web', ['up', 'web'])],
+    probeReply: () => ({ running: new Set(['db']) }),
+  });
+  await h.checkContainers(false);
+  assert.deepEqual([...(h.containers.get(MANIFEST) ?? [])], ['db']);
+});
+
 test('a file Docker could not answer for keeps its last answer', async () => {
   const h = harness({ scan: [C_UP], probeReply: () => undefined });
   h.containers.set(MANIFEST, new Set(['web']));
@@ -2426,7 +2465,7 @@ test('a put-away project takes its script folder with it', async () => {
   const api = roots[1].children[0];
   assert.deepEqual(ids(api.children), [
     'script:dev',
-    'group:shell:group:file:///repo/api/package.json',
+    'group:shell:file:///repo/api/package.json',
     'group:file:///repo/api/docker-compose.yml',
   ]);
   // The one folder behind the row still leaves the row that folder, pile or not.
@@ -2870,4 +2909,83 @@ test('Rename confirmed unchanged leaves a hand-written name with spaces around i
   const h = harness({ folder: FOLDER, scan: [task], customFile: [[' b ', 'echo b']], inputs: [' b '] });
   await h.renameCustomTask(task);
   assert.equal(h.customWrites.length, 0);
+});
+
+// --- storage keys that must not collide or drift -------------------------------
+
+/** A value out of the vm, as plain data this realm can compare. */
+const json = (value) => JSON.parse(JSON.stringify(value));
+
+test('a folder root and a subfolder of the same name are two refs, not one', () => {
+  // Loose scripts in `scripts/` take the folder's name; so did `scripts/scripts/`.
+  const h = harness({ folder: { name: 'scripts', uri: uri('/scripts'), index: 0 } });
+  assert.equal(h.manifestRef(uri('/scripts')), 'scripts/scripts');
+  assert.notEqual(h.manifestRef(uri('/scripts/scripts')), h.manifestRef(uri('/scripts')));
+  // Everything else keeps the spelling it always had.
+  assert.equal(h.manifestRef(uri('/scripts/bin')), 'scripts/bin');
+});
+
+test('a drop never stars one ref twice', async () => {
+  const h = harness();
+  await h.starDropped(['repo/x::deploy.sh', 'repo/x::deploy.sh'], undefined);
+  assert.deepEqual(json(h.memento.data.favorites), ['repo/x::deploy.sh']);
+});
+
+test('a drag inside a package keeps the place of a row a setting took away', async () => {
+  const scope = 'repo/Cargo.toml';
+  const order = ['build', 'run', 'test'].map((name) => `${scope}::${name}`);
+  const h = harness({ stored: { order: { [scope]: order } } });
+  // `test` is out of `cargoCommands` for now; `run` is dragged above `build`.
+  await h.saveOrder(scope, [order[1], order[0]]);
+  assert.deepEqual(json(h.memento.data.order[scope]), [order[1], order[0], order[2]]);
+});
+
+test('a shell row filed under an absolute path is refiled under its project', async () => {
+  const legacy = 'group:shell:group:file:///repo/web/package.json';
+  const h = harness({
+    folder: FOLDER,
+    stored: { colors: { [legacy]: 'red', 'repo/web::dev': 'teal' }, icons: { [legacy]: 'rocket' }, collapsed: [legacy] },
+  });
+  await h.migrateShellBuckets();
+  const current = 'group:shell:repo/web/package.json';
+  assert.deepEqual(json(h.memento.data.colors), { [current]: 'red', 'repo/web::dev': 'teal' });
+  assert.deepEqual(json(h.memento.data.icons), { [current]: 'rocket' });
+  assert.deepEqual(json(h.memento.data.collapsed), [current]);
+});
+
+test('a shell row filed under a folder that is not open is left for a later activation', async () => {
+  const legacy = 'group:shell:group:file:///elsewhere/package.json';
+  const h = harness({ stored: { colors: { [legacy]: 'red' } } });
+  await h.migrateShellBuckets();
+  assert.deepEqual(json(h.memento.data.colors), { [legacy]: 'red' });
+});
+
+test('a fold already read into memory is refiled along with the store', async () => {
+  const legacy = 'group:shell:group:file:///repo/web/package.json';
+  const h = harness({ folder: FOLDER, stored: { colors: { [legacy]: 'red' }, collapsed: [legacy] } });
+  h.foldedRefs();
+  await h.migrateShellBuckets();
+  assert.deepEqual(json([...h.foldedRefs()]), ['group:shell:repo/web/package.json']);
+});
+
+test('the marks of a subfolder named like its folder follow it to its own ref', async () => {
+  const folder = { name: 'scripts', uri: uri('/scripts'), index: 0 };
+  const sub = { ...shell('/scripts/scripts', 'deploy.sh'), cwd: uri('/scripts') };
+  const h = harness({
+    folder,
+    stored: {
+      favorites: ['scripts/scripts::deploy.sh'],
+      colors: { 'scripts/scripts': 'green' },
+      order: { 'scripts/scripts': ['scripts/scripts::deploy.sh'] },
+    },
+  });
+  await h.migrateSubfolderRefs([sub]);
+  assert.deepEqual(json(h.memento.data.favorites), ['scripts/./scripts::deploy.sh']);
+  assert.deepEqual(json(h.memento.data.colors), { 'scripts/./scripts': 'green' });
+  assert.deepEqual(json(h.memento.data.order), { 'scripts/./scripts': ['scripts/./scripts::deploy.sh'] });
+
+  // With loose scripts at the root as well, the old spelling is the root's.
+  const both = harness({ folder, stored: { favorites: ['scripts/scripts::deploy.sh'] } });
+  await both.migrateSubfolderRefs([sub, { ...shell('/scripts', 'build.sh'), cwd: uri('/scripts') }]);
+  assert.deepEqual(json(both.memento.data.favorites), ['scripts/scripts::deploy.sh']);
 });

@@ -126,3 +126,13 @@ test('a quoted TOML key is read the way the parser reads it', () => {
   assert.equal(found?.line, 1);
   assert.equal(selected(escaped, found), 'a\\u0062');
 });
+
+test('a Makefile function call with a colon in it is not where a target is', () => {
+  const text = ['$(info deploy: starting)', 'deploy:', '\techo'].join('\n');
+  assert.equal(locateTask(text, 'make', 'deploy')?.line, 1);
+});
+
+test('a target is found on a rule whose first colon is a substitution\'s', () => {
+  const text = ['$(info all: starting)', 'all $(OBJS:.o=.d): deps', '\techo'].join('\n');
+  assert.deepEqual({ ...locateTask(text, 'make', 'all') }, { line: 1, character: 0, length: 3 });
+});

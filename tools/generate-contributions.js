@@ -1,6 +1,7 @@
 /*
- * Generates media/*.svg and the generated parts of package.json:
- * the commands, menus, views and keybindings sections.
+ * Generates media/*.svg, media/icon.png and the generated parts of package.json:
+ * `icon`, `activationEvents`, the commands, menus, keybindings, viewsContainers,
+ * views and taskDefinitions sections, and the palette entries of colors.
  *
  * Run with `npm run gen` after changing the icon or the menu layout.
  */
@@ -465,6 +466,12 @@ const STATE = '(:(up|down|building))?';
 // — see `treeItemFor`. It is what ▶ refuses, where `:running` (anything at all
 // under the row, a `run` container included) is not.
 const BUILDING = '(:building)?';
+// A compose row's own `up` or `down` running, beside the `STACK` answer Docker
+// gave: what ▶ refuses there, as `:building` is on a Dockerfile — a second `up`
+// over the first, or an `up` racing the `down` ■ started. `:running` cannot say
+// it: a `logs -f` or a `build` under the row is neither, and keying ▶ on it took
+// the button away for as long as anyone followed the logs.
+const BUSY = '(:busy)?';
 // The two ways a row leaves the tree for the pile, spelled once each: every
 // pattern below builds its put-away slot out of these rather than writing the
 // segment again, so a rename here reaches all of them at once.
@@ -475,8 +482,8 @@ const CARRIED_SEG = 'carried';
 //
 // The Custom Tasks heading is one more of them: it is a file, and a list that can
 // be put away like any other.
-const VISIBLE = `/^(group:package|compose|dockerfile|custom)${STATE}(:running)?$/`;
-const HIDDEN = `/^(group:package|compose|dockerfile|custom)${STATE}:${HIDDEN_SEG}(:running)?$/`;
+const VISIBLE = `/^(group:package|compose|dockerfile|custom)${STATE}${BUSY}(:running)?$/`;
+const HIDDEN = `/^(group:package|compose|dockerfile|custom)${STATE}${BUSY}:${HIDDEN_SEG}(:running)?$/`;
 const PUT_AWAY = `(:(${HIDDEN_SEG}|${CARRIED_SEG}))?`;
 // The half of `PUT_AWAY` a row keeps when it is in the pile only because its
 // project is — the slot the buttons that refuse a hidden row still allow.
@@ -500,22 +507,24 @@ const CUSTOM_TASK = '/^script:.+:custom:/';
 // Every row the tree read off a file, whichever kind: the two actions that are
 // about the manifest rather than the task — opening it and renaming it — reach
 // all of them.
-const NAMED_ROW = `(group:package|compose|dockerfile|custom)${STATE}${PUT_AWAY}(:running)?`;
+const NAMED_ROW = `(group:package|compose|dockerfile|custom)${STATE}${BUSY}${PUT_AWAY}(:running)?`;
 // A compose file is a leaf rather than a folder — `getChildren` returns nothing
 // for it — so every action it has must be on the row itself. There is no way in
 // by opening it, which is why these patterns allow the put-away segments too: a
 // stack whose row is sitting in the pile is still a stack somebody has to be
 // able to take down.
-const COMPOSE_ROW = `compose${STACK}${PUT_AWAY}`;
+const COMPOSE_ROW = `compose${STACK}${BUSY}${PUT_AWAY}`;
 const COMPOSE = `/^${COMPOSE_ROW}(:running)?$/`;
 // ▶ is the one that is not offered on a put-away row, for the same reason no
 // other heading in the pile carries a run-all: what is in there is out of the
-// way, and taking it out again is the click that comes first. `:running` is
-// absent as well — see `runGroup`, which refuses a second `up` over the first.
+// way, and taking it out again is the click that comes first. `:busy` is absent
+// as well — the file's own `up` or `down` is running, and `runGroup` refuses a
+// second `up` over the first — but `:running` is not: something else of the
+// file's running is no reason to withhold its `up`.
 // It sits in the last slot rather than the first: inline actions are drawn
 // right-aligned, so ▶ ends up against the right edge of the row here and on a
 // Dockerfile alike — see the `inline@` numbers below.
-const COMPOSE_IDLE = `/^compose${STACK}$/`;
+const COMPOSE_IDLE = `/^compose${STACK}(:running)?$/`;
 // A Dockerfile row is a leaf on the same terms, with `BUILDING` where compose
 // has `STACK`: nothing asks Docker whether an image exists, but the row does
 // know whether its own build is the thing running.
@@ -612,11 +621,11 @@ manifest.contributes.menus = {
     // means.
     //
     // ▶ is contributed last so that ■ never changes column. ■ is on every compose
-    // row and ▶ only on one nothing of ours is running, so the pair drawn is
-    // `■ ▶` or `■` alone — and since inline actions are drawn right-aligned, the
-    // last slot is the right edge of the row, which is where a Dockerfile draws
-    // ▶ too. Contributing ▶ first is what made ■ jump a column the moment a row
-    // started.
+    // row and ▶ only on one whose own `up` or `down` is not running, so the pair
+    // drawn is `■ ▶` or `■` alone — and since inline actions are drawn
+    // right-aligned, the last slot is the right edge of the row, which is where a
+    // Dockerfile draws ▶ too. Contributing ▶ first is what made ■ jump a column
+    // the moment a row started.
     { command: 'taskRunnerUltimate.stopStack', group: 'inline@3', when: `${inTree} && viewItem =~ ${COMPOSE}` },
     { command: 'taskRunnerUltimate.runGroup', group: 'inline@4', when: `${inTree} && viewItem =~ ${COMPOSE_IDLE}` },
     // The same four on a Dockerfile row. ☰ is inline here where compose keeps it

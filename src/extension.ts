@@ -384,6 +384,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // 1.85 this extension asks for, so there is no id spelled out anywhere here.
   extensionId = context.extension.id;
   extensionUri = context.extensionUri;
+  void migrateShellBuckets();
 
   for (const exec of vscode.tasks.taskExecutions) {
     const key = keyForTask(exec.task);
@@ -525,7 +526,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.groupByEcosystem', () => setGrouping('ecosystem')),
     vscode.commands.registerCommand('taskRunnerUltimate.groupFlat', () => setGrouping('flat')),
     vscode.commands.registerCommand('taskRunnerUltimate.menu', showMenu),
-    vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllTasks),
+    vscode.commands.registerCommand('taskRunnerUltimate.stopAll', stopAllCommand),
     vscode.commands.registerCommand('taskRunnerUltimate.restartAll', restartAllTasks),
     vscode.tasks.registerTaskProvider(TASK_TYPE, {
       // A custom task nobody has approved is left out: the workbench's own Run
@@ -1039,7 +1040,17 @@ function manifestRef(manifest: vscode.Uri): string {
     return manifest.toString();
   }
   const relative = path.relative(folder.uri.fsPath, manifest.fsPath).split(path.sep).join('/');
-  return `${folderRef(folder)}/${relative || path.posix.basename(manifest.path)}`;
+  // The shell group of a folder's own root has no path inside it, and takes the
+  // folder's name instead — which is also the path of a subfolder of that name:
+  // loose scripts in `scripts/` and the ones in `scripts/scripts/` were one ref,
+  // and a star on either drew both. The root keeps the spelling it always had,
+  // since that is the common case and its marks are already filed under it; the
+  // subfolder takes a `./` no relative path is ever spelled with.
+  const root = path.posix.basename(manifest.path);
+  if (!relative) {
+    return `${folderRef(folder)}/${root}`;
+  }
+  return `${folderRef(folder)}/${relative === path.basename(folder.uri.fsPath) ? `./${relative}` : relative}`;
 }
 
 /**
@@ -1060,6 +1071,87 @@ function groupRef(script: ScriptEntry): string {
  */
 function scriptRef(script: ScriptEntry): string {
   return `${groupRef(script)}::${script.name}`;
+}
+
+/**
+ * Refiles every stored mark from one spelling of a ref to another, in every store
+ * that is keyed by one: the lists, the maps, and the saved orders, whose scopes
+ * are refs as well. A store nothing in it changes is not written.
+ *
+ * The folds go first and through `folded`, before anything is awaited: that set
+ * is the authority over the key, and one loaded while the other stores were
+ * being written would keep the old spellings and write them back on the next
+ * fold.
+ */
+async function rewriteRefs(rewrite: (ref: string) => string): Promise<void> {
+  const list = (refs: string[]) => [...new Set(refs.map(rewrite))];
+  const folds = [...(folded ?? storedList(COLLAPSED_KEY))];
+  const nextFolds = list(folds);
+  if (nextFolds.join('\n') !== folds.join('\n')) {
+    folded = new Set(nextFolds);
+    void storage?.update(COLLAPSED_KEY, nextFolds);
+  }
+  for (const key of [FAVORITES_KEY, GROUP_ORDER_KEY, CONFIRM_KEY, HIDDEN_KEY]) {
+    const refs = storedList(key);
+    const next = list(refs);
+    if (next.join('\n') !== refs.join('\n')) {
+      await storage?.update(key, next);
+    }
+  }
+  for (const key of [TITLES_KEY, COLORS_KEY, ICONS_KEY, APPROVALS_KEY]) {
+    const entries = Object.entries(storedMap(key));
+    if (entries.some(([ref]) => rewrite(ref) !== ref)) {
+      await storage?.update(key, Object.fromEntries(entries.map(([ref, value]) => [rewrite(ref), value])));
+    }
+  }
+  const orders = Object.entries(manualOrders());
+  const nextOrders = orders.map(([scope, refs]) => [rewrite(scope), list(refs)] as const);
+  if (JSON.stringify(nextOrders) !== JSON.stringify(orders)) {
+    await storage?.update(ORDER_KEY, Object.fromEntries(nextOrders));
+  }
+}
+
+/**
+ * Refiles what earlier versions stored against a `shell` bucket row under its
+ * current id. That id used to embed the host manifest's absolute URI —
+ * `group:shell:group:file:///…/package.json` — and is now built from the host's
+ * ref, like every other key here, so a moved project keeps what it was given.
+ *
+ * A URI in no open workspace folder is left as it is: its ref would be the URI
+ * again, a spelling no row will ever have, and the folder may be added back —
+ * when it is, the next activation refiles it properly.
+ */
+async function migrateShellBuckets(): Promise<void> {
+  const legacy = /^group:shell:group:([a-z][\w+.-]*:.*)$/i;
+  await rewriteRefs((ref) => {
+    const match = legacy.exec(ref);
+    const uri = match ? vscode.Uri.parse(match[1]) : undefined;
+    return uri && vscode.workspace.getWorkspaceFolder(uri) ? `group:shell:${manifestRef(uri)}` : ref;
+  });
+}
+
+/**
+ * Refiles the marks of a subfolder named like its workspace folder from the
+ * spelling it shared with that folder's root — `scripts/scripts` — to its own,
+ * `scripts/./scripts` (see `manifestRef`). Only where the scan shows the
+ * subfolder and no group at the root: the old spelling was then that
+ * subfolder's alone, and moving it is what keeps its stars. Where both exist,
+ * the old marks cannot be told apart and stay with the root, which kept the
+ * spelling.
+ */
+async function migrateSubfolderRefs(scripts: ReadonlyArray<ScriptEntry>): Promise<void> {
+  const groups = new Set(scripts.map(groupRef));
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const name = path.basename(folder.uri.fsPath);
+    const root = `${folderRef(folder)}/${name}`;
+    const own = `${folderRef(folder)}/./${name}`;
+    if (!groups.has(own) || groups.has(root)) {
+      continue;
+    }
+    await rewriteRefs((ref) =>
+      ref === root ? own : ref.startsWith(`${root}::`) ? `${own}${ref.slice(root.length)}` : ref,
+    );
+  }
 }
 
 /** A stored list of refs, with anything that is not a string left out. */
@@ -1748,7 +1840,9 @@ async function deleteCustomTask(node: TreeNode | undefined): Promise<void> {
   // A row that is gone cannot be stopped from the tree any more, so a run of it
   // goes first — every run, the way Stop All in Package stops them, since one
   // started from the Run Task list is this row's too. One that will not stop
-  // keeps its row, for the same reason.
+  // keeps its row, for the same reason. A restart of it waiting on that run is
+  // called off as well: it would start the task that is being deleted.
+  requestStop([script.key]);
   const stopped = await Promise.all(executionsOf([script]).map(stopExecution));
   if (!stopped.every(Boolean)) {
     return;
@@ -2882,6 +2976,7 @@ async function pruneStaleRefs(scripts: ScriptEntry[]): Promise<void> {
     return;
   }
   prunedScan = scripts;
+  await migrateSubfolderRefs(scripts);
 
   // The shell groups are left out on purpose, which is the same narrowness the
   // rest of this rule already has. A manifest is a file that was read, so what
@@ -2983,15 +3078,22 @@ async function scopeRefs(scope: string): Promise<string[]> {
 }
 
 async function saveOrder(scope: string, refs: string[]): Promise<void> {
+  // Refs that resolve to nothing keep both their place and their existence, as
+  // in `saveGroupOrder`: the drag fills the slots of the rows it can see. A row a
+  // setting has taken away for now — a `cargoCommands` entry, a script past the
+  // cap — is spared by the prune so that putting it back brings it back where it
+  // was, and a drag of its neighbours must not be what forgets that place.
+  const queue = [...new Set(refs)];
+  const visible = new Set(refs);
   if (scope !== FAVORITES_SCOPE) {
-    await storage?.update(ORDER_KEY, { ...manualOrders(), [scope]: refs });
+    const orders = manualOrders();
+    const merged = (orders[scope] ?? []).map((ref) => (visible.has(ref) ? (queue.shift() ?? ref) : ref));
+    await storage?.update(ORDER_KEY, { ...orders, [scope]: [...merged, ...queue] });
     return;
   }
   // The starred rows are their own order, so a drag there rewrites the list itself.
-  // Refs that resolve to nothing keep both their place and their existence: they
-  // may belong to a closed folder, and this is a reorder, not an unstar.
-  const queue = [...refs];
-  const visible = new Set(refs);
+  // Here the refs that resolve to nothing may belong to a closed folder, and this
+  // is a reorder, not an unstar.
   const merged = favoriteRefs().map((ref) => (visible.has(ref) ? (queue.shift() ?? ref) : ref));
   await storage?.update(FAVORITES_KEY, merged);
 }
@@ -4016,7 +4118,9 @@ function scopeName(scope: string): string {
  */
 async function starDropped(refs: string[], anchor: string | undefined): Promise<void> {
   const stored = favoriteRefs();
-  const added = refs.filter((ref) => !stored.includes(ref));
+  // One ref twice in the list is one row drawn twice under one tree id, which
+  // VS Code refuses — so a drop never adds the same ref more than once.
+  const added = [...new Set(refs)].filter((ref) => !stored.includes(ref));
   if (added.length === 0) {
     hint('$(star-full) Already starred');
     return;
@@ -4048,9 +4152,9 @@ async function starDropped(refs: string[], anchor: string | undefined): Promise<
  * set is the authority and `storage` only trails it, so a fold never reads back
  * what a previous one wrote — there is no read-modify-write for two events to
  * interleave over, and none of it depends on how promptly a `Memento` makes a
- * write visible to the next read. Nothing else writes the key, so the set cannot
- * go stale; a write that fails costs that one fold, since the next one persists
- * the set entire.
+ * write visible to the next read. Nothing else writes the key but `rewriteRefs`,
+ * which rewrites the set itself first, so the set cannot go stale; a write that
+ * fails costs that one fold, since the next one persists the set entire.
  */
 let folded: Set<string> | undefined;
 
@@ -4515,7 +4619,11 @@ function attachToHosts(groups: Array<TreeNode & { kind: 'group' }>, rootKey = ''
   for (const group of groups) {
     const host = attachable(group.source) ? hostOf(group.at, hosts) : undefined;
     if (group.source === 'shell') {
-      const key = host?.id ?? rootKey;
+      // The host's ref and not its id: the id is the manifest's absolute URI,
+      // and the row's colour, icon and fold are filed under the row's id. Keyed
+      // by the URI, they were lost to a project moved on disk — see
+      // `migrateShellBuckets` for the ones filed that way already.
+      const key = host?.ref ?? host?.id ?? rootKey;
       let folder = folders.get(key);
       if (!folder) {
         folder = { row: shellFolder(key), host, members: [] };
@@ -4970,10 +5078,18 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     //
     // It never appears beside `stacked`: `composeUpNode` answers for compose
     // alone and `dockerfileBuildNode` for Dockerfiles alone, so a row has one
-    // slot filled or neither.
+    // slot filled or neither. Compose's `:busy` below is the same answer for
+    // its `up` and `down`.
     const lead = dockerfileBuildNode(node);
     const building = lead && running.has(lead.script.key) ? ':building' : '';
-    const state = `${head}${stacked}${building}${put}`;
+    // Compose's own `up` or `down` running, for the same reason and in a slot of
+    // its own: `stacked` is what Docker answered, which a run of ours does not
+    // change. ▶ is refused over either — a second `up`, or an `up` racing the
+    // `down` that ■ started. Keying it on `:running` took it away while a
+    // `logs -f` was being followed, which is no reason to withhold the `up`.
+    const stackRows = stack ? [stack, composeDownNode(node)] : [];
+    const busy = stackRows.some((row) => row && running.has(row.script.key)) ? ':busy' : '';
+    const state = `${head}${stacked}${busy}${building}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
@@ -5205,6 +5321,36 @@ function composeStopArgv(script: ScriptEntry): string[] | undefined {
 }
 
 /**
+ * Of the services compose reported up for a file, the ones that are that file's.
+ *
+ * Compose names a project after the directory (or `name:`), not after the file,
+ * so `docker-compose.yml` and `docker-compose.dev.yml` side by side are one
+ * project, and `ps` for either lists the containers of both. Taken whole, that
+ * marked the dev file up on the strength of a `web` it does not declare, and
+ * its ■ then ran a `stop` for that file which stopped nothing.
+ *
+ * So what is taken away is only what a sibling compose file in the same folder
+ * declares and this one does not. A file's own stack is more than its own
+ * `services:` block — an `include:` brings services in, and so does the
+ * override file its rows name with a second `-f` — and none of those are
+ * anybody else's.
+ */
+function ownServices(reported: Set<string>, manifest: string, scripts: ReadonlyArray<ScriptEntry>): Set<string> {
+  const declared = (rows: ReadonlyArray<ScriptEntry>) =>
+    new Set(rows.map(composeService).filter((service): service is string => service !== undefined));
+  const mine = scripts.filter((script) => script.manifest.toString() === manifest);
+  const folder = mine[0]?.cwd.toString();
+  const own = declared(mine);
+  const theirs = declared(
+    scripts.filter(
+      (script) =>
+        script.kind === 'docker-compose' && script.manifest.toString() !== manifest && script.cwd.toString() === folder,
+    ),
+  );
+  return new Set([...reported].filter((service) => own.has(service) || !theirs.has(service)));
+}
+
+/**
  * Asks Docker about every compose file in the scan and repaints.
  *
  * A file that cannot be asked about keeps whatever it last said rather than
@@ -5259,7 +5405,7 @@ async function checkContainers(announce: boolean): Promise<void> {
         }
         asked++;
         if (containers.get(key) === before) {
-          containers.set(key, state.running);
+          containers.set(key, ownServices(state.running, key, scripts));
         }
       }),
     );
@@ -5316,7 +5462,8 @@ async function recheckAfter(task: vscode.Task): Promise<void> {
  * known length, so they are the only ones a prefix can be read back off.
  */
 async function refreshContainers(manifest: string): Promise<void> {
-  const script = (await collectScripts()).find(
+  const scripts = await collectScripts();
+  const script = scripts.find(
     (entry) => entry.manifest.toString() === manifest && isComposeUp(entry),
   );
   const prefix = script ? composePrefix(script) : undefined;
@@ -5325,7 +5472,7 @@ async function refreshContainers(manifest: string): Promise<void> {
   }
   const state = await composeState(prefix, script.cwd.fsPath);
   if (state) {
-    containers.set(manifest, state.running);
+    containers.set(manifest, ownServices(state.running, manifest, scripts));
     repaint();
   }
 }
@@ -5608,6 +5755,61 @@ function packageLabel(script: ScriptEntry): string {
 // --- actions shared by the tree and the picker -------------------------------
 
 /**
+ * Stops asked for while a restart is waiting on the old run to end.
+ *
+ * A restart is two steps with a wait between them, and a ■ pressed during that
+ * wait — the row still shows one, since the old run is still up — is the newer
+ * word. Both waits resolve on the same end event, so without this the restart
+ * would carry on and start the task the user had just stopped. Every stop the
+ * user asks for bumps the count for its rows, Stop All bumps all of them at once,
+ * and a restart takes a ticket before it stops anything and starts only while
+ * the ticket still holds.
+ *
+ * Only stops the user asked for count. A restart's own stop is not a request to
+ * stay stopped, and Restart All stops everything through `stopAllTasks` itself.
+ */
+const stopRequests = new Map<string, number>();
+let stopAllRequests = 0;
+
+/** A number per foreign run, for filing a stop against that run and not its namesakes. */
+const runSerials = new WeakMap<vscode.TaskExecution, number>();
+let lastRunSerial = 0;
+
+/**
+ * The key a stop request is filed under: the row's, or the run's own for a
+ * foreign one. Not the task's name: two folders' `build` and a `watch` started
+ * twice are foreign runs with one name, and a ■ on one of them must not call
+ * off the restart of the other. The handle is the one the task system lists, so
+ * a row drawn before a repaint and the run it stands for share a key.
+ */
+function stopKey(execution: vscode.TaskExecution): string {
+  const key = keyForTask(execution.task);
+  if (key !== undefined) {
+    return key;
+  }
+  const run = liveExecution(execution) ?? execution;
+  let serial = runSerials.get(run);
+  if (serial === undefined) {
+    serial = ++lastRunSerial;
+    runSerials.set(run, serial);
+  }
+  return `run:${serial}`;
+}
+
+function requestStop(keys: Iterable<string>): void {
+  for (const key of keys) {
+    stopRequests.set(key, (stopRequests.get(key) ?? 0) + 1);
+  }
+}
+
+/** Whether nothing has asked the run behind this key to stop since the ticket was taken. */
+function stopTicket(key: string): () => boolean {
+  const all = stopAllRequests;
+  const own = stopRequests.get(key) ?? 0;
+  return () => stopAllRequests === all && (stopRequests.get(key) ?? 0) === own;
+}
+
+/**
  * The run behind a row, as the task system has it now — not as the row was drawn.
  *
  * A row, a picker entry or an open confirmation can outlive the run it stands
@@ -5650,9 +5852,18 @@ async function stopNode(node: TreeNode | undefined): Promise<void> {
     }
     return;
   }
-  if (node?.kind === 'script' && !(await confirmScript(node.script, 'stop'))) {
+  if (node?.kind === 'script') {
+    if (!(await confirmScript(node.script, 'stop'))) {
+      return;
+    }
+    // Every copy the row stands for, not only the one `running` holds: the same
+    // script started through our task and through the npm provider is one row,
+    // and stopping half of it leaves the row spinning over the other half.
+    requestStop([node.script.key]);
+    await Promise.all(executionsOf([node.script]).map(stopExecution));
     return;
   }
+  requestStop([stopKey(execution)]);
   await stopExecution(execution);
 }
 
@@ -5661,7 +5872,8 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
     // A foreign task is restarted as its owner defined it, terminal and all:
     // the presentation is part of that definition and not ours to override.
     const task = node.execution.task;
-    if (!(await stopExecution(node.execution))) {
+    const ticket = stopTicket(stopKey(node.execution));
+    if (!(await stopExecution(node.execution)) || !ticket()) {
       return;
     }
     await vscode.tasks.executeTask(task);
@@ -5678,9 +5890,13 @@ async function restartNode(node: TreeNode | undefined, reveal: boolean): Promise
   }
   // A restart that could not stop what is running is not a restart: starting on
   // top of a task that never let go is how two dev servers end up fighting over
-  // one port. `stopExecution` has already said so on screen.
-  const execution = executionOf(node);
-  if (execution && !(await stopExecution(execution))) {
+  // one port. `stopExecution` has already said so on screen. Every copy goes, as
+  // in `restartGroup`: a row running twice comes back running once, not three
+  // times.
+  const ticket = stopTicket(node.script.key);
+  const stopped = await Promise.all(executionsOf([node.script]).map(stopExecution));
+  // A ■ pressed while the old run was ending is the newer word.
+  if (!stopped.every(Boolean) || !ticket()) {
     return;
   }
   await startScript(node.script, reveal);
@@ -5731,7 +5947,7 @@ async function restartAllTasks(): Promise<void> {
   // Snapshot the tasks first: the executions are gone once they are terminated.
   // Only the live ones — a task that has already ended is not restarted here,
   // since starting it would be this command raising something nobody was running.
-  const tasks = liveExecutions().map((execution) => execution.task);
+  const tasks = liveExecutions().map((execution) => ({ task: execution.task, ticket: stopTicket(stopKey(execution)) }));
   // One task that would not stop is enough to call the whole thing off. Starting
   // the rest back up would leave the workspace half restarted and one task
   // running twice, which is harder to see and harder to undo than not having
@@ -5739,9 +5955,28 @@ async function restartAllTasks(): Promise<void> {
   if (!(await stopAllTasks())) {
     return;
   }
-  for (const task of tasks) {
-    await vscode.tasks.executeTask(task);
+  for (const { task, ticket } of tasks) {
+    // Stopped by hand while the rest were going down: it stays stopped.
+    if (!ticket()) {
+      continue;
+    }
+    // One task its provider can no longer start — renamed while it ran, a
+    // tasks.json label edited — is that task's failure. Everything has been
+    // stopped by now, so giving up here would leave the rest down as well.
+    try {
+      await vscode.tasks.executeTask(task);
+    } catch (error) {
+      void vscode.window.showWarningMessage(
+        `"${task.name}" was stopped and could not be started again: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
+}
+
+/** Stop All as the user asks for it: everything, and no restart in flight brings any of it back. */
+async function stopAllCommand(): Promise<boolean> {
+  stopAllRequests++;
+  return stopAllTasks();
 }
 
 /** A group's rows that are alive right now, in the order the tree shows them. */
@@ -5805,6 +6040,17 @@ function composeUpNode(node: TreeNode | undefined): (TreeNode & { kind: 'script'
   );
 }
 
+/** The bare `down` of a compose item, which ■ runs once everything of ours has stopped. */
+function composeDownNode(node: TreeNode | undefined): (TreeNode & { kind: 'script' }) | undefined {
+  if (node?.kind !== 'group' || node.source !== 'docker-compose') {
+    return undefined;
+  }
+  return node.children.find(
+    (child): child is TreeNode & { kind: 'script' } =>
+      child.kind === 'script' && child.script.name === 'down',
+  );
+}
+
 /** ▶ on a compose item: the file's own bare `up`, confirmation included. */
 async function runGroup(node: TreeNode | undefined): Promise<void> {
   await runLead(composeUpNode(node));
@@ -5815,9 +6061,9 @@ async function runGroup(node: TreeNode | undefined): Promise<void> {
  * bare action is — `up` for compose, `build` for a Dockerfile.
  *
  * A run already up is not started a second time. The `when` clause on the button
- * says the same thing — ▶ is not drawn on a row with something running under
- * it — but a context value is what the tree was last told, and a second start
- * over the first would overwrite the handle in `running` with the newer one: the
+ * says the same thing — ▶ is not drawn while the file's own action runs — but
+ * a context value is what the tree was last told, and a second start over the
+ * first would overwrite the handle in `running` with the newer one: the
  * first task would then be a terminal nothing in here can stop, ■ and Stop All
  * included. So the map itself has the last word, and the answer to a press that
  * finds it already running is its terminal rather than another process.
@@ -5908,17 +6154,13 @@ async function dockerfileActions(node: TreeNode | undefined): Promise<void> {
  * same reason it carries no toggle to clear one with — see `needsConfirmation`.
  */
 async function stopStack(node: TreeNode | undefined): Promise<void> {
-  if (node?.kind !== 'group' || node.source !== 'docker-compose') {
-    return;
-  }
-  const down = node.children.find(
-    (child): child is TreeNode & { kind: 'script' } =>
-      child.kind === 'script' && child.script.name === 'down',
-  );
+  const down = composeDownNode(node);
   if (!down) {
     return;
   }
-  const stopped = await Promise.all(executionsOf(runningScriptsOf(node)).map(stopExecution));
+  const scripts = runningScriptsOf(node);
+  requestStop(scripts.map((script) => script.key));
+  const stopped = await Promise.all(executionsOf(scripts).map(stopExecution));
   if (!stopped.every(Boolean)) {
     return;
   }
@@ -5988,7 +6230,12 @@ function executionsOf(scripts: ReadonlyArray<ScriptEntry>): vscode.TaskExecution
 
 /** Stops everything running in one package group; the rest of the tree keeps going. */
 async function stopGroup(node: TreeNode | undefined): Promise<void> {
-  await Promise.all(executionsUnder(node).map(stopExecution));
+  const executions = executionsUnder(node);
+  requestStop([
+    ...runningScriptsOf(node).map((script) => script.key),
+    ...executions.map(stopKey),
+  ]);
+  await Promise.all(executions.map(stopExecution));
 }
 
 /** Restarts everything running in one package group. Idle rows stay idle. */
@@ -5996,7 +6243,18 @@ async function restartGroup(node: TreeNode | undefined): Promise<void> {
   // Taken before anything is stopped, as Restart All does: the rows' own
   // restarts below take long enough for a foreign run to end on its own.
   const foreign = runningForeignOf(node);
-  for (const script of runningScriptsOf(node)) {
+  const rows = runningScriptsOf(node).map((script) => ({ script, ticket: stopTicket(script.key) }));
+  for (const { script, ticket } of rows) {
+    // The list was taken before the first row's restart, which can take a
+    // while. A row stopped by hand or finished on its own since then is idle
+    // now, and idle rows stay idle: starting it again would rerun a `deploy`
+    // nobody asked to run twice.
+    if (pruneRunning()) {
+      onStateChanged();
+    }
+    if (!ticket() || !running.has(script.key)) {
+      continue;
+    }
     // A line that changed while it ran is asked about before the old run goes:
     // turning the new one down leaves the one that was approved still up.
     if (!(await approveLaunch(script))) {
@@ -6007,7 +6265,7 @@ async function restartGroup(node: TreeNode | undefined): Promise<void> {
     // skipped when one of them will not stop; the rest of the group has nothing
     // to do with it and is restarted as asked.
     const stopped = await Promise.all(executionsOf([script]).map(stopExecution));
-    if (!stopped.every(Boolean)) {
+    if (!stopped.every(Boolean) || !ticket()) {
       continue;
     }
     await startScript(script, false);

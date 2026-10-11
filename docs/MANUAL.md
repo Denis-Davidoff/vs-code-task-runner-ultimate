@@ -588,7 +588,7 @@ with no file behind it, and a theme can only match on a file name, so it wears a
 `taskRunnerUltimate.groupIcons: "uniform"` puts a single stack glyph back on all of them, for when the
 headings should stay out of the way of the rows under them.
 
-A task row wears its [category's glyph](#categories-and-colours), and a shell row that no category
+A task row wears its [category's glyph](#settings), and a shell row that no category
 claimed wears the terminal its file is read by — bash for a `.sh`, PowerShell for a `.ps1`, the
 command prompt for a `.bat` — where every unclaimed row used to show the same `play` triangle.
 
@@ -1053,7 +1053,7 @@ rows you care about inside it turns a long sidebar into something you scan rathe
 The colours are picked to hold up in both themes: each is declared as a real theme colour with a
 light, a dark and two high-contrast variants, so a painted row stays legible when the theme changes
 under it. They can be overridden like any other, in `workbench.colorCustomizations`, under
-`taskRunnerUltimate.palette.red` and its nine siblings.
+`taskRunnerUltimate.palette.red` and its fourteen siblings.
 
 **Default**, the first row of the same list, takes the colour back off. A task then returns to its category's
 colour — the green ▶, the red beaker — and a heading to the shared title colour every other heading
@@ -1126,7 +1126,7 @@ are the reason it is done that way:
 A pack the workbench has no rule for — an icon whose pack you uninstalled — falls back to that pack's
 plain file icon rather than to an empty square.
 
-One place the top half of the list does not appear: a remote window. Over Remote SSH, in a dev
+One place the bottom half of the list does not appear: a remote window. Over Remote SSH, in a dev
 container or in WSL, this extension runs on the remote machine while icon packs are installed on the
 local one, and nothing in the VS Code API lets the remote side read a file out of a local extension.
 The section is simply absent there and the list is the icon font alone. Rows already wearing a pack
@@ -1169,9 +1169,9 @@ live where there is a row to invoke them on:
 | Change Colour… | right-click only, on every row the tree draws itself — one entry opening a list of fifteen, so the palette costs the menu one line rather than fifteen |
 
 All of them are deliberately hidden from the command palette, which has no row to hand them. The
-palette keeps the eight that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
-**Check Containers**, **Stop All Running Tasks**, **Restart All Running Tasks**, and the two halves of
-the grouping switch — **Group by Ecosystem** and **Show as a Flat List**, each of which sets a mode
+palette keeps the nine that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
+**New Custom Task…**, **Check Containers**, **Stop All Running Tasks**, **Restart All Running Tasks**,
+and the two halves of the grouping switch — **Group by Ecosystem** and **Show as a Flat List**, each of which sets a mode
 rather than toggling one, so invoking the one you are already in changes nothing.
 
 ### Where list customizations are stored
@@ -1188,9 +1188,12 @@ cost: the manifest is shared with everyone who clones the repo, and a setting wo
 per-workspace and per-machine — a second computer starts with nothing starred.
 
 Scripts are matched back by the workspace folder's name plus the manifest path inside it plus the
-script name — `my-app/packages/api/package.json::dev` — rather than by absolute path. Moving the
-whole project somewhere else on disk therefore keeps every star and every title; *renaming* the
-folder does not.
+script name — `my-app/packages/api/package.json::dev` — rather than by absolute path. That is what
+keeps a mark on its script when a folder of a `.code-workspace` is moved and the workspace file
+pointed at the new place, since the workspace file is what VS Code files the storage under. Moving a
+folder you open on its own is different: VS Code keys a folder's workspace storage by its path, so
+the moved folder opens with a fresh, empty store and every star, title and colour stays behind with
+the old path. *Renaming* the folder loses them either way.
 
 A renamed heading is keyed by the same string without the `::name` half —
 `my-app/packages/api/package.json` — which is also the scope a drag reorders inside. Since no
@@ -1504,8 +1507,10 @@ Two details worth knowing:
 
 ### How the badge works
 
-The count of running tasks is shown on the activity bar and File Explorer views through a real API
-(`TreeView.badge`), and in the status bar entry. The editor title icon carries no badge: title-bar
+The count of running tasks is shown on the extension's own view in the activity bar through a real
+API (`TreeView.badge`), and in the status bar entry. The File Explorer section carries no badge: a
+badge on a view is drawn on the icon of the container it sits in, which would put the task count on
+the File Explorer icon beside its count of unsaved files. The editor title icon carries no badge: title-bar
 icons are static images with no way to draw on them. The running count is still published into the
 `taskRunnerUltimate.runningCount` context key, which is what the view header's Stop all / Restart all
 buttons appear on. The icons and the menu entries are generated:
@@ -1515,8 +1520,11 @@ npm run gen     # tools/generate-contributions.js
 ```
 
 It rewrites `media/*.svg`, the 256×256 `media/icon.png` used on the Marketplace (rasterised from the
-same glyph, since SVG icons are rejected there) and the `commands`, `menus`, `views` and
-`keybindings` sections of `package.json`. Edit the generator, not those files.
+same glyph, since SVG icons are rejected there) and these parts of `package.json`: `icon`,
+`activationEvents`, the `commands`, `menus`, `keybindings`, `viewsContainers`, `views` and
+`taskDefinitions` sections, and the `taskRunnerUltimate.palette.*` entries of `colors`. Edit the
+generator, not those parts — a hand edit to any of them is lost on the next run. The other colours
+in `colors` are kept as they are and edited in `package.json` itself.
 
 ## Development
 

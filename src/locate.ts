@@ -1,4 +1,4 @@
-import { DOCKERFILE_STAGE, expandBraces, JUST_RECIPE, MAKE_TARGET, makeDefineLines, SourceKind, yamlBlockKeys } from './sources';
+import { DOCKERFILE_STAGE, expandBraces, JUST_RECIPE, makeDefineLines, makeRule, SourceKind, yamlBlockKeys } from './sources';
 import { readTomlKeyPath, TomlKey } from './toml';
 
 /**
@@ -507,7 +507,7 @@ function makeTarget(lines: ReadonlyArray<string>, name: string): TaskLocation | 
     if (line.startsWith('\t') || !line.trim() || line.trim().startsWith('#') || defined[index]) {
       continue;
     }
-    const match = MAKE_TARGET.exec(line);
+    const match = makeRule(line);
     if (match && match[1].trim().split(/\s+/).includes(name)) {
       // The target as a whole word of the target list, not the first place its
       // text appears: `all a:` has an `a` in `all`, and `a.o a:` one in `a.o`.
