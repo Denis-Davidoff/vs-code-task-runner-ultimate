@@ -442,6 +442,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.addToTerminal', (node?: TreeNode) =>
       addToTerminal(node),
     ),
+    vscode.commands.registerCommand('taskRunnerUltimate.copyCommand', (node?: TreeNode) =>
+      copyCommandOf(node),
+    ),
     vscode.commands.registerCommand('taskRunnerUltimate.openTerminalEditor', (node?: TreeNode) =>
       openTerminalEditor(node),
     ),
@@ -1187,11 +1190,19 @@ function favoriteScripts(scripts: ScriptEntry[]): ScriptEntry[] {
     .filter((script): script is ScriptEntry => script !== undefined);
 }
 
+/**
+ * A star on a task row, or on a compose file or a Dockerfile — which is filed
+ * as a star on the file's own `up` or `build`. That is the action the row stands
+ * for, it is what an older version starred when the file was a folder of rows,
+ * and it keeps the store a list of script refs: the order, the prune and the
+ * reset all go on reading it the way they always have. See `starredRow`.
+ */
 async function setFavorite(node: TreeNode | undefined, favorite: boolean): Promise<void> {
-  if (node?.kind !== 'script') {
+  const row = node?.kind === 'script' ? node : fileLead(node);
+  if (!row) {
     return;
   }
-  const ref = scriptRef(node.script);
+  const ref = scriptRef(row.script);
   const refs = favoriteRefs().filter((item) => item !== ref);
   if (favorite) {
     refs.push(ref);
@@ -3478,6 +3489,13 @@ type TreeNode =
        * its own, and nothing left to put away.
        */
       carried?: boolean;
+      /**
+       * A compose file or a Dockerfile drawn a second time, among the starred
+       * rows — see `starredRow`. It is the same row with the same buttons, but it
+       * moves with the starred list rather than with the headings, and nothing
+       * that rewrites the order of the headings is aimed at it.
+       */
+      inFavorites?: boolean;
       children: TreeNode[];
     }
   | {
@@ -3732,7 +3750,10 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     // dragged: it rewrites the order of the groups instead of the order inside one.
     // The two never mix in one gesture — the row the drag started on decides which
     // it is, and rows of the other kind travelling with it are left where they are.
-    if (source[0]?.kind === 'group') {
+    //
+    // A compose file or a Dockerfile among the starred rows is the second kind:
+    // it is a heading drawn as a starred row, and it moves among those.
+    if (source[0]?.kind === 'group' && !source[0].inFavorites) {
       // An ecosystem parent moves the whole run under it. The payload keeps
       // `GROUPS_SCOPE`, so `handleDrop` dispatches exactly as it did; the extra
       // `block` is what tells the two gestures apart once it gets there.
@@ -3789,24 +3810,29 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
       return;
     }
 
-    const dragged = source.filter((node): node is TreeNode & { kind: 'script' } => node.kind === 'script');
-    const scope = dragged.length > 0 ? dragScope(dragged[0]) : undefined;
-    if (!scope || !dragged[0]) {
+    const dragged = source.filter((node) => rowRef(node) !== undefined);
+    const first = dragged[0];
+    const scope = first ? dragScope(first) : undefined;
+    if (!scope || !first) {
       return;
     }
     // One drag carries one scope, so a multi-select spanning two packages moves
     // only the rows that belong to the list it started in.
-    const refs = dragged.filter((node) => dragScope(node) === scope).map((node) => scriptRef(node.script));
+    const refs = dragged.flatMap((node) => {
+      const ref = dragScope(node) === scope ? rowRef(node) : undefined;
+      return ref ? [ref] : [];
+    });
     const payload = new vscode.DataTransferItem(JSON.stringify({ scope, refs }));
     for (const mime of DRAG_MIMES) {
       transfer.set(mime, payload);
     }
 
-    const what = refs.length > 1 ? `${refs.length} tasks` : `"${displayName(dragged[0].script)}"`;
+    const name = first.kind === 'script' ? displayName(first.script) : first.kind === 'group' ? groupHeading(first) : '';
+    const what = refs.length > 1 ? `${refs.length} tasks` : `"${name}"`;
     hint(
-      scope === FAVORITES_SCOPE
+      scope === FAVORITES_SCOPE || first.kind !== 'script'
         ? `$(move) Moving ${what} — drop on another starred task to reorder the top of the list`
-        : `$(move) Moving ${what} — drop inside ${packageTitle(dragged[0].script)} to reorder, or on a starred task to star it`,
+        : `$(move) Moving ${what} — drop inside ${packageTitle(first.script)} to reorder, or on a starred task to star it`,
     );
   },
 
@@ -3845,7 +3871,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
       // it is. With no starred row on screen there is nothing to aim at, and ☆
       // on the row itself is the gesture that is always there.
       if (destination === FAVORITES_SCOPE) {
-        await starDropped(dragged, target.kind === 'script' ? scriptRef(target.script) : undefined);
+        await starDropped(dragged, rowRef(target));
       } else if (scope === FAVORITES_SCOPE) {
         hint('$(circle-slash) Not a drop target — a starred task only moves among the starred rows. Click ★ to unstar it');
       } else {
@@ -3856,7 +3882,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
 
     const current = await scopeRefs(scope);
     const moved = dragged.filter((ref) => current.includes(ref));
-    const anchor = target.kind === 'script' ? scriptRef(target.script) : undefined;
+    const anchor = rowRef(target);
     // Dropped on itself, or on a row travelling with it: nothing to work out.
     if (moved.length === 0 || (anchor && moved.includes(anchor))) {
       clearHint();
@@ -3905,7 +3931,9 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
   // row is one outright, and a task row names the heading it sits under.
   const where =
     target.kind === 'group'
-      ? target.ecosystem
+      ? target.inFavorites
+        ? undefined
+        : target.ecosystem
       : target.kind === 'script' && !target.inFavorites
         ? ecosystems.get(groupRef(target.script))
         : undefined;
@@ -4083,10 +4111,14 @@ function dropIndex(
   return landing < 0 ? rest.length : Math.min(landing + (above ? 1 : 0), rest.length);
 }
 
-/** The heading a drop lands on: the row itself, or the one a task row sits under. */
+/**
+ * The heading a drop lands on: the row itself, or the one a task row sits under.
+ * None for the starred rows, a starred compose file or Dockerfile included —
+ * they are not where that heading is in the order.
+ */
 function anchorGroup(target: TreeNode): string | undefined {
   if (target.kind === 'group') {
-    return target.ref;
+    return target.inFavorites ? undefined : target.ref;
   }
   return target.kind === 'script' && !target.inFavorites ? groupRef(target.script) : undefined;
 }
@@ -4211,6 +4243,39 @@ function startsOpen(node: TreeNode): boolean {
  */
 function isFileItem(node: TreeNode): boolean {
   return node.kind === 'group' && node.source !== undefined && isItemKind(node.source);
+}
+
+/**
+ * A starred script as the starred rows draw it. A task is its own row; the bare
+ * `up` of a compose file and the bare `build` of a Dockerfile are the file —
+ * the same leaf the tree draws for it below, ▶, ■, ☰ and the click included,
+ * since that action is what a star on the file is filed as. See `setFavorite`.
+ *
+ * Any other action of such a file keeps the task row an older version starred:
+ * a `run` or a `build: deps` is one line of the file, not the file.
+ *
+ * The copy has an id of its own, for the reason a starred task does — one row
+ * drawn twice under one id is refused by the tree — and it is never put away:
+ * starring it is what brought it up here, whatever the pile holds of it. Its
+ * scope is the starred list's, so a drag moves it among the starred rows.
+ */
+function starredRow(script: ScriptEntry, file: (TreeNode & { kind: 'group' }) | undefined): TreeNode {
+  if (file && isFileItem(file) && fileLead(file)?.script.key === script.key) {
+    return { ...file, id: `fav:${file.id}`, scope: FAVORITES_SCOPE, hidden: false, carried: false, inFavorites: true };
+  }
+  return { kind: 'script', script, inFavorites: true };
+}
+
+/**
+ * The ref a row is filed under in a list of rows — a task's own, and a starred
+ * file's `up` or `build`. A heading has none: it is placed among the headings.
+ */
+function rowRef(node: TreeNode): string | undefined {
+  if (node.kind === 'script') {
+    return scriptRef(node.script);
+  }
+  const lead = node.kind === 'group' && node.inFavorites ? fileLead(node) : undefined;
+  return lead ? scriptRef(lead.script) : undefined;
 }
 
 function isCollapsed(node: TreeNode): boolean {
@@ -4512,7 +4577,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   // the top and open by default: the lid costs nothing when it starts open, and
   // it is what says where the starred list ends and Node begins.
   const favorites = runningFirst(favoriteScripts(scripts));
-  const starred = favorites.map((script): TreeNode => ({ kind: 'script', script, inFavorites: true }));
+  const starred = favorites.map((script) => starredRow(script, byManifest.get(script.manifest.toString())));
   if (hierarchical() && starred.length > 0) {
     roots.unshift({
       kind: 'group',
@@ -5011,6 +5076,18 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
       }
     }
     item.id = node.id;
+    // A compose file and a Dockerfile have no fold for a click to toggle, so the
+    // click is spent the way a task row spends it: it starts the file's own
+    // action, or goes to the terminal of whatever of the file's is running. See
+    // `activateFileItem`. A row whose click would do neither — an idle stack in
+    // the pile, see `clickLead` — is given no command at all.
+    if (isFileItem(node) && (alive || clickLead(node))) {
+      item.command = {
+        command: 'taskRunnerUltimate.toggleItem',
+        title: alive ? 'Show Terminal' : 'Run',
+        arguments: [node],
+      };
+    }
     // Only a heading that names something on disk can be renamed back to it, so
     // the two kinds of group are told apart for the `when` clause that offers it.
     // A put-away heading is told apart from the rest as well: the two eyes are
@@ -5089,7 +5166,13 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // `logs -f` was being followed, which is no reason to withhold the `up`.
     const stackRows = stack ? [stack, composeDownNode(node)] : [];
     const busy = stackRows.some((row) => row && running.has(row.script.key)) ? ':busy' : '';
-    const state = `${head}${stacked}${busy}${building}${put}`;
+    // A starred compose file or Dockerfile, which is what turns ☆ on the row
+    // into ★. Right behind the head and present only when on, so a row nobody
+    // starred keeps the exact shape every other clause was written against, and
+    // the clauses that allow it allow it in one place. See `setFavorite`.
+    const filed = fileLead(node);
+    const star = filed && isFavorite(filed.script) ? ':fav' : '';
+    const state = `${head}${star}${stacked}${busy}${building}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
   }
@@ -6342,6 +6425,12 @@ function executionSerial(execution: vscode.TaskExecution): number {
  * the old toggle now needs a gesture nobody arrives at while hunting for a log.
  */
 async function activateNode(node: TreeNode | undefined, reveal: boolean): Promise<void> {
+  if (node?.kind === 'group') {
+    if (isFileItem(node)) {
+      await activateFileItem(node, reveal);
+    }
+    return;
+  }
   if (!node || !executionOf(node)) {
     // A click that starts a task is never the opening half of a double click —
     // the second one would land on a task that has only just begun to run.
@@ -6361,6 +6450,55 @@ async function activateNode(node: TreeNode | undefined, reveal: boolean): Promis
     return;
   }
   await showTerminal(node);
+}
+
+/**
+ * A click on a compose file or a Dockerfile — the two rows that are the thing
+ * being run rather than a folder of it.
+ *
+ * Nothing of the file's running: the click starts its own action, the `up` or
+ * the `build` ▶ starts, and brings up the output as a click on a task row does.
+ * Something running: the click goes to its terminal — the file's own action's
+ * first, else whatever else of it is alive, the container `run` started or the
+ * `logs -f` being followed. A click is never a second build over a live
+ * container: that is ▶, which is pressed rather than clicked past.
+ *
+ * There is no double click to stop here. ■ on a compose row is the whole stack
+ * coming down, and that is not a gesture to arrive at by clicking twice to find
+ * a log.
+ */
+async function activateFileItem(node: TreeNode & { kind: 'group' }, reveal: boolean): Promise<void> {
+  const live = [fileLead(node), ...node.children].find(
+    (child): child is TreeNode & { kind: 'script' } => child?.kind === 'script' && executionOf(child) !== undefined,
+  );
+  if (live) {
+    await showTerminal(live);
+    return;
+  }
+  await runNode(clickLead(node), reveal);
+}
+
+/** The row a compose file or a Dockerfile stands for: its bare `up` or `build`. */
+function fileLead(node: TreeNode | undefined): (TreeNode & { kind: 'script' }) | undefined {
+  return composeUpNode(node) ?? dockerfileBuildNode(node);
+}
+
+/**
+ * What a click on an idle file row may start: its lead, the same as ▶ — and
+ * nothing on a compose file in the pile, where ▶ is not offered either. A stack
+ * put away is out of the way until it is taken out, and a click that lands on
+ * the row while reaching for the eye beside it is not a request to bring it up.
+ * See `COMPOSE_IDLE` in `tools/generate-contributions.js`, which leaves out
+ * `:hidden` and `:carried` alike.
+ *
+ * A Dockerfile keeps it: its Build is offered on a put-away row's menu, so the
+ * click there does nothing the row did not already offer.
+ */
+function clickLead(node: TreeNode & { kind: 'group' }): (TreeNode & { kind: 'script' }) | undefined {
+  if (node.source === 'docker-compose' && (node.hidden || node.carried)) {
+    return undefined;
+  }
+  return fileLead(node);
 }
 
 /**
@@ -6457,6 +6595,37 @@ async function addToTerminal(node: TreeNode | undefined): Promise<void> {
   });
   terminal.show();
   terminal.sendText(terminalLine(node.script), false);
+}
+
+/**
+ * Puts the line a row runs on the clipboard: a task row's own, and on a compose
+ * file or a Dockerfile the bare `up` or `build` that ▶ and a click start.
+ *
+ * Spelled by `terminalLine`, as Add to Terminal spells it, and for the same
+ * reason: a copied command is going to be pasted at a prompt, where the quoting
+ * `commandFor` does for the eye leaves substitution alive.
+ *
+ * And a line holding a hidden character is refused, whatever kind of row it
+ * came from. A task name is the manifest's text, and a `package.json` key can
+ * hold a line break as easily as a custom task can: the launch path never hands
+ * one to a shell — see `quotable` — but a paste does. cmd.exe's double quotes
+ * end at a line break and run what follows as the next command, and a shell
+ * without bracketed paste reads a control character as an edit and a carriage
+ * return as Enter, so neither waits for the one the user would have pressed.
+ */
+async function copyCommandOf(node: TreeNode | undefined): Promise<void> {
+  const row = node?.kind === 'script' ? node : fileLead(node);
+  if (!row) {
+    return;
+  }
+  const line = terminalLine(row.script);
+  if (clearance(row.script) === 'blocked' || HIDDEN_CHARACTERS.test(line)) {
+    void vscode.window.showWarningMessage(
+      `"${visible(row.script.name)}" holds a line break or a hidden character, so it is not copied.`,
+    );
+    return;
+  }
+  await vscode.env.clipboard.writeText(line);
 }
 
 /**

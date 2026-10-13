@@ -388,6 +388,9 @@ manifest.contributes.commands = [
   // A terminal holding the row's command line, unrun — the way to pass a script
   // arguments the tree has no way to ask for. See `addToTerminal`.
   { command: 'taskRunnerUltimate.addToTerminal', title: 'Add to Terminal', category: 'Task & Script Explorer', icon: '$(terminal)' },
+  // The same line on the clipboard instead, for a terminal somewhere else, a CI
+  // file or a README. See `copyCommandOf`.
+  { command: 'taskRunnerUltimate.copyCommand', title: 'Copy Command', category: 'Task & Script Explorer', icon: '$(copy)' },
   // The four that are about the file a row stands for rather than the task it
   // runs, worded the way the workbench words them so the menu reads as one menu.
   { command: 'taskRunnerUltimate.copyRelativePath', title: 'Copy Relative Path', category: 'Task & Script Explorer', icon: '$(copy)' },
@@ -472,6 +475,11 @@ const BUILDING = '(:building)?';
 // it: a `logs -f` or a `build` under the row is neither, and keying ▶ on it took
 // the button away for as long as anyone followed the logs.
 const BUSY = '(:busy)?';
+// A compose file or a Dockerfile somebody starred — see `setFavorite`. It sits
+// right behind the head and is there only when on, so an unstarred row keeps the
+// shape every clause here was first written against, and the clauses that have
+// to match a starred one too allow it in this one slot.
+const STAR = '(:fav)?';
 // The two ways a row leaves the tree for the pile, spelled once each: every
 // pattern below builds its put-away slot out of these rather than writing the
 // segment again, so a rename here reaches all of them at once.
@@ -482,8 +490,8 @@ const CARRIED_SEG = 'carried';
 //
 // The Custom Tasks heading is one more of them: it is a file, and a list that can
 // be put away like any other.
-const VISIBLE = `/^(group:package|compose|dockerfile|custom)${STATE}${BUSY}(:running)?$/`;
-const HIDDEN = `/^(group:package|compose|dockerfile|custom)${STATE}${BUSY}:${HIDDEN_SEG}(:running)?$/`;
+const VISIBLE = `/^(group:package|compose|dockerfile|custom)${STAR}${STATE}${BUSY}(:running)?$/`;
+const HIDDEN = `/^(group:package|compose|dockerfile|custom)${STAR}${STATE}${BUSY}:${HIDDEN_SEG}(:running)?$/`;
 const PUT_AWAY = `(:(${HIDDEN_SEG}|${CARRIED_SEG}))?`;
 // The half of `PUT_AWAY` a row keeps when it is in the pile only because its
 // project is — the slot the buttons that refuse a hidden row still allow.
@@ -507,13 +515,13 @@ const CUSTOM_TASK = '/^script:.+:custom:/';
 // Every row the tree read off a file, whichever kind: the two actions that are
 // about the manifest rather than the task — opening it and renaming it — reach
 // all of them.
-const NAMED_ROW = `(group:package|compose|dockerfile|custom)${STATE}${BUSY}${PUT_AWAY}(:running)?`;
+const NAMED_ROW = `(group:package|compose|dockerfile|custom)${STAR}${STATE}${BUSY}${PUT_AWAY}(:running)?`;
 // A compose file is a leaf rather than a folder — `getChildren` returns nothing
 // for it — so every action it has must be on the row itself. There is no way in
 // by opening it, which is why these patterns allow the put-away segments too: a
 // stack whose row is sitting in the pile is still a stack somebody has to be
 // able to take down.
-const COMPOSE_ROW = `compose${STACK}${BUSY}${PUT_AWAY}`;
+const COMPOSE_ROW = `compose${STAR}${STACK}${BUSY}${PUT_AWAY}`;
 const COMPOSE = `/^${COMPOSE_ROW}(:running)?$/`;
 // ▶ is the one that is not offered on a put-away row, for the same reason no
 // other heading in the pile carries a run-all: what is in there is out of the
@@ -524,11 +532,11 @@ const COMPOSE = `/^${COMPOSE_ROW}(:running)?$/`;
 // It sits in the last slot rather than the first: inline actions are drawn
 // right-aligned, so ▶ ends up against the right edge of the row here and on a
 // Dockerfile alike — see the `inline@` numbers below.
-const COMPOSE_IDLE = `/^compose${STACK}(:running)?$/`;
+const COMPOSE_IDLE = `/^compose${STAR}${STACK}(:running)?$/`;
 // A Dockerfile row is a leaf on the same terms, with `BUILDING` where compose
 // has `STACK`: nothing asks Docker whether an image exists, but the row does
 // know whether its own build is the thing running.
-const DOCKERFILE_ROW = `dockerfile${BUILDING}${PUT_AWAY}`;
+const DOCKERFILE_ROW = `dockerfile${STAR}${BUILDING}${PUT_AWAY}`;
 const DOCKERFILE = `/^${DOCKERFILE_ROW}(:running)?$/`;
 const DOCKERFILE_RUNNING = `/^${DOCKERFILE_ROW}:running$/`;
 // ▶ is off only while the build itself runs — `:building`, which this omits —
@@ -540,9 +548,9 @@ const DOCKERFILE_RUNNING = `/^${DOCKERFILE_ROW}:running$/`;
 // there to take it out with — which is where this parts company with
 // `COMPOSE_IDLE`, whose ▶ a carried row does not keep. The two rules have always
 // disagreed on that one state; only the Dockerfile's was written down.
-const DOCKERFILE_IDLE = `/^dockerfile${CARRIED}(:running)?$/`;
+const DOCKERFILE_IDLE = `/^dockerfile${STAR}${CARRIED}(:running)?$/`;
 // The same, for the menu, which has no eye standing in the way.
-const DOCKERFILE_BUILDABLE = `/^dockerfile${PUT_AWAY}(:running)?$/`;
+const DOCKERFILE_BUILDABLE = `/^dockerfile${STAR}${PUT_AWAY}(:running)?$/`;
 // Every row with a real path behind it: the headings, which are a manifest or —
 // for the shell groups — the folder they stand for, and the shell rows, which
 // are each a file of their own. A manifest task is deliberately not one of them:
@@ -551,6 +559,15 @@ const DOCKERFILE_BUILDABLE = `/^dockerfile${PUT_AWAY}(:running)?$/`;
 // same thing on every row of the group. `:shell:` is the fourth axis of a script
 // row's context value, the same one Add to Terminal is keyed on.
 const PATH_ROW = `/^(${NAMED_ROW}|script:.+:shell:.+)$/`;
+// Every row that runs one command line: each task row, and the two headings that
+// are the thing being run — a compose file is its `up` and a Dockerfile its
+// `build`, the same line ▶ and a click on the row start. A package heading is
+// not one: it holds many lines and stands for none of them.
+// The two halves of the star on a compose file or a Dockerfile: every shape such
+// a row takes without the `:fav` segment, and the one segment that says it is on.
+const FILE_UNSTARRED = `/^(compose${STACK}${BUSY}|dockerfile${BUILDING})${PUT_AWAY}(:running)?$/`;
+const FILE_STARRED = '/^(compose|dockerfile):fav(:|$)/';
+const COMMAND_ROW = `/^(script:|(${COMPOSE_ROW}|${DOCKERFILE_ROW})(:running)?$)/`;
 // No remote connection: the window is showing files on the machine it is running
 // on. Empty is the workbench's own value for a local window.
 const LOCAL = "remoteName == ''";
@@ -599,6 +616,11 @@ manifest.contributes.menus = {
   'view/item/context': [
     { command: 'taskRunnerUltimate.addFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:nofav:/` },
     { command: 'taskRunnerUltimate.removeFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },
+    // The same star on a compose file and a Dockerfile, in the same first column:
+    // the row is the file's `up` or `build`, and that is what the star is filed
+    // as. See `setFavorite`.
+    { command: 'taskRunnerUltimate.addFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ ${FILE_UNSTARRED}` },
+    { command: 'taskRunnerUltimate.removeFavorite', group: 'inline@0', when: `${inTree} && viewItem =~ ${FILE_STARRED}` },
     // `script:up:` is a compose row whose containers are up without a run of
     // ours behind them. Clicking it runs `up` — compose re-attaches, or starts
     // the services that are missing — so it keeps ▶ and the menu entry that
@@ -707,6 +729,9 @@ manifest.contributes.menus = {
     // And on the custom tasks, which are a command line already: typed into a
     // terminal unrun, it is the way to run one once with something added to it.
     { command: 'taskRunnerUltimate.addToTerminal', group: '0_open@4', when: `${inTree} && viewItem =~ /^script:.+:(shell|custom):/` },
+    // Beside it, on every row that runs one line: the line itself, on the
+    // clipboard rather than at a prompt.
+    { command: 'taskRunnerUltimate.copyCommand', group: '0_open@5', when: `${inTree} && viewItem =~ ${COMMAND_ROW}` },
     // The file a row stands for, in its own group so the menu draws a separator
     // above it: these four are about where the thing is, not about running it.
     // `0_path` sorts after `0_open` — the entry that opens the file — and before
@@ -732,6 +757,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.revealInExplorerView', group: '0_path@4', when: `${inTree} && viewItem =~ ${PATH_ROW}` },
     { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:nofav:/` },
     { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ /^script:.+:fav:/` },
+    { command: 'taskRunnerUltimate.addFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ ${FILE_UNSTARRED}` },
+    { command: 'taskRunnerUltimate.removeFavorite', group: '1_favorites@1', when: `${inTree} && viewItem =~ ${FILE_STARRED}` },
     // Under the star and above the rename: turning the prompt on is the same kind
     // of decision about a row as starring it, taken once and left alone.
     //
@@ -807,6 +834,7 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.showTerminal', when: 'false' },
     { command: 'taskRunnerUltimate.openTerminalEditor', when: 'false' },
     { command: 'taskRunnerUltimate.addToTerminal', when: 'false' },
+    { command: 'taskRunnerUltimate.copyCommand', when: 'false' },
     { command: 'taskRunnerUltimate.copyRelativePath', when: 'false' },
     { command: 'taskRunnerUltimate.copyPath', when: 'false' },
     { command: 'taskRunnerUltimate.revealFileInOS.mac', when: 'false' },

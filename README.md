@@ -5,22 +5,6 @@ restart without ever going looking for a terminal tab.**
 
 ![Task & Script Explorer in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
-## Change log 0.9
-
-- 0.9.0: Added [custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks): open the ⋮ menu in the panel header and pick **+ Create custom task**.
-
-- 0.9.1: Bug fixes
-
-- 0.9.2: Bug fixes
-
-- 0.9.3: **Go to Script Definition** is more precise: a duplicated JSON key goes to the occurrence that counts, quoted TOML keys are found, and a short script name is selected as the key rather than inside a longer word. Typographic quotes in a command are kept from breaking PowerShell, Go projects are rescanned less often, and signed hex, octal and binary numbers in TOML are kept as text.
-
-- 0.9.4: Stop all and restart all buttons on more headings: the [Favorites](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#favorites) folder in ecosystem mode, the hidden pile and OTHER TASKS. Hover a heading while something under it runs to see ■ and ⟳.
-
-- 0.9.5: Git worktrees that coding agents check out inside the repository, such as Claude Code's `.claude/worktrees/`, no longer show up as extra copies of every task. Manifests and scripts that git ignores, through `.gitignore`, `.git/info/exclude` or your global excludes file, are [left out of the list](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#what-git-ignores). Set `taskRunnerUltimate.respectGitignore` to `false` to list them again.
-
-- 0.9.6: Bug fixes
-
 ## Extension Features
 
 - 📋 **[A panel in the left bar](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#the-task--script-explorer-view)** — every task of the workspace as a
@@ -46,7 +30,8 @@ restart without ever going looking for a terminal tab.**
   keeps your choice.
 - ⭐ **[Favorites](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#favorites)** — star the two or three scripts you actually run and they sit as
   loose rows at the very top of the tree, above everything, with no heading to open first and
-  without leaving the package they belong to.
+  without leaving the package they belong to. A compose file or a Dockerfile can be starred too, and
+  comes up there with its ▶ and ■.
 - ↕️ **[Drag rows into the order you want](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#reordering-rows)** — inside a package, or among the
   starred rows. The order is remembered per workspace and the manifests are never edited.
 - 🎨 **Colour and an icon per task** — ▶ for dev servers, a beaker for tests, a rocket for releases,
@@ -59,11 +44,11 @@ restart without ever going looking for a terminal tab.**
 - 🐳 **[Docker Compose, as rows](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#docker-compose)** — every compose file in the workspace, including
   the profile-named ones, with `up` fanned out per service and `down`, `build`, `logs` and `ps`
   beside it. **▶ and ■ live on the file's own heading**, so a stack goes up and comes down without
-  opening it, and the heading spins while any part of it runs. **Check Containers** asks Docker what
+  opening it — a click on the heading brings it up too — and the heading spins while any part of it runs. **Check Containers** asks Docker what
   is really up — including stacks you started from a terminal or with `up -d` — and ■ then stops
   them.
 - 🏗️ **[Dockerfiles, as one row each](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#dockerfiles)** — every `Dockerfile`, `Dockerfile.dev` and
-  `api.Dockerfile` in the workspace. **▶ on the file's own row builds it** and ☰ beside it holds the
+  `api.Dockerfile` in the workspace. **▶ or a click on the file's own row builds it** and ☰ beside it holds the
   rest — one build per `FROM … AS <stage>`, plus `run` and whatever else `dockerfileCommands` names —
   so a file is a line rather than a folder, and the row spins while a build runs. The image is tagged
   after the folder it sits in, so a build leaves something you can run rather than a dangling id.
@@ -72,7 +57,8 @@ restart without ever going looking for a terminal tab.**
   Each project's scripts gather under one `shell` folder with a terminal icon, a row no category
   claimed wears the shell it is read by, the dimmed text is the script's own first comment, and each
   extension is started by the runner that can start it. **Add to Terminal** puts the command line in a fresh
-  terminal unrun, for when a script takes arguments.
+  terminal unrun, for when a script takes arguments, and **Copy Command** — on every script row, not
+  only these, and on compose files and Dockerfiles — puts it on the clipboard.
 - ✍️ **[Custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks)** — a name and a shell command of your own,
   `docker compose down -v && docker compose up -d db` included, under one **Custom Tasks** heading at
   the top of the tree. ⋮ → **Create custom task** makes the first, the heading's **+** the rest. Kept in
@@ -105,3 +91,21 @@ Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/task-runner-
 Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?itemName=DenysDavydov.tab-browser-ultimate-promo
 
 Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/tab-browser-ultimate
+
+## Change log 0.9
+
+- 0.9.7: A click on a [compose file](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#docker-compose) or a [Dockerfile](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#dockerfiles) row now runs it, `docker compose up` or `docker build`, and brings up its terminal; once something of the file's is running, the click goes to that terminal instead. New **Copy Command** in the right-click menu of every script row, compose file and Dockerfile puts the command line it runs on the clipboard, quoted for your shell. A compose file or a Dockerfile can be added to [Favorites](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#favorites) with ☆ on its row or from the right-click menu, and shows up there as the file itself, ▶, ■ and click included.
+
+- 0.9.6: Bug fixes
+
+- 0.9.5: Git worktrees that coding agents check out inside the repository, such as Claude Code's `.claude/worktrees/`, no longer show up as extra copies of every task. Manifests and scripts that git ignores, through `.gitignore`, `.git/info/exclude` or your global excludes file, are [left out of the list](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#what-git-ignores). Set `taskRunnerUltimate.respectGitignore` to `false` to list them again.
+
+- 0.9.4: Stop all and restart all buttons on more headings: the [Favorites](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#favorites) folder in ecosystem mode, the hidden pile and OTHER TASKS. Hover a heading while something under it runs to see ■ and ⟳.
+
+- 0.9.3: **Go to Script Definition** is more precise: a duplicated JSON key goes to the occurrence that counts, quoted TOML keys are found, and a short script name is selected as the key rather than inside a longer word. Typographic quotes in a command are kept from breaking PowerShell, Go projects are rescanned less often, and signed hex, octal and binary numbers in TOML are kept as text.
+
+- 0.9.2: Bug fixes
+
+- 0.9.1: Bug fixes
+
+- 0.9.0: Added [custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks): open the ⋮ menu in the panel header and pick **+ Create custom task**.

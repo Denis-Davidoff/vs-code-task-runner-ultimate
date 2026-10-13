@@ -53,11 +53,14 @@ monorepo.
   stop it. Nothing running is ever a single click away from being killed.
 - **Show Terminal** — click a running row, or right-click it, to go to its output without stopping
   or restarting anything.
-- **A compose file is one item, not a folder** — ▶ brings the stack up, ■ takes it down, and
+- **A compose file is one item, not a folder** — ▶ or a click on the row brings the stack up, ■ takes it down, and
   **Compose Commands…** in the right-click menu holds the rest: one `up` per service, plus `build`,
   `logs` and `ps`.
 - **Add to Terminal** — right-click a shell row and a new terminal opens with its command line
   *typed but not run*, so a script can be given the arguments the tree has no way to ask for.
+- **Copy Command** — right-click a script row, a compose file or a Dockerfile to put the command line
+  it runs on the clipboard, quoted for your shell. A line holding a line break or a hidden character
+  is not copied, since pasting it would run more than the line shows.
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
   at the line the task is on, wherever a task has one to point at; on a heading, **Open Manifest
   File** opens the file itself, and on a shell row it opens the script.
@@ -66,7 +69,8 @@ monorepo.
   manifest the heading names, the folder a script group stands for, or the script itself.
 - **Stop all / restart all** — for when the whole stack needs to go down or come back.
 - **Favorites** — star the two or three tasks you actually run and they pin to the very top of the
-  tree, above everything, without leaving the manifest they belong to.
+  tree, above everything, without leaving the manifest they belong to. A compose file or a
+  Dockerfile is starred the same way and pinned as the file, with its own buttons.
 - **Rename any row, and any heading** — `dev` becomes `API server`, `@acme/api-gateway` becomes
   `Gateway`. Display only: nothing on disk is renamed, and the real name stays findable.
 - **Paint any row, and any folder** — fifteen colours in a right-click list, each drawn as a circle in
@@ -163,7 +167,10 @@ is. It is **one item**, and the item *is* the stack:
 ```
 
 ▶ is `docker compose up` for the whole file and ■ is `docker compose down`. Neither needs the file
-opened, because there is nothing to open: the row is a leaf. Everything else compose can be asked
+opened, because there is nothing to open: the row is a leaf. A click on the row is ▶ with the
+terminal brought up, as [a click on a task](#clicking-a-row-versus-pressing-run) is — and once
+anything of the file's is running, the click goes to its terminal instead of starting another `up`.
+A stack sitting in the hidden pile is not brought up by a click, just as it carries no ▶ there. Everything else compose can be asked
 for lives behind **Compose Commands…** in the right-click menu — one `up` entry per declared
 service, and then the extra subcommands from `taskRunnerUltimate.dockerComposeCommands`, which is
 `build`, `logs` and `ps` out of the box:
@@ -268,8 +275,10 @@ A Dockerfile declares build stages, not tasks, so — like a compose file — it
 `taskRunnerUltimate.dockerfileCommands`.
 
 And like a compose file it is **one row rather than a folder**: a Dockerfile *is* the image, so the
-file itself is what you press. `build` is on ▶, and everything else is behind the ☰ beside it —
-which is where the fan-out goes. Every named `FROM … AS <stage>` gets an entry of its own that passes
+file itself is what you press. `build` is on ▶ and on a click on the row, which brings up the
+terminal too; while anything of the file's runs, such as the container `run` started, the click goes
+to that terminal rather than building again. Everything else is behind the ☰ beside ▶, which is
+where the fan-out goes. Every named `FROM … AS <stage>` gets an entry of its own that passes
 `--target`, so the intermediate stages of a multi-stage build are one click each rather than a
 command you have to remember:
 
@@ -473,7 +482,8 @@ for a [confirmation](#asking-before-a-task-starts-or-stops), and ▶, ■ and �
 | **Rename…** | A real rename here, not [a display title](#renaming-a-row): the name in the file changes, and the star, colour, icon, confirmation and drag position move with it. Refused while the task runs, since its terminal is filed under the old name. |
 | **Delete Custom Task** | Takes it out of the file after asking, stopping it first if it runs. |
 
-**Add to Terminal** types the command into a fresh terminal unrun, for the day it needs one more flag.
+**Add to Terminal** types the command into a fresh terminal unrun, for the day it needs one more flag,
+and **Copy Command** puts it on the clipboard.
 
 The tasks are kept per workspace folder in **`.vscode/task-script-explorer.json`**, a plain file:
 
@@ -744,6 +754,11 @@ that task's terminal and focuses it, without stopping or restarting anything. Bo
 under **OTHER TASKS** too, so a watcher some other extension started is one click from its output as
 well.
 
+A [compose file](#docker-compose) and a [Dockerfile](#dockerfiles) are rows too, not folders, and
+take the same click: it runs the file's own `up` or `build` with its terminal, or, while anything of
+the file's is running, goes to that terminal. They have no double click to stop — ■ on a compose
+row takes the whole stack down, which is not something to arrive at while clicking to find a log.
+
 A group is one manifest, not one directory: a Rust service with a `Cargo.toml`, a `Makefile` and a
 `justfile` side by side gets three, all in the same folder.
 
@@ -909,6 +924,14 @@ the two rows apart at a glance.
 
 Click ★ to unpin. Order is the order you starred things in — new stars go to the bottom, so the list
 stays where you put it — and it can be [dragged](#reordering-rows) into any other order.
+
+A [compose file](#docker-compose) or a [Dockerfile](#dockerfiles) takes the ☆ too, on its own row or
+from its right-click menu, and is pinned as the file rather than as one of its commands: the same
+row, with ▶, ■, ☰ and the click doing what they do below. The star is filed against the file's own
+`up` or `build`, so the dropdown lists it under Favorites as that command. A file starred while it
+sits in the hidden pile is pinned all the same — starring it is what brought it back to the top —
+and stays in the pile below. A star an older version put on another of the file's commands, a
+`run` or a `build: deps`, stays a row of that one command.
 
 In the tree a starred script appears twice, and the two rows are independent: running it from the top
 of the list and running it from its package group are the same task, and both rows spin. The dropdown
@@ -1148,8 +1171,8 @@ live where there is a row to invoke them on:
 | --- | --- |
 | Run (Click) | a click on an idle row, and right-click — the label names the gesture, since a mouse has no keybinding to show there |
 | Stop (Double-Click) | a double click on a running row, and right-click; ■ inline on hover stops on one press |
-| Add to Favorites | ☆ inline on hover, and right-click |
-| Remove from Favorites | ★ inline on hover, and right-click |
+| Add to Favorites | ☆ inline on hover, and right-click — on a script row, a compose item and a Dockerfile |
+| Remove from Favorites | ★ inline on hover, and right-click — the same rows, and the starred copy at the top |
 | Enable Confirmation | right-click only, on a script row — one half of a toggle, shown while the row starts and stops straight away. Never on a [compose item](#docker-compose), which does not ask |
 | Disable Confirmation | right-click only, on a script row — the other half, shown while the row [asks first](#asking-before-a-task-starts-or-stops) |
 | Go to Script Definition | right-click only, on a script row — a row already carries up to three hover buttons, and a fourth would push the ones pressed all day away from the label |
@@ -1157,10 +1180,11 @@ live where there is a row to invoke them on:
 | Stop All in Package / Restart All in Package | ■ and ⟳ inline on hover, on a package heading while something under it runs. They act on its running rows only — an idle task is not started by restarting its neighbours |
 | Stop All in Group / Restart All in Group | the same pair on the headings that are not a package — an [ecosystem](#grouping-by-ecosystem) row, the **Favorites** folder, the hidden pile and OTHER TASKS — while something under them runs |
 | Show Terminal | a click on a running row, and right-click — ours and the ones under OTHER TASKS alike. It is the way back from a task started with ▶, which leaves the panel where it was |
-| Compose Up | ▶ inline on hover and right-click, on a [compose item](#docker-compose) only — the file's own bare `up`. Not offered while one of ours is already running it, and not on a row sitting in the hidden pile |
+| Compose Up | ▶ inline on hover, right-click, and a click on the row, on a [compose item](#docker-compose) only — the file's own bare `up`. Not offered while one of ours is already running it, and not on a row sitting in the hidden pile; a click on a row with something of the file's running goes to its terminal instead |
 | Compose Down | ■ inline on hover and right-click, on a compose item — it ends whatever of ours the file has running and then runs `docker compose down`, and does neither if something refuses to stop |
 | Compose Commands… | right-click only, on a compose item — the picker holding one `up` per declared service and the extra subcommands from [`dockerComposeCommands`](#settings) |
 | Add to Terminal | right-click only, on a [shell row](#shell-scripts) — a new terminal with the command line typed into it and not run, which is where a script takes arguments nobody wrote down. A manifest task says its own arguments in the manifest, so the entry is not offered there |
+| Copy Command | right-click only, on a script row, a compose item and a Dockerfile — the command line the row runs, on the clipboard and quoted for the shell your terminal opens in; a compose item copies its `up` and a Dockerfile its `build`. Not on OTHER TASKS, whose command is another extension's, and refused for a line holding a line break or a hidden character, which a paste would run past what it shows |
 | Copy Path | right-click only, on the rows that are a file or a folder — a heading's manifest, the directory a [shell group](#shell-scripts) stands for, or a shell row's own script — copied whole. A manifest task is not one of them: an npm script is a line in a file its siblings share, so every row of the group would copy the same `package.json`. The rows that name no file — FAVORITES, OTHER TASKS, an ecosystem parent and the aggregated `shell [N]` heading — do not offer any of the four |
 | Copy Relative Path | the same rows, cut to the workspace root and named with its folder when more than one is open; a folder that *is* the root copies its own name, which is the one path there is nothing to cut off |
 | Reveal in Finder | the same rows, in the platform's file manager — **Reveal in File Explorer** on Windows, **Open Containing Folder** on Linux, since the workbench calls it something different on each. Not offered over a remote connection, where the file is on the other machine and the workbench opens nothing; WSL is the exception it makes, and the one remote that keeps the entry |
