@@ -60,7 +60,8 @@ monorepo.
   *typed but not run*, so a script can be given the arguments the tree has no way to ask for.
 - **Copy Command** — right-click a script row, a compose file or a Dockerfile to put the command line
   it runs on the clipboard, quoted for your shell. A line holding a line break or a hidden character
-  is not copied, since pasting it would run more than the line shows.
+  is not copied, since pasting it would run more than the line shows, and neither is one that needs
+  quoting in a shell [it does not know how to quote for](#shell-scripts).
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
   at the line the task is on, wherever a task has one to point at; on a heading, **Open Manifest
   File** opens the file itself, and on a shell row it opens the script.
@@ -277,8 +278,9 @@ A Dockerfile declares build stages, not tasks, so — like a compose file — it
 And like a compose file it is **one row rather than a folder**: a Dockerfile *is* the image, so the
 file itself is what you press. `build` is on ▶ and on a click on the row, which brings up the
 terminal too; while anything of the file's runs, such as the container `run` started, the click goes
-to that terminal rather than building again. Everything else is behind the ☰ beside ▶, which is
-where the fan-out goes. Every named `FROM … AS <stage>` gets an entry of its own that passes
+to that terminal rather than building again. A Dockerfile sitting in the hidden pile is not built by
+a click, just as it carries no ▶ there; its right-click menu still builds it. Everything else is
+behind the ☰ beside ▶, which is where the fan-out goes. Every named `FROM … AS <stage>` gets an entry of its own that passes
 `--target`, so the intermediate stages of a multi-stage build are one click each rather than a
 command you have to remember:
 
@@ -437,7 +439,11 @@ $ bash ./scripts/deploy.sh ▏          ← the cursor is here; type the rest an
 Nothing is remembered and nothing is prompted for: it is a terminal, with a line in it to finish,
 edit or throw away. Anything in the line that is not a plain path or task name is quoted literally
 for the shell that terminal opens in — a script checked out as `$(id).sh` is typed as text, not as a
-substitution waiting for the Enter key.
+substitution waiting for the Enter key. The shells it knows how to quote for are the Bourne family
+(`sh`, `bash`, `zsh`, `dash`, `ksh` and the like), fish, PowerShell and `cmd.exe`; in any other — nu,
+tcsh, or a WSL profile, which names no shell at all — a line that would need quoting is refused rather
+than quoted for the wrong one. So is a line holding a line break or another hidden character: text
+typed into a terminal is not a paste, and a control character in it acts before you press anything.
 
 The executable bit is deliberately not consulted. It is invisible through VS Code's own file API —
 `FilePermission` carries only `Readonly` — so reading it would mean importing `node:fs`, and that is
@@ -930,7 +936,8 @@ from its right-click menu, and is pinned as the file rather than as one of its c
 row, with ▶, ■, ☰ and the click doing what they do below. The star is filed against the file's own
 `up` or `build`, so the dropdown lists it under Favorites as that command. A file starred while it
 sits in the hidden pile is pinned all the same — starring it is what brought it back to the top —
-and stays in the pile below. A star an older version put on another of the file's commands, a
+and stays in the pile below. The pinned row is never put away itself, so it carries neither eye:
+hiding or showing the file is done on its row below. A star an older version put on another of the file's commands, a
 `run` or a `build: deps`, stays a row of that one command.
 
 In the tree a starred script appears twice, and the two rows are independent: running it from the top
@@ -1183,8 +1190,8 @@ live where there is a row to invoke them on:
 | Compose Up | ▶ inline on hover, right-click, and a click on the row, on a [compose item](#docker-compose) only — the file's own bare `up`. Not offered while one of ours is already running it, and not on a row sitting in the hidden pile; a click on a row with something of the file's running goes to its terminal instead |
 | Compose Down | ■ inline on hover and right-click, on a compose item — it ends whatever of ours the file has running and then runs `docker compose down`, and does neither if something refuses to stop |
 | Compose Commands… | right-click only, on a compose item — the picker holding one `up` per declared service and the extra subcommands from [`dockerComposeCommands`](#settings) |
-| Add to Terminal | right-click only, on a [shell row](#shell-scripts) — a new terminal with the command line typed into it and not run, which is where a script takes arguments nobody wrote down. A manifest task says its own arguments in the manifest, so the entry is not offered there |
-| Copy Command | right-click only, on a script row, a compose item and a Dockerfile — the command line the row runs, on the clipboard and quoted for the shell your terminal opens in; a compose item copies its `up` and a Dockerfile its `build`. Not on OTHER TASKS, whose command is another extension's, and refused for a line holding a line break or a hidden character, which a paste would run past what it shows |
+| Add to Terminal | right-click only, on a [shell row](#shell-scripts) — a new terminal with the command line typed into it and not run, which is where a script takes arguments nobody wrote down. A manifest task says its own arguments in the manifest, so the entry is not offered there. Refused for a line holding a line break or a hidden character, and for one that needs quoting in a shell it does not know how to quote for |
+| Copy Command | right-click only, on a script row, a compose item and a Dockerfile — the command line the row runs, on the clipboard and quoted for the shell your terminal opens in; a compose item copies its `up` and a Dockerfile its `build`. Not on OTHER TASKS, whose command is another extension's, and refused on the same lines Add to Terminal refuses, which a paste would run past what it shows |
 | Copy Path | right-click only, on the rows that are a file or a folder — a heading's manifest, the directory a [shell group](#shell-scripts) stands for, or a shell row's own script — copied whole. A manifest task is not one of them: an npm script is a line in a file its siblings share, so every row of the group would copy the same `package.json`. The rows that name no file — FAVORITES, OTHER TASKS, an ecosystem parent and the aggregated `shell [N]` heading — do not offer any of the four |
 | Copy Relative Path | the same rows, cut to the workspace root and named with its folder when more than one is open; a folder that *is* the root copies its own name, which is the one path there is nothing to cut off |
 | Reveal in Finder | the same rows, in the platform's file manager — **Reveal in File Explorer** on Windows, **Open Containing Folder** on Linux, since the workbench calls it something different on each. Not offered over a remote connection, where the file is on the other machine and the workbench opens nothing; WSL is the exception it makes, and the one remote that keeps the entry |

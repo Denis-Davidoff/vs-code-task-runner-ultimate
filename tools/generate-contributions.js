@@ -479,7 +479,11 @@ const BUSY = '(:busy)?';
 // right behind the head and is there only when on, so an unstarred row keeps the
 // shape every clause here was first written against, and the clauses that have
 // to match a starred one too allow it in this one slot.
-const STAR = '(:fav)?';
+//
+// `:pin` is the copy of such a row among the starred rows. It is never put away,
+// so the two eyes leave it out — `OWN_STAR` — and everything else takes both.
+const STAR = '(:(fav|pin))?';
+const OWN_STAR = '(:fav)?';
 // The two ways a row leaves the tree for the pile, spelled once each: every
 // pattern below builds its put-away slot out of these rather than writing the
 // segment again, so a rename here reaches all of them at once.
@@ -490,8 +494,8 @@ const CARRIED_SEG = 'carried';
 //
 // The Custom Tasks heading is one more of them: it is a file, and a list that can
 // be put away like any other.
-const VISIBLE = `/^(group:package|compose|dockerfile|custom)${STAR}${STATE}${BUSY}(:running)?$/`;
-const HIDDEN = `/^(group:package|compose|dockerfile|custom)${STAR}${STATE}${BUSY}:${HIDDEN_SEG}(:running)?$/`;
+const VISIBLE = `/^(group:package|compose|dockerfile|custom)${OWN_STAR}${STATE}${BUSY}(:running)?$/`;
+const HIDDEN = `/^(group:package|compose|dockerfile|custom)${OWN_STAR}${STATE}${BUSY}:${HIDDEN_SEG}(:running)?$/`;
 const PUT_AWAY = `(:(${HIDDEN_SEG}|${CARRIED_SEG}))?`;
 // The half of `PUT_AWAY` a row keeps when it is in the pile only because its
 // project is — the slot the buttons that refuse a hidden row still allow.
@@ -564,9 +568,9 @@ const PATH_ROW = `/^(${NAMED_ROW}|script:.+:shell:.+)$/`;
 // `build`, the same line ▶ and a click on the row start. A package heading is
 // not one: it holds many lines and stands for none of them.
 // The two halves of the star on a compose file or a Dockerfile: every shape such
-// a row takes without the `:fav` segment, and the one segment that says it is on.
+// a row takes without a star segment, and the two segments that say it is on.
 const FILE_UNSTARRED = `/^(compose${STACK}${BUSY}|dockerfile${BUILDING})${PUT_AWAY}(:running)?$/`;
-const FILE_STARRED = '/^(compose|dockerfile):fav(:|$)/';
+const FILE_STARRED = '/^(compose|dockerfile):(fav|pin)(:|$)/';
 const COMMAND_ROW = `/^(script:|(${COMPOSE_ROW}|${DOCKERFILE_ROW})(:running)?$)/`;
 // No remote connection: the window is showing files on the machine it is running
 // on. Empty is the workbench's own value for a local window.

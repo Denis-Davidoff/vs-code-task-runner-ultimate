@@ -827,6 +827,51 @@ test('Copy Command puts the line a row runs on the clipboard, quoted for a shell
   }
 });
 
+test('fish is quoted as fish, and a shell nobody knows is handed plain lines only', async () => {
+  // fish reads `\'` inside single quotes as a quote, so the POSIX spelling of a
+  // name holding one closed the string early and ran the rest of it.
+  const name = "x\\' ; echo pwned ; #";
+  const hostile = { ...script('/repo/package.json', name, 'npm'), argv: ['npm', 'run', name] };
+  const fish = harness({ shell: '/opt/homebrew/bin/fish' });
+  await fish.copyCommandOf({ kind: 'script', script: hostile });
+  assert.deepEqual([...fish.copied], ["npm run 'x\\\\\\' ; echo pwned ; #'"]);
+  await fish.addToTerminal({ kind: 'script', script: { ...shell('/repo/scripts', "it's.sh"), argv: ['bash', "./scripts/it's.sh"] } });
+  assert.deepEqual(fish.terminals[0].sent, [{ text: "bash './scripts/it\\'s.sh'", execute: false }]);
+  // The POSIX family is still POSIX, versioned names included.
+  for (const shellPath of ['/bin/bash', '/usr/local/bin/bash5', '/opt/homebrew/bin/zsh-5.9', '/bin/dash']) {
+    const posix = harness({ shell: shellPath });
+    await posix.copyCommandOf({ kind: 'script', script: hostile });
+    assert.deepEqual([...posix.copied], ["npm run 'x\\'\\'' ; echo pwned ; #'"], shellPath);
+  }
+
+  // A shell whose quoting is not one of the four, and `wsl.exe`, which names no
+  // shell at all: a plain line is the same line everywhere and is handed over;
+  // one that needs quoting is refused rather than quoted for the wrong shell.
+  for (const shellPath of ['/usr/local/bin/nu', '/bin/tcsh', 'C:\\Windows\\System32\\wsl.exe']) {
+    const unknown = harness({ shell: shellPath });
+    await unknown.copyCommandOf({ kind: 'script', script: { ...script('/repo/package.json', 'dev', 'npm'), argv: ['npm', 'run', 'dev'] } });
+    await unknown.copyCommandOf({ kind: 'script', script: hostile });
+    await unknown.addToTerminal({ kind: 'script', script: { ...shell('/repo/scripts', 'a b.sh'), argv: ['bash', './scripts/a b.sh'] } });
+    assert.deepEqual([...unknown.copied], ['npm run dev'], shellPath);
+    assert.deepEqual(unknown.terminals, [], shellPath);
+    assert.equal(unknown.warnings.length, 2, shellPath);
+    assert.match(unknown.warnings[0], /does not know how .* quotes/);
+  }
+});
+
+test('Add to Terminal refuses a script name holding a control character, as Copy Command does', async () => {
+  // Text an extension types into a terminal is never wrapped as a paste: ^U
+  // erased the line typed so far and the carriage return was Enter, so a file
+  // named for it ran its own command before anybody pressed anything.
+  const name = 'x\u0015echo PWNED\r.sh';
+  for (const shellPath of ['/bin/zsh', '/bin/bash', 'C:\\Windows\\System32\\cmd.exe']) {
+    const h = harness({ shell: shellPath });
+    await h.addToTerminal({ kind: 'script', script: { ...shell('/repo/scripts', name), argv: ['bash', `./scripts/${name}`] } });
+    assert.deepEqual(h.terminals, [], shellPath);
+    assert.match(h.warnings.at(-1), /not typed into a terminal/);
+  }
+});
+
 test('Copy Command is offered on every row that runs one line, and no other', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
   const offered = (value) =>
@@ -2176,12 +2221,19 @@ test('a click on a compose file or a Dockerfile starts it, or goes to what of it
   const busyPile = walk(following.buildTreeRoots(stack)).find((n) => n.source === 'docker-compose');
   await click(following, busyPile);
   assert.deepEqual(scripts(following), []);
-  // A Dockerfile in the pile still builds: its menu offers Build there, so the
-  // click does nothing the row did not already offer.
+  // A Dockerfile follows its own ▶: none on a hidden row, so no click either —
+  // the menu still builds it, since no eye stands in the way of a menu — and
+  // both on a row carried into the pile with its project.
   const image = dockerfile();
   const shelf = harness({ settings: { grouping: 'flat' }, scan: image, stored: { hidden: ['file:///repo/Dockerfile'] } });
-  await click(shelf, walk(shelf.buildTreeRoots(image)).find((n) => n.source === 'dockerfile'));
-  assert.deepEqual(scripts(shelf), ['build']);
+  const shelved = walk(shelf.buildTreeRoots(image)).find((n) => n.source === 'dockerfile');
+  assert.equal(shelf.treeItemFor(shelved).contextValue, 'dockerfile:hidden');
+  assert.equal(shelf.treeItemFor(shelved).command, undefined);
+  await shelf.activateNode(shelved, true);
+  assert.deepEqual(scripts(shelf), []);
+  const along = harness({ settings: { grouping: 'flat' } });
+  await click(along, { ...along.buildTreeRoots(image)[0], carried: true });
+  assert.deepEqual(scripts(along), ['build']);
 
   // A package heading keeps its click for the fold, and a stray invocation with
   // one is not a run of anything.
@@ -2213,9 +2265,9 @@ test('a compose file and a Dockerfile are starred as their own up and build, and
   const item = h.treeItemFor(compose);
   assert.equal(item.id, compose.id);
   assert.equal(item.collapsibleState, 0);
-  assert.equal(item.contextValue, 'compose:fav:down');
-  assert.equal(h.treeItemFor(docker).contextValue, 'dockerfile:fav');
-  // And the row below it says it is starred too.
+  // `:pin` on the copy, `:fav` on the row below, which says it is starred too.
+  assert.equal(item.contextValue, 'compose:pin:down');
+  assert.equal(h.treeItemFor(docker).contextValue, 'dockerfile:pin');
   assert.equal(h.treeItemFor(heading('docker-compose')).contextValue, 'compose:fav:down');
 
   // Its click is the file's click.
@@ -2231,7 +2283,7 @@ test('a compose file and a Dockerfile are starred as their own up and build, and
   const nested = harness({ settings: { grouping: 'ecosystem' }, scan, stored: { favorites: ['file:///repo/docker-compose.yml::up'] } });
   const [favorites] = nested.buildTreeRoots(scan);
   assert.equal(favorites.id, 'group:favorites');
-  assert.equal(nested.treeItemFor(favorites.children[0]).contextValue, 'compose:fav:down');
+  assert.equal(nested.treeItemFor(favorites.children[0]).contextValue, 'compose:pin:down');
 
   // Any other action of the file is still the task row an older version starred.
   const legacy = harness({ settings: { grouping: 'flat' }, scan, stored: { favorites: ['file:///repo/api/Dockerfile::run'] } });
@@ -2253,7 +2305,7 @@ test('a starred stack in the pile is drawn among the starred rows as not put awa
   const away = walk(roots).find((n) => n.source === 'docker-compose' && !n.inFavorites);
   // Starring it is what brought it up here, so the copy is a row like any
   // starred one — ▶ and a click included — and the one in the pile stays put away.
-  assert.equal(h.treeItemFor(starred).contextValue, 'compose:fav:down');
+  assert.equal(h.treeItemFor(starred).contextValue, 'compose:pin:down');
   assert.equal(h.treeItemFor(away).contextValue, 'compose:fav:down:hidden');
   await h.activateNode(starred, true);
   assert.deepEqual([...h.launched].map((task) => task.definition.script), ['up']);
@@ -2327,11 +2379,49 @@ test('the star on a compose file or a Dockerfile is offered on every shape of th
     assert.equal(offered(command, 'dockerfile:fav:running'), true, command);
   }
   assert.equal(offered('showGroup', 'compose:fav:down:hidden'), true);
+  // The copy among the starred rows takes ★ and everything the file does — but
+  // neither eye: it is never put away, so Hide there would do nothing to a file
+  // already in the pile, and Show would have nothing to bring back.
+  assert.equal(offered('removeFavorite', 'compose:pin:down'), true);
+  assert.equal(offered('addFavorite', 'compose:pin:down'), false);
+  for (const value of ['compose:pin:down', 'compose:pin:up:running', 'dockerfile:pin', 'dockerfile:pin:building:running']) {
+    assert.equal(offered('hideGroup', value), false, value);
+    assert.equal(offered('showGroup', value), false, value);
+  }
+  for (const command of ['stopStack', 'runGroup', 'composeActions', 'openManifest', 'copyCommand', 'copyPath', 'editTitle', 'pickColor']) {
+    assert.equal(offered(command, 'compose:pin:down'), true, command);
+  }
+  for (const command of ['buildImage', 'dockerfileActions', 'restartDockerfile', 'stopDockerfile', 'openManifest', 'copyCommand']) {
+    assert.equal(offered(command, 'dockerfile:pin:running'), true, command);
+  }
   // And no other heading takes a star.
   for (const value of ['group:package', 'group:package:running', 'custom', 'group:eco', 'group:favorites', 'foreignTask']) {
     assert.equal(offered('addFavorite', value), false, value);
     assert.equal(offered('removeFavorite', value), false, value);
   }
+});
+
+test('Restart All in Group restarts a script once, however many starred rows hold it', async () => {
+  // A starred Dockerfile carries its rows inside it, and a star an older version
+  // put on its `run` is a row of its own beside it — one script, two rows.
+  const rows = dockerfile();
+  const container = {
+    task: { name: 'run', definition: { type: 'taskRunnerUltimate', script: 'run', manifest: rows[2].manifest.toString() } },
+  };
+  const h = harness({
+    settings: { grouping: 'ecosystem' },
+    scan: rows,
+    stored: { favorites: ['file:///repo/Dockerfile::build', 'file:///repo/Dockerfile::run'] },
+    executions: [container],
+    liveKeys: true,
+  });
+  h.running.set(rows[2].key, container);
+  const [favorites] = h.buildTreeRoots(rows);
+  assert.equal(favorites.id, 'group:favorites');
+  assert.deepEqual(favorites.children.map((n) => n.kind), ['group', 'script']);
+  await h.restartGroup(favorites);
+  assert.equal(h.stopped.length, 1);
+  assert.deepEqual([...h.launched].map((task) => task.definition.script), ['run']);
 });
 
 test('a Dockerfile row carries no confirmation toggle, and no flag on it survives', async () => {

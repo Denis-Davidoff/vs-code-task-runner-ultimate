@@ -3779,8 +3779,10 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
 
       // The custom tasks are not in the order of the headings at all — see
       // `customFirst` — so a drag of theirs would be a move nothing could show.
+      // A starred copy of a compose file or a Dockerfile is the other kind, and is
+      // left where it is like any starred row travelling with a heading.
       const groups = source.flatMap((node) =>
-        node.kind === 'group' && node.ref && node.source !== 'custom' ? [node] : [],
+        node.kind === 'group' && node.ref && node.source !== 'custom' && !node.inFavorites ? [node] : [],
       );
       const first = groups[0];
       if (!first) {
@@ -5170,8 +5172,14 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // into ★. Right behind the head and present only when on, so a row nobody
     // starred keeps the exact shape every other clause was written against, and
     // the clauses that allow it allow it in one place. See `setFavorite`.
+    //
+    // The copy among the starred rows says `:pin` instead. It is starred all the
+    // same, but it is never put away — see `starredRow` — so the two eyes have
+    // nothing to say on it: Hide offered there would be a no-op on a file
+    // already in the pile, and Show would have no pile to bring the copy out of.
+    // The eye clauses allow `:fav` alone, and every other clause allows both.
     const filed = fileLead(node);
-    const star = filed && isFavorite(filed.script) ? ':fav' : '';
+    const star = node.inFavorites ? ':pin' : filed && isFavorite(filed.script) ? ':fav' : '';
     const state = `${head}${star}${stacked}${busy}${building}${put}`;
     item.contextValue = node.ref ? (alive ? `${state}:running` : state) : 'group';
     return item;
@@ -6067,11 +6075,26 @@ function runningScriptsOf(node: TreeNode | undefined): ScriptEntry[] {
   if (node?.kind !== 'group') {
     return [];
   }
+  // Each script once, where it is first met. The starred rows can hold one twice:
+  // a starred compose file or Dockerfile carries the file's rows inside it, and a
+  // star an older version put on one of those rows — a `run`, an `up: web` — is a
+  // row of its own beside it. Restart All in Group walks this list, and a script
+  // on it twice was stopped and started twice.
+  const once = new Map<string, ScriptEntry>();
+  for (const script of runningRowsOf(node)) {
+    if (!once.has(script.key)) {
+      once.set(script.key, script);
+    }
+  }
+  return [...once.values()];
+}
+
+function runningRowsOf(node: TreeNode & { kind: 'group' }): ScriptEntry[] {
   return node.children.flatMap((child) => {
     // An ecosystem parent and the hidden pile hold groups rather than rows, so
     // "everything running under this row" has to go the whole way down.
     if (child.kind === 'group') {
-      return runningScriptsOf(child);
+      return runningRowsOf(child);
     }
     return child.kind === 'script' && running.has(child.script.key) ? [child.script] : [];
   });
@@ -6484,21 +6507,20 @@ function fileLead(node: TreeNode | undefined): (TreeNode & { kind: 'script' }) |
 }
 
 /**
- * What a click on an idle file row may start: its lead, the same as ▶ — and
- * nothing on a compose file in the pile, where ▶ is not offered either. A stack
- * put away is out of the way until it is taken out, and a click that lands on
- * the row while reaching for the eye beside it is not a request to bring it up.
- * See `COMPOSE_IDLE` in `tools/generate-contributions.js`, which leaves out
- * `:hidden` and `:carried` alike.
+ * What a click on an idle file row may start: its lead, wherever ▶ starts it —
+ * and nothing where ▶ is not offered. A row put away is out of the way until it
+ * is taken out, and a click that lands on it while reaching for the eye beside
+ * it is not a request to run it. The rules are ▶'s own, row for row: a compose
+ * file in the pile has none whether it was hidden or carried there
+ * (`COMPOSE_IDLE`), and a Dockerfile none when hidden, keeping it when it is
+ * only carried (`DOCKERFILE_IDLE`) — see `tools/generate-contributions.js`.
  *
- * A Dockerfile keeps it: its Build is offered on a put-away row's menu, so the
- * click there does nothing the row did not already offer.
+ * The right-click menu still builds a hidden Dockerfile: no eye stands in the way
+ * of a menu, which is the reason it is offered there.
  */
 function clickLead(node: TreeNode & { kind: 'group' }): (TreeNode & { kind: 'script' }) | undefined {
-  if (node.source === 'docker-compose' && (node.hidden || node.carried)) {
-    return undefined;
-  }
-  return fileLead(node);
+  const away = node.source === 'docker-compose' ? node.hidden || node.carried : node.hidden;
+  return away ? undefined : fileLead(node);
 }
 
 /**
@@ -6580,13 +6602,8 @@ async function addToTerminal(node: TreeNode | undefined): Promise<void> {
   if (node?.kind !== 'script') {
     return;
   }
-  // Typed, not run — but a line break in the line is an Enter, and whatever
-  // stands before it runs the moment the text lands. A blocked line is refused
-  // here for the same reason it is refused at ▶.
-  if (clearance(node.script) === 'blocked') {
-    void vscode.window.showWarningMessage(
-      `"${visible(node.script.name)}" holds a line break or a hidden character, so it is not typed into a terminal.`,
-    );
+  const line = promptLine(node.script, 'typed into a terminal');
+  if (line === undefined) {
     return;
   }
   const terminal = vscode.window.createTerminal({
@@ -6594,7 +6611,7 @@ async function addToTerminal(node: TreeNode | undefined): Promise<void> {
     cwd: node.script.cwd,
   });
   terminal.show();
-  terminal.sendText(terminalLine(node.script), false);
+  terminal.sendText(line, false);
 }
 
 /**
@@ -6603,29 +6620,54 @@ async function addToTerminal(node: TreeNode | undefined): Promise<void> {
  *
  * Spelled by `terminalLine`, as Add to Terminal spells it, and for the same
  * reason: a copied command is going to be pasted at a prompt, where the quoting
- * `commandFor` does for the eye leaves substitution alive.
- *
- * And a line holding a hidden character is refused, whatever kind of row it
- * came from. A task name is the manifest's text, and a `package.json` key can
- * hold a line break as easily as a custom task can: the launch path never hands
- * one to a shell — see `quotable` — but a paste does. cmd.exe's double quotes
- * end at a line break and run what follows as the next command, and a shell
- * without bracketed paste reads a control character as an edit and a carriage
- * return as Enter, so neither waits for the one the user would have pressed.
+ * `commandFor` does for the eye leaves substitution alive. See `promptLine` for
+ * the lines that are not handed over at all.
  */
 async function copyCommandOf(node: TreeNode | undefined): Promise<void> {
   const row = node?.kind === 'script' ? node : fileLead(node);
   if (!row) {
     return;
   }
-  const line = terminalLine(row.script);
-  if (clearance(row.script) === 'blocked' || HIDDEN_CHARACTERS.test(line)) {
-    void vscode.window.showWarningMessage(
-      `"${visible(row.script.name)}" holds a line break or a hidden character, so it is not copied.`,
-    );
-    return;
+  const line = promptLine(row.script, 'copied');
+  if (line !== undefined) {
+    await vscode.env.clipboard.writeText(line);
   }
-  await vscode.env.clipboard.writeText(line);
+}
+
+/**
+ * The row's line for a prompt — typed into a terminal by Add to Terminal, or
+ * pasted at one after Copy Command — or a warning and nothing, when the line is
+ * not one a prompt can be handed safely. `outcome` is what did not happen to it.
+ *
+ * A line holding a hidden character is refused, whatever kind of row it came
+ * from. A task name is the manifest's text, and a `package.json` key or a script
+ * file's name can hold a control character as easily as a custom task can: the
+ * launch path never hands one to a shell — see `quotable` — but a prompt does,
+ * and it does not wait for the Enter the user would have pressed. Text typed
+ * into a terminal by an extension is never wrapped as a paste, and a shell
+ * without bracketed paste treats a pasted one the same way: ^U erases what came
+ * before, a carriage return is Enter, and cmd.exe's double quotes end at a line
+ * break and run what follows as the next command.
+ *
+ * And a line that needs quoting is refused in a shell whose quoting this does
+ * not know — see `terminalQuoting`. Quoted for the wrong shell, a literal
+ * argument stops being one.
+ */
+function promptLine(script: ScriptEntry, outcome: string): string | undefined {
+  const line = terminalLine(script);
+  if (clearance(script) === 'blocked' || (line !== undefined && HIDDEN_CHARACTERS.test(line))) {
+    void vscode.window.showWarningMessage(
+      `"${visible(script.name)}" holds a line break or a hidden character, so it is not ${outcome}.`,
+    );
+    return undefined;
+  }
+  if (line === undefined) {
+    void vscode.window.showWarningMessage(
+      `"${visible(script.name)}" has to be quoted, and this extension does not know how ${terminalShellName()} quotes, so it is not ${outcome}.`,
+    );
+    return undefined;
+  }
+  return line;
 }
 
 /**
@@ -6644,8 +6686,12 @@ async function copyCommandOf(node: TreeNode | undefined): Promise<void> {
  * built from — are left bare, which is nearly every line this ever produces:
  * `bash ./scripts/deploy.sh` reads as itself, and quoting it would only be noise
  * in a line written to be edited by hand.
+ *
+ * Nothing at all when an argument needs quoting and the terminal's shell is not
+ * one whose quoting this knows — see `terminalQuoting`. A plain line is the same
+ * line in every shell, so that one is still handed over.
  */
-function terminalLine(script: ScriptEntry): string {
+function terminalLine(script: ScriptEntry): string | undefined {
   // A custom task is a line somebody typed to be read by a shell, so it is typed
   // back as it is — quoting it would turn a command into one long file name.
   if (script.line !== undefined) {
@@ -6653,6 +6699,9 @@ function terminalLine(script: ScriptEntry): string {
   }
   const quoting = terminalQuoting();
   const argv = launchArgv(script);
+  if (!quoting) {
+    return argv.every(plainArgument) ? argv.join(' ') : undefined;
+  }
   const line = argv.map((value) => (plainArgument(value) ? value : quoteFor(quoting, value))).join(' ');
   // PowerShell reads a quoted string at the start of a line as a value, not as
   // something to run: `'./scripts/build all.bat'` prints the path and stops. The
@@ -6673,37 +6722,66 @@ function terminalLine(script: ScriptEntry): string {
  * shell on a machine whose default is not, and quoting it as PowerShell would
  * leave `$(…)` live. When there is no name to read, the platform decides, which
  * is the workbench's own default either way.
+ *
+ * A name that is none of the four answers nothing, rather than POSIX by default.
+ * fish was the case that showed why: it reads `\'` inside single quotes as a
+ * quote, so the POSIX spelling of `x\'` closes the string early and runs the rest
+ * of the argument as commands. nu, elvish, xonsh and the csh family each have
+ * rules of their own too, and `wsl.exe` names no shell at all — the one inside
+ * is whatever the distribution logs into. See `terminalLine` for what happens
+ * then.
  */
-function terminalQuoting(): 'posix' | 'powershell' | 'cmd' {
-  const name = (vscode.env.shell ?? '')
-    .toLowerCase()
-    .split(/[\\/]/)
-    .pop();
-  if (name) {
-    if (name.startsWith('pwsh') || name.startsWith('powershell')) {
-      return 'powershell';
-    }
-    return name.startsWith('cmd') ? 'cmd' : 'posix';
+function terminalQuoting(): Quoting | undefined {
+  const name = terminalShellName().replace(/\.exe$/, '');
+  if (!name) {
+    return process.platform === 'win32' ? 'powershell' : 'posix';
   }
-  return process.platform === 'win32' ? 'powershell' : 'posix';
+  if (name.startsWith('pwsh') || name.startsWith('powershell')) {
+    return 'powershell';
+  }
+  if (name.startsWith('cmd')) {
+    return 'cmd';
+  }
+  if (name.startsWith('fish')) {
+    return 'fish';
+  }
+  return POSIX_SHELLS.test(name) ? 'posix' : undefined;
+}
+
+/** The families of quoting `quoteFor` can write. */
+type Quoting = 'posix' | 'fish' | 'powershell' | 'cmd';
+
+/**
+ * The Bourne-family shells, by the file name of their executable — with a
+ * version behind it as some installs spell one, `bash5` or `zsh-5.9`.
+ */
+const POSIX_SHELLS = /^(sh|bash|zsh|dash|ksh|ksh93|mksh|ash|yash|busybox)([-_.]?[\d.]+)?$/;
+
+/** The file name of the shell a new terminal opens, lower-cased; empty when unknown. */
+function terminalShellName(): string {
+  return (vscode.env.shell ?? '').toLowerCase().split(/[\\/]/).pop() ?? '';
 }
 
 /**
  * One argument, quoted so the shell reads it as text and nothing else.
  *
- * Single quotes in both shells that substitute: they are the only quoting in
- * `sh` and in PowerShell that leaves `$`, backticks and `$(…)` inert, and each
- * has its own way of writing a quote inside one — `'\''` for the first, doubled
- * for the second.
+ * Single quotes in every shell that substitutes: they are the only quoting in
+ * `sh`, fish and PowerShell that leaves `$`, backticks and `$(…)` inert, and each
+ * has its own way of writing a quote inside one — `'\''` for the first, `\'` for
+ * fish, which reads a backslash before a quote or a backslash as an escape even
+ * there, and doubled for PowerShell.
  *
  * `cmd.exe` has no substitution to protect against, so double quotes are enough
  * there. `%VAR%` still expands inside them and cannot be escaped in a line typed
  * at a prompt, which is a name that reads oddly rather than a name that runs:
  * cmd expands it to a value, never to a command.
  */
-function quoteFor(quoting: 'posix' | 'powershell' | 'cmd', value: string): string {
+function quoteFor(quoting: Quoting, value: string): string {
   if (quoting === 'cmd') {
     return `"${value.replace(/"/g, '""')}"`;
+  }
+  if (quoting === 'fish') {
+    return `'${value.replace(/[\\']/g, '\\$&')}'`;
   }
   // PowerShell takes the typographic single quotes — ‘ ’ ‚ ‛ — for `'` as well,
   // so each of them ends the string too and is doubled like the plain one.
