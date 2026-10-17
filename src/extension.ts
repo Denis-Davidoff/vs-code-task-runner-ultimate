@@ -1,5 +1,29 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { agentModels, agentsStopped, AiRun, findAgent, forgetAgents, setReportsRoot, stopAllRuns } from './ai';
+import {
+  ACCESS_DETAIL,
+  ACCESS_LABEL,
+  AGENT_LABEL,
+  AI_ACCESS,
+  AI_AGENTS,
+  AI_NOTIFY,
+  AI_RESULTS,
+  AiAccess,
+  AiAgent,
+  aiApproval,
+  aiChanges,
+  aiCovered,
+  AiNotify,
+  AiResult,
+  AiTask,
+  aiTaskValue,
+  approvedPrompt,
+  NOTIFY_LABEL,
+  RESULT_LABEL,
+  validModel,
+} from './aiTask';
+import { isSigned, newApprovalKey, resignApprovals, signApproval, signLegacyApprovals, verifyApproval } from './approval';
 import { composeState } from './containers';
 import { forgetIconPack, iconPack, packArt, PackIcon } from './iconTheme';
 import { locateTask } from './locate';
@@ -11,6 +35,7 @@ import {
   CUSTOM_GROUP_NAME,
   CUSTOM_TASKS_FILE,
   customTasksFile,
+  CustomTaskValue,
   Ecosystem,
   ecosystemOf,
   editCustomTasks,
@@ -262,6 +287,9 @@ const customWritten = new Map<string, string>();
 function watchCustomTasks(): void {
   unwatchCustomTasks();
   const changed = async (uri: vscode.Uri) => {
+    // An open prompt editor is told on every change, the tree's own included —
+    // a prompt changed through Edit AI Task is a change to the file it shows.
+    promptFiles.refresh();
     const ours = customWritten.get(uri.toString());
     if (ours !== undefined) {
       if ((await readText(uri)) === ours) {
@@ -277,6 +305,7 @@ function watchCustomTasks(): void {
     watcher.onDidChange(changed);
     watcher.onDidDelete((uri) => {
       customWritten.delete(uri.toString());
+      promptFiles.refresh();
       invalidateSoon();
     });
     customWatchers.push(watcher);
@@ -384,6 +413,18 @@ export function activate(context: vscode.ExtensionContext): void {
   // 1.85 this extension asks for, so there is no id spelled out anywhere here.
   extensionId = context.extension.id;
   extensionUri = context.extensionUri;
+  // AI reports go with the rest of this workspace's state, out of the project.
+  setReportsRoot(context.storageUri ?? context.globalStorageUri);
+  approvalsReady = loadApprovalKey(context).catch(() => undefined);
+  context.subscriptions.push(
+    // Another window made the key at the same moment as this one and stored its
+    // own after this one read: both have to sign with the one that stayed.
+    context.secrets.onDidChange((event) => {
+      if (event.key === APPROVAL_KEY_SECRET) {
+        approvalsReady = loadApprovalKey(context).catch(() => undefined);
+      }
+    }),
+  );
   void migrateShellBuckets();
 
   for (const exec of vscode.tasks.taskExecutions) {
@@ -472,6 +513,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('taskRunnerUltimate.deleteCustomTask', (node?: TreeNode) =>
       deleteCustomTask(node),
     ),
+    vscode.commands.registerCommand('taskRunnerUltimate.createAiTask', (node?: TreeNode) => createAiTask(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.editAiTask', (node?: TreeNode) => editAiTask(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.editAiPrompt', (node?: TreeNode) => editAiPrompt(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.copyAiPrompt', (node?: TreeNode) => copyAiPrompt(node)),
+    vscode.workspace.registerFileSystemProvider(PROMPT_SCHEME, promptFiles),
+    vscode.workspace.registerTextDocumentContentProvider(APPROVED_SCHEME, {
+      provideTextDocumentContent: (uri) => approvedTexts.get(uri.query) ?? '',
+    }),
     // The two eyes on a package heading, one edit to one group each, so they take
     // the row they were clicked on and nothing else. Reordering has no command of
     // its own: a heading is moved by dragging it, which is the gesture the rows
@@ -535,11 +584,14 @@ export function activate(context: vscode.ExtensionContext): void {
       // A custom task nobody has approved is left out: the workbench's own Run
       // Task list would otherwise be a way round the question `approveLaunch`
       // asks. See `clearance`.
-      provideTasks: async () =>
-        (await collectScripts())
+      provideTasks: async () => {
+        await approvalsSettled();
+        return (await collectScripts())
           .filter((script) => clearance(script) === 'approved')
-          .map((script) => buildTask(script)),
+          .map((script) => buildTask(script));
+      },
       resolveTask: async (task) => {
+        await approvalsSettled();
         const key = keyForTask(task);
         if (!key) {
           return undefined;
@@ -653,6 +705,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (event.affectsConfiguration('taskRunnerUltimate.grouping')) {
         syncGrouping();
       }
+      if (event.affectsConfiguration('taskRunnerUltimate.aiAgentPaths')) {
+        forgetAgents();
+      }
       if (event.affectsConfiguration('taskRunnerUltimate.showInStatusBar')) {
         syncStatusBar(context);
       }
@@ -687,6 +742,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   cancelInvalidate();
+  // An agent runs in a process group of its own, which outlives the window
+  // unless it is stopped here. See `AiRun`.
+  stopAllRuns();
   running.clear();
   endedExecutions.clear();
   clearHint();
@@ -1656,7 +1714,9 @@ function askTaskCommand(options: { title: string; value?: string; folder: vscode
  */
 async function writeCustomTasks(
   folder: vscode.WorkspaceFolder,
-  edit: (tasks: Array<[string, string]>) => Array<[string, string]> | string,
+  edit: (
+    tasks: Array<[string, CustomTaskValue]>,
+  ) => Array<[string, CustomTaskValue | Record<string, string>]> | string,
   written?: () => Promise<void>,
 ): Promise<boolean> {
   let refused: string | undefined;
@@ -1741,6 +1801,10 @@ async function editCustomTask(node: TreeNode | undefined): Promise<void> {
   if (node?.kind !== 'script' || node.script.kind !== 'custom') {
     return;
   }
+  if (node.script.ai) {
+    await editAiTask(node);
+    return;
+  }
   const { script } = node;
   const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
   if (!folder) {
@@ -1766,7 +1830,7 @@ async function editCustomTask(node: TreeNode | undefined): Promise<void> {
     folder,
     (tasks) =>
       tasks.some(([name]) => name === script.name)
-        ? tasks.map(([name, value]): [string, string] => [name, name === script.name ? line : value])
+        ? tasks.map(([name, value]): [string, CustomTaskValue] => [name, name === script.name ? line : value])
         : gone(script),
     () => approve(scriptRef(script), line),
   );
@@ -1810,7 +1874,7 @@ async function renameCustomTask(script: ScriptEntry): Promise<void> {
         ? gone(script)
         : tasks.some(([existing]) => existing !== script.name && existing.trim() === name)
           ? `"${name}" was added to ${CUSTOM_TASKS_FILE} while you were typing; nothing was renamed.`
-          : tasks.map(([existing, line]): [string, string] => [existing === script.name ? name : existing, line]),
+          : tasks.map(([existing, value]): [string, CustomTaskValue] => [existing === script.name ? name : existing, value]),
     // The approval moves with the rest: a rename from the tree changes a name,
     // not what runs, and that is not a reason to ask again.
     () => moveRef(from, to),
@@ -1828,8 +1892,8 @@ async function deleteCustomTask(node: TreeNode | undefined): Promise<void> {
     return;
   }
   const answer = await vscode.window.showWarningMessage(
-    `Delete the custom task "${visible(script.name)}"?`,
-    { modal: true, detail: visible(script.line ?? script.command) },
+    `Delete the ${script.ai ? 'AI' : 'custom'} task "${visible(script.name)}"?`,
+    { modal: true, detail: visible(script.ai ? promptExcerpt(script.ai.prompt) : (script.line ?? script.command)) },
     'Delete',
   );
   if (answer !== 'Delete') {
@@ -1870,6 +1934,546 @@ function gone(script: ScriptEntry): string {
   return `"${visible(script.name)}" is no longer in ${CUSTOM_TASKS_FILE}; nothing was saved.`;
 }
 
+// --- AI tasks ----------------------------------------------------------------
+
+/** One choice of a step: the value it sets, and how the picker draws it. */
+interface Choice<T> extends vscode.QuickPickItem {
+  value: T;
+}
+
+/**
+ * One step of the AI task prompts: a picker with the current value already
+ * under the cursor, so Enter keeps it — which is most of what an edit is.
+ * `undefined` is the step closed without a choice, which ends the whole flow.
+ */
+function choose<T>(options: {
+  title: string;
+  placeholder: string;
+  items: Array<Choice<T>>;
+  current?: T;
+  /** Fills the items in while the picker is already open — the agent lookup, which can take a second. */
+  refine?: Promise<Array<Choice<T>>>;
+}): Promise<T | undefined> {
+  const pick = vscode.window.createQuickPick<Choice<T>>();
+  pick.title = options.title;
+  pick.placeholder = options.placeholder;
+  pick.matchOnDescription = true;
+  const show = (items: Array<Choice<T>>) => {
+    // Replacing the items puts the cursor back on the first. Where the user has
+    // moved it since — to Codex, while the agents were still being looked for —
+    // it goes back there rather than to the current value: Enter is about to
+    // mean the one they are on.
+    const on = pick.activeItems[0]?.value;
+    const target = on !== undefined ? on : options.current;
+    pick.items = items;
+    const active = items.find((item) => item.value === target);
+    if (active) {
+      pick.activeItems = [active];
+    }
+  };
+  show(options.items);
+  let disposed = false;
+  if (options.refine) {
+    pick.busy = true;
+    void options.refine.then((items) => {
+      // The lookup can outlast the picker: dismissed before it came back.
+      if (!disposed) {
+        show(items);
+        pick.busy = false;
+      }
+    });
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    pick.onDidAccept(() => {
+      settled = true;
+      resolve(pick.selectedItems[0]?.value);
+      pick.hide();
+    });
+    pick.onDidHide(() => {
+      if (!settled) {
+        resolve(undefined);
+      }
+      disposed = true;
+      pick.dispose();
+    });
+    pick.show();
+  });
+}
+
+/**
+ * Which agent runs the prompt. Both are always offered — a task is kept in the
+ * project, and the machine it runs on may have what this one does not — but each
+ * says whether it was found here, and at which version.
+ */
+function pickAgent(title: string, current?: AiAgent): Promise<AiAgent | undefined> {
+  const item = (agent: AiAgent, description: string, detail?: string): Choice<AiAgent> => ({
+    value: agent,
+    label: AGENT_LABEL[agent],
+    description,
+    detail,
+  });
+  return choose({
+    title,
+    placeholder: 'Which agent runs the prompt?',
+    items: AI_AGENTS.map((agent) => item(agent, 'looking for it…')),
+    current,
+    refine: Promise.all(AI_AGENTS.map((agent) => findAgent(agent))).then((installs) =>
+      AI_AGENTS.map((agent, index) => {
+        const install = installs[index];
+        return install
+          ? item(agent, install.version, install.path)
+          : item(agent, 'not found on this machine', 'Install its command line, or set its path in the aiAgentPaths setting.');
+      }),
+    ),
+  });
+}
+
+/**
+ * The model, or `''` for the agent's own default — what it is configured to use
+ * when nobody names one. `undefined` is the step dismissed.
+ */
+async function pickModel(title: string, agent: AiAgent, current?: string): Promise<string | undefined> {
+  const other = '\u0000other';
+  const known = (await agentModels(agent)).filter((model) => validModel(model.name));
+  // The current one stays on the list when the agent no longer lists it, so
+  // Enter still keeps it.
+  const models = current && !known.some((model) => model.name === current) ? [...known, { name: current }] : known;
+  const picked = await choose<string>({
+    title,
+    placeholder: 'Which model?',
+    items: [
+      { value: '', label: 'Default', description: `whatever ${AGENT_LABEL[agent]} is set to use` },
+      ...models.map((model) => ({ value: model.name, label: model.name, description: model.description })),
+      { value: other, label: 'Other…', description: 'type a model name' },
+    ],
+    current: current ?? '',
+  });
+  if (picked !== other) {
+    return picked;
+  }
+  return (
+    await vscode.window.showInputBox({
+      title,
+      prompt: `A model name as ${AGENT_LABEL[agent]}'s --model takes it.`,
+      value: current,
+      validateInput: (value) =>
+        validModel(value.trim()) ? undefined : 'Letters, digits and . _ : / @ [ ] + - only, starting with a letter or digit.',
+    })
+  )?.trim();
+}
+
+/** A prompt typed in one line; a longer one is written with Edit Prompt, in an editor. */
+function askPrompt(title: string, value?: string): Thenable<string | undefined> {
+  return vscode.window.showInputBox({
+    title,
+    prompt: 'What the agent is asked to do. For a prompt of several lines, use Edit Prompt on the row once it is saved.',
+    placeHolder: 'e.g. Review the uncommitted changes and list anything that looks like a bug',
+    value,
+    validateInput: (text) =>
+      !text.trim()
+        ? 'An AI task needs a prompt.'
+        : hiddenInPrompt(text)
+          ? 'Hidden characters cannot be part of a prompt.'
+          : undefined,
+  });
+}
+
+function pickAccess(title: string, current?: AiAccess): Promise<AiAccess | undefined> {
+  return choose({
+    title,
+    placeholder: 'What may the agent do?',
+    items: AI_ACCESS.map((access) => ({
+      value: access,
+      label: `${access === 'full' ? '$(warning)' : access === 'edit' ? '$(edit)' : '$(eye)'} ${ACCESS_LABEL[access]}`,
+      detail: ACCESS_DETAIL[access],
+    })),
+    current: current ?? 'read',
+  });
+}
+
+const RESULT_DETAIL: Record<AiResult, string> = {
+  report: 'The answer is saved as a Markdown report and opened beside the editor.',
+  clipboard: 'The answer is copied to the clipboard.',
+  none: 'The answer stays in the terminal — for a task whose work is the files it changes.',
+};
+
+function pickResult(title: string, current?: AiResult): Promise<AiResult | undefined> {
+  return choose({
+    title,
+    placeholder: 'Where does the answer go?',
+    items: AI_RESULTS.map((result) => ({ value: result, label: RESULT_LABEL[result], detail: RESULT_DETAIL[result] })),
+    current: current ?? 'report',
+  });
+}
+
+const NOTIFY_DETAIL: Record<AiNotify, string> = {
+  none: 'Nothing is said when it finishes. A failure is still reported.',
+  done: 'A notification says it has finished.',
+  text: 'A notification shows the start of the answer.',
+};
+
+function pickNotify(title: string, current?: AiNotify): Promise<AiNotify | undefined> {
+  return choose({
+    title,
+    placeholder: 'What should it say when it finishes?',
+    items: AI_NOTIFY.map((notify) => ({ value: notify, label: NOTIFY_LABEL[notify], detail: NOTIFY_DETAIL[notify] })),
+    current: current ?? 'done',
+  });
+}
+
+/**
+ * Full access, said once more before it is saved. Every other answer the
+ * prompts take is the user's own and is approved as it is saved — the way a
+ * command typed into the tree is — and this one is too; the question is only
+ * there so that the last thing seen before an agent is allowed everything is
+ * what that means.
+ */
+async function confirmFullAccess(name: string): Promise<boolean> {
+  const save = 'Save';
+  const answer = await vscode.window.showWarningMessage(
+    `Save "${name}" with full access?`,
+    {
+      modal: true,
+      detail: `${ACCESS_DETAIL.full}\n\nIt will not be asked about again until its prompt, agent or access changes.`,
+    },
+    save,
+  );
+  return answer === save;
+}
+
+/** A name, an agent, a model, a prompt, the access, and what happens to the answer — asked in turn, and filed. */
+async function createAiTask(node: TreeNode | undefined): Promise<void> {
+  const folder = await customFolder(node);
+  if (!folder) {
+    return;
+  }
+  const steps = 7;
+  const name = (await askTaskName({ title: `New AI Task (1/${steps})`, taken: await customNames(folder) }))?.trim();
+  if (!name) {
+    return;
+  }
+  const title = (step: number) => `New AI Task (${step}/${steps}): ${name}`;
+  const agent = await pickAgent(title(2));
+  if (!agent) {
+    return;
+  }
+  const model = await pickModel(title(3), agent);
+  if (model === undefined) {
+    return;
+  }
+  const prompt = (await askPrompt(title(4)))?.trim();
+  if (!prompt) {
+    return;
+  }
+  const access = await pickAccess(title(5));
+  if (!access) {
+    return;
+  }
+  const result = await pickResult(title(6));
+  if (!result) {
+    return;
+  }
+  const notify = await pickNotify(title(7));
+  if (!notify) {
+    return;
+  }
+  if (access === 'full' && !(await confirmFullAccess(name))) {
+    return;
+  }
+  const task: AiTask = { agent, ...(model ? { model } : {}), prompt, access, result, notify };
+  await writeCustomTasks(
+    folder,
+    (tasks) =>
+      tasks.some(([existing]) => existing.trim() === name)
+        ? `"${name}" was added to ${CUSTOM_TASKS_FILE} while you were typing; nothing was saved.`
+        : [...tasks, [name, aiTaskValue(task)]],
+    // Made here, so seen here: every answer above was the user's own.
+    () => approve(customRef(folder, name), aiApproval(task)),
+  );
+}
+
+/**
+ * Writes an AI task back with one thing changed. The approval moves with it
+ * only when the task was approved before the change: a change made in the tree
+ * is the user's, but the rest of the task is whatever the file says, and a task
+ * that arrived by a pull has not been read by anybody yet. Changing its
+ * notification is not a reason to wave its prompt through.
+ */
+async function saveAiTask(script: ScriptEntry, next: AiTask): Promise<boolean> {
+  const folder = vscode.workspace.getWorkspaceFolder(script.manifest);
+  if (!folder || !script.ai) {
+    return false;
+  }
+  const ref = scriptRef(script);
+  const approved = clearance(script) === 'approved';
+  if (next.access === 'full' && script.ai.access !== 'full' && !(await confirmFullAccess(script.name))) {
+    return false;
+  }
+  const seen = JSON.stringify(aiTaskValue(script.ai));
+  return writeCustomTasks(
+    folder,
+    (tasks) => {
+      const now = tasks.find(([name]) => name === script.name)?.[1];
+      if (!now || typeof now === 'string') {
+        return gone(script);
+      }
+      // `next` is the task as the tree last read it with one thing changed, so
+      // a task changed in the file since then would lose that change to it.
+      if (JSON.stringify(aiTaskValue(now)) !== seen) {
+        return `"${visible(script.name)}" changed in ${CUSTOM_TASKS_FILE} while you were editing it; nothing was saved.`;
+      }
+      return tasks.map(([name, value]) => [name, name === script.name ? aiTaskValue(next) : value]);
+    },
+    approved ? () => approve(ref, aiApproval(next)) : undefined,
+  );
+}
+
+/** The parts of an AI task, each with what it is now, to pick one and change it. */
+async function editAiTask(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'script' || !node.script.ai) {
+    return;
+  }
+  const { script } = node;
+  const task = node.script.ai;
+  const title = `Edit "${visible(script.name)}"`;
+  const part = await choose<'prompt' | 'editor' | 'agent' | 'access' | 'result' | 'notify'>({
+    title,
+    placeholder: 'What to change?',
+    items: [
+      { value: 'prompt', label: '$(comment) Prompt', description: visible(task.prompt.replace(/\s+/g, ' ').slice(0, 80)) },
+      { value: 'editor', label: '$(go-to-file) Prompt in an editor', description: 'for a prompt of several lines' },
+      { value: 'agent', label: '$(hubot) Agent and model', description: aiAgentText(task) },
+      { value: 'access', label: '$(shield) Access', description: ACCESS_LABEL[task.access] },
+      { value: 'result', label: '$(output) Result', description: RESULT_LABEL[task.result] },
+      { value: 'notify', label: '$(bell) Notification', description: NOTIFY_LABEL[task.notify] },
+    ],
+  });
+  if (part === 'prompt') {
+    // A prompt of several lines would come back from a one-line box as one
+    // line, so it goes to the editor whichever was picked.
+    if (task.prompt.includes('\n')) {
+      await editAiPrompt(node);
+      return;
+    }
+    const prompt = (await askPrompt(title, task.prompt))?.trim();
+    if (prompt && prompt !== task.prompt) {
+      await saveAiTask(script, { ...task, prompt });
+    }
+  } else if (part === 'editor') {
+    await editAiPrompt(node);
+  } else if (part === 'agent') {
+    const agent = await pickAgent(title, task.agent);
+    if (!agent) {
+      return;
+    }
+    // A model is an agent's own name for it, so one picked for the other agent
+    // is not offered as the current one.
+    const model = await pickModel(title, agent, agent === task.agent ? task.model : undefined);
+    if (model === undefined) {
+      return;
+    }
+    const { model: _old, ...rest } = task;
+    await saveAiTask(script, { ...rest, agent, ...(model ? { model } : {}) });
+  } else if (part === 'access') {
+    const access = await pickAccess(title, task.access);
+    if (access && access !== task.access) {
+      await saveAiTask(script, { ...task, access });
+    }
+  } else if (part === 'result') {
+    const result = await pickResult(title, task.result);
+    if (result && result !== task.result) {
+      await saveAiTask(script, { ...task, result });
+    }
+  } else if (part === 'notify') {
+    const notify = await pickNotify(title, task.notify);
+    if (notify && notify !== task.notify) {
+      await saveAiTask(script, { ...task, notify });
+    }
+  }
+}
+
+/** Opens an AI task's prompt in an editor, where saving writes it back to the task. */
+async function editAiPrompt(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind !== 'script' || !node.script.ai) {
+    return;
+  }
+  await vscode.window.showTextDocument(promptUri(node.script), { preview: false });
+}
+
+async function copyAiPrompt(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind === 'script' && node.script.ai) {
+    await vscode.env.clipboard.writeText(node.script.ai.prompt);
+  }
+}
+
+/**
+ * The prompt the approval dialog was asked about: the whole of it, or, when the
+ * prompt has changed since it last ran, the change — the approved one on the
+ * left, the one in the file on the right.
+ */
+async function showPrompt(script: ScriptEntry, task: AiTask, previous: string | undefined): Promise<void> {
+  const current = promptUri(script);
+  if (previous === undefined || previous === task.prompt) {
+    await vscode.window.showTextDocument(current, { preview: true });
+    return;
+  }
+  const id = String(++approvedSerial);
+  approvedTexts.set(id, previous);
+  const left = vscode.Uri.from({ scheme: APPROVED_SCHEME, path: `/${promptFileName(script.name)}`, query: id });
+  await vscode.commands.executeCommand('vscode.diff', left, current, `${visible(script.name)}: last run ↔ now`);
+}
+
+/** The scheme of an AI task's prompt as an editor holds it. See `PromptFiles`, below. */
+const PROMPT_SCHEME = 'task-runner-ai-prompt';
+/** The scheme of a prompt as it was when it last ran, for the left side of a diff. */
+const APPROVED_SCHEME = 'task-runner-ai-approved';
+const approvedTexts = new Map<string, string>();
+let approvedSerial = 0;
+
+/** A task's name as the tab shows it. */
+function promptFileName(name: string): string {
+  return `${visible(name).replace(/[\\/]/g, '-')}.md`;
+}
+
+/** Where an AI task's prompt opens: its name as the tab, the file and task it belongs to as the query. */
+function promptUri(script: ScriptEntry): vscode.Uri {
+  return vscode.Uri.from({
+    scheme: PROMPT_SCHEME,
+    path: `/${promptFileName(script.name)}`,
+    query: JSON.stringify({ manifest: script.manifest.toString(), name: script.name }),
+  });
+}
+
+/**
+ * An AI task's prompt as a file an editor can open and save. A prompt is written
+ * in a JSON string, where every line break is a `\n` — the file is no place to
+ * write one by hand, and a one-line box is no place to write one at all. Here it
+ * is a Markdown document, and Save writes it back into the task.
+ *
+ * Read fresh from the file every time, and written through `writeCustomTasks`
+ * like every other change to it, so a prompt saved here is refused the same way
+ * a rename would be when the task has gone. The approval moves with the save on
+ * the terms `saveAiTask` gives.
+ */
+class PromptFiles implements vscode.FileSystemProvider {
+  private readonly changed = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
+  readonly onDidChangeFile = this.changed.event;
+  /**
+   * Each prompt that has been read, with a modification time that moves on
+   * whenever the prompt it was read as is not the prompt any more. That time is
+   * how an editor tells its buffer is stale: a save over a prompt changed
+   * elsewhere in the meantime is a conflict it asks about, not a silent loss.
+   */
+  private readonly seen = new Map<string, { prompt: string; mtime: number }>();
+
+  watch(): vscode.Disposable {
+    return new vscode.Disposable(() => undefined);
+  }
+
+  /** Has every open prompt read again: the file they come out of has changed. */
+  refresh(): void {
+    if (this.seen.size > 0) {
+      this.changed.fire([...this.seen.keys()].map((key) => ({ type: vscode.FileChangeType.Changed, uri: vscode.Uri.parse(key) })));
+    }
+  }
+
+  private version(uri: vscode.Uri, prompt: string): number {
+    const key = uri.toString();
+    const known = this.seen.get(key);
+    if (known?.prompt === prompt) {
+      return known.mtime;
+    }
+    // Later than the last one even within the same millisecond, since the
+    // editor reads only "newer" as changed.
+    const mtime = Math.max(Date.now(), (known?.mtime ?? 0) + 1);
+    this.seen.set(key, { prompt, mtime });
+    return mtime;
+  }
+
+  private async find(uri: vscode.Uri): Promise<{ folder: vscode.WorkspaceFolder; name: string; task: AiTask }> {
+    let query: { manifest?: unknown; name?: unknown };
+    try {
+      query = JSON.parse(uri.query);
+    } catch {
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+    const folder =
+      typeof query.manifest === 'string'
+        ? vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(query.manifest))
+        : undefined;
+    const name = query.name;
+    const value = folder && typeof name === 'string' ? (await readCustomTasks(folder))?.find(([key]) => key === name)?.[1] : undefined;
+    if (!folder || typeof name !== 'string' || !value || typeof value === 'string') {
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+    return { folder, name, task: value };
+  }
+
+  async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
+    const { task } = await this.find(uri);
+    return {
+      type: vscode.FileType.File,
+      ctime: 0,
+      mtime: this.version(uri, task.prompt),
+      size: Buffer.byteLength(task.prompt, 'utf8'),
+    };
+  }
+
+  async readFile(uri: vscode.Uri): Promise<Uint8Array> {
+    const { task } = await this.find(uri);
+    this.version(uri, task.prompt);
+    return Buffer.from(task.prompt, 'utf8');
+  }
+
+  async writeFile(uri: vscode.Uri, content: Uint8Array): Promise<void> {
+    const { folder, name, task } = await this.find(uri);
+    const prompt = Buffer.from(content).toString('utf8').replace(/\r\n/g, '\n').trim();
+    if (!prompt) {
+      throw vscode.FileSystemError.NoPermissions('An AI task needs a prompt; the empty one was not saved.');
+    }
+    if (hiddenInPrompt(prompt)) {
+      throw vscode.FileSystemError.NoPermissions('The prompt holds a hidden character, so it was not saved.');
+    }
+    if (prompt !== task.prompt) {
+      const ref = customRef(folder, name);
+      await approvalsReady;
+      const approved = aiCovered(task, approvedText(ref));
+      const next = { ...task, prompt };
+      const written = await writeCustomTasks(
+        folder,
+        (tasks) =>
+          tasks.some(([key, value]) => key === name && typeof value !== 'string')
+            ? tasks.map(([key, value]) => [key, key === name ? aiTaskValue(next) : value])
+            : `"${visible(name)}" is no longer in ${CUSTOM_TASKS_FILE}; nothing was saved.`,
+        approved ? () => approve(ref, aiApproval(next)) : undefined,
+      );
+      if (!written) {
+        throw vscode.FileSystemError.Unavailable(uri);
+      }
+    }
+    this.version(uri, prompt);
+  }
+
+  readDirectory(): [string, vscode.FileType][] {
+    return [];
+  }
+
+  createDirectory(uri: vscode.Uri): void {
+    throw vscode.FileSystemError.NoPermissions(uri);
+  }
+
+  delete(uri: vscode.Uri): void {
+    throw vscode.FileSystemError.NoPermissions(uri);
+  }
+
+  rename(uri: vscode.Uri): void {
+    throw vscode.FileSystemError.NoPermissions(uri);
+  }
+}
+
+const promptFiles = new PromptFiles();
+
 /** Everything filed against one script ref, filed against another instead. */
 async function moveRef(from: string, to: string): Promise<void> {
   for (const key of [FAVORITES_KEY, CONFIRM_KEY]) {
@@ -1907,9 +2511,10 @@ async function moveRef(from: string, to: string): Promise<void> {
  * So a custom task runs straight away only when the line in the file is the
  * line this machine last approved. The approval is kept in workspace storage,
  * out of the project, where nothing that can only write the repository can
- * reach it — which is the whole of its strength; there is no secret to it, and
- * none is needed. It is the line itself rather than a hash of it, so a changed
- * task can show what it was beside what it is now.
+ * reach it. It is the line itself rather than a hash of it, so a changed task
+ * can show what it was beside what it is now — signed with a key kept in
+ * secret storage, so that a write into workspace storage alone cannot approve a
+ * line either. See `approval.ts` for how far that reaches on each platform.
  *
  * A line typed in the tree is approved as it is saved: Create and Edit Command
  * never ask. What asks is a line that reached the file some other way.
@@ -1923,8 +2528,112 @@ function approvals(): Record<string, string> {
   return storedMap(APPROVALS_KEY);
 }
 
+/**
+ * The key approvals are signed with, once it has been read out of secret
+ * storage. Until then nothing reads as approved — every path that starts a
+ * task waits on `approvalsReady` first, and the tree is repainted when it lands.
+ */
+let approvalKey: Uint8Array | undefined;
+let approvalsReady: Promise<void> = Promise.resolve();
+
+/**
+ * `approvalsReady`, waited on for a moment at most. Reading the key can wait on
+ * the user — a locked keyring asks for its password — and the list and the Run
+ * Task list should not stay empty while it does; drawn before the key, the
+ * custom tasks show as not approved and are repainted when it lands.
+ */
+function approvalsSettled(timeout = 1500): Promise<void> {
+  return Promise.race([approvalsReady, new Promise<void>((resolve) => setTimeout(resolve, timeout))]);
+}
+
+/** The secret the key is kept under, and the prefix of the per-workspace note that old approvals were signed. */
+const APPROVAL_KEY_SECRET = 'approvalKey';
+const APPROVALS_SIGNED_SECRET = 'approvalsSigned';
+
+/**
+ * Reads the signing key, making it the first time, and signs this workspace's
+ * approvals from before signing existed — once, the first time the workspace
+ * is opened with a key. Whether that has happened is noted in secret storage as
+ * well: noted in workspace storage, a write that removed the note would have
+ * the next start sign whatever had been put there beside it.
+ *
+ * Where secret storage throws rather than answers, the key falls back to the
+ * extension's global storage. That is the protection approvals had before they
+ * were signed, and no less.
+ */
+async function loadApprovalKey(context: vscode.ExtensionContext): Promise<void> {
+  let secure = true;
+  let secret: string | undefined;
+  try {
+    secret = await context.secrets.get(APPROVAL_KEY_SECRET);
+    if (!secret) {
+      await context.secrets.store(APPROVAL_KEY_SECRET, newApprovalKey());
+      // Read back rather than trusted: another window making its key at the
+      // same moment may have stored its own last, and the two must agree.
+      secret = await context.secrets.get(APPROVAL_KEY_SECRET);
+    }
+  } catch {
+    secret = undefined;
+  }
+  if (!secret) {
+    secure = false;
+    secret = context.globalState.get<string>(APPROVAL_KEY_SECRET);
+    if (!secret) {
+      secret = newApprovalKey();
+      await context.globalState.update(APPROVAL_KEY_SECRET, secret);
+    }
+  }
+  const previous = approvalKey;
+  approvalKey = Buffer.from(secret, 'base64');
+  // The key changed under this window: another window's won the race to make
+  // it, or secret storage came back after a start that fell back. What this
+  // window signed with the old one is carried over rather than lost.
+  if (previous && !Buffer.from(previous).equals(Buffer.from(approvalKey))) {
+    await storage?.update(APPROVALS_KEY, resignApprovals(previous, approvalKey, approvals()));
+  }
+
+  const workspace = context.storageUri?.toString() ?? 'no-workspace';
+  const note = `${APPROVALS_SIGNED_SECRET}:${workspace}`;
+  let signed: string | undefined;
+  try {
+    signed = secure ? await context.secrets.get(note) : context.workspaceState.get<string>(note);
+  } catch {
+    // Not knowing is not "not yet": an unanswered question must not sign
+    // whatever is in storage.
+    signed = 'unknown';
+  }
+  if (!signed) {
+    // Storage that already holds a signed approval has been written by this
+    // version, so an unsigned value in it came from somewhere else — including
+    // the copy VS Code makes of a workspace's storage when it is saved under a
+    // new name, which starts without this note.
+    const values = Object.values(approvals());
+    if (values.some((value) => !isSigned(value)) && !values.some(isSigned)) {
+      await storage?.update(APPROVALS_KEY, signLegacyApprovals(approvalKey, approvals()));
+    }
+    if (secure) {
+      await Promise.resolve(context.secrets.store(note, '1')).catch(() => undefined);
+    } else {
+      await context.workspaceState.update(note, '1');
+    }
+  }
+  repaint();
+}
+
+/**
+ * What a task's approval approved, or `undefined` when it has none — none
+ * stored, or one whose signature does not hold, which is the same thing.
+ */
+function approvedText(ref: string): string | undefined {
+  return verifyApproval(approvalKey, approvals()[ref]);
+}
+
 async function approve(ref: string, line: string): Promise<void> {
-  await storage?.update(APPROVALS_KEY, { ...approvals(), [ref]: line });
+  await approvalsReady;
+  if (!approvalKey) {
+    return;
+  }
+  await storage?.update(APPROVALS_KEY, { ...approvals(), [ref]: signApproval(approvalKey, line) });
 }
 
 /**
@@ -1969,13 +2678,31 @@ function visible(text: string): string {
  * a hidden character, which is never run whatever has been approved.
  */
 function clearance(script: ScriptEntry): 'approved' | 'unapproved' | 'blocked' {
+  if (script.ai) {
+    if (HIDDEN_CHARACTERS.test(script.name) || hiddenInPrompt(script.ai.prompt)) {
+      return 'blocked';
+    }
+    return aiCovered(script.ai, approvedText(scriptRef(script))) ? 'approved' : 'unapproved';
+  }
   if (script.kind !== 'custom' || script.line === undefined) {
     return 'approved';
   }
   if (HIDDEN_CHARACTERS.test(script.line) || HIDDEN_CHARACTERS.test(script.name)) {
     return 'blocked';
   }
-  return approvals()[scriptRef(script)] === script.line ? 'approved' : 'unapproved';
+  return approvedText(scriptRef(script)) === script.line ? 'approved' : 'unapproved';
+}
+
+/**
+ * Whether a prompt holds a character nobody reading it would see. A prompt is
+ * text with lines, so its line breaks and tabs are its own; everything else
+ * `HIDDEN_CHARACTERS` catches is caught here too, and for a sharper reason than
+ * in a command line. The tag characters and zero-width spaces that draw as
+ * nothing in a dialog are read by a model as text — an instruction written in
+ * them is one the user approves without being shown it.
+ */
+function hiddenInPrompt(prompt: string): boolean {
+  return HIDDEN_CHARACTERS.test(prompt.replace(/[\n\t]/g, ' '));
 }
 
 /**
@@ -1996,6 +2723,11 @@ function shownLine(line: string): string {
  * dialog turns down should leave the old run up, not take it down for nothing.
  */
 async function approveLaunch(script: ScriptEntry): Promise<boolean> {
+  // A start in the first moment of a window is not asked about for want of a key.
+  await approvalsReady;
+  if (script.ai) {
+    return approveAiLaunch(script, script.ai);
+  }
   const state = clearance(script);
   if (state === 'approved' || script.line === undefined) {
     return true;
@@ -2019,7 +2751,7 @@ async function approveLaunch(script: ScriptEntry): Promise<boolean> {
     }
     return false;
   }
-  const before = approvals()[scriptRef(script)];
+  const before = approvedText(scriptRef(script));
   const where = vscode.workspace.getWorkspaceFolder(script.manifest)?.name;
   const run = 'Run';
   const answer = await vscode.window.showWarningMessage(
@@ -2049,6 +2781,110 @@ async function approveLaunch(script: ScriptEntry): Promise<boolean> {
   await approve(scriptRef(script), script.line);
   repaint();
   return true;
+}
+
+/**
+ * The same question for an AI task, asked once for a task that was not made in
+ * this tree and again whenever its agent, its prompt or its access has changed
+ * since it last ran — and not when its access has only narrowed. See
+ * `aiCovered` for what an approval covers, and `aiApproval` for what it holds.
+ *
+ * The dialog says the access in words and shows the start of the prompt; a
+ * prompt runs to pages where a command line runs to one, so the whole of it, or
+ * what changed in it, opens in an editor from here.
+ */
+async function approveAiLaunch(script: ScriptEntry, task: AiTask): Promise<boolean> {
+  const state = clearance(script);
+  if (state === 'approved') {
+    return true;
+  }
+  const open = 'Open File';
+  if (state === 'blocked') {
+    const answer = await vscode.window.showWarningMessage(
+      `"${visible(script.name)}" will not run.`,
+      {
+        modal: true,
+        detail: [
+          'Its name or prompt holds a hidden character — one that draws as nothing here and is still read by the agent, which is how an instruction is slipped past whoever approves a prompt. Nothing typed into this tree can hold one, so it was written some other way.',
+          '',
+          visible(promptExcerpt(task.prompt)),
+        ].join('\n'),
+      },
+      open,
+    );
+    if (answer === open) {
+      await openManifest({ kind: 'script', script });
+    }
+    return false;
+  }
+  const before = approvedText(scriptRef(script));
+  const changes = aiChanges(task, before);
+  const previous = approvedPrompt(before);
+  const where = vscode.workspace.getWorkspaceFolder(script.manifest)?.name;
+  const run = 'Run';
+  const show = previous !== undefined && previous !== task.prompt ? 'Show Changes' : 'Show Prompt';
+  const full = task.access === 'full' ? ' with full access' : '';
+  const answer = await vscode.window.showWarningMessage(
+    changes.length === 0
+      ? `Run the AI task "${script.name}"${full}? It has not run here before.`
+      : `"${script.name}" has changed since you last ran it.`,
+    {
+      modal: true,
+      detail: [
+        ...(changes.length > 0 ? [`Changed: ${changes.join(', ')}.`, ''] : []),
+        `${aiAgentText(task)} · ${ACCESS_LABEL[task.access]}: ${ACCESS_DETAIL[task.access]}`,
+        '',
+        'Prompt:',
+        promptExcerpt(task.prompt),
+        '',
+        `Runs in ${where ?? 'the workspace folder'}. Once run, it is not asked about again until its prompt, agent or access changes.`,
+      ].join('\n'),
+    },
+    run,
+    show,
+    open,
+  );
+  if (answer === show) {
+    await showPrompt(script, task, previous);
+    return false;
+  }
+  if (answer === open) {
+    await openManifest({ kind: 'script', script });
+    return false;
+  }
+  if (answer !== run) {
+    return false;
+  }
+  await approve(scriptRef(script), aiApproval(task));
+  repaint();
+  return true;
+}
+
+/** The agent of a task, and its model when it names one. */
+function aiAgentText(task: AiTask): string {
+  return task.model ? `${AGENT_LABEL[task.agent]} (${task.model})` : AGENT_LABEL[task.agent];
+}
+
+/**
+ * The start of a prompt, short enough for a dialog: a dozen lines and a
+ * thousand characters at most, with what was left out counted, so a prompt is
+ * never taken to end where the dialog stopped showing it.
+ */
+function promptExcerpt(prompt: string): string {
+  const lines = prompt.split('\n');
+  // A run of tabs is said, as a run of spaces is: drawn, it pushes the rest of
+  // the line out of the dialog the way spaces would.
+  let shown = lines
+    .slice(0, 12)
+    .map((line) => shownLine(line).replace(/\t+/g, (run) => (run.length > 1 ? ` [${run.length} tabs] ` : '    ')))
+    .join('\n');
+  if (shown.length > 1000) {
+    shown = `${shown.slice(0, 999)}…`;
+  }
+  const rest = lines.length - Math.min(lines.length, 12);
+  return rest > 0 || shown.endsWith('…')
+    ? `${shown}\n… ${rest > 0 ? `and ${rest} more ${rest === 1 ? 'line' : 'lines'}` : 'and more'}.`
+    : shown;
 }
 
 // --- row colours -------------------------------------------------------------
@@ -3348,6 +4184,12 @@ async function showMenu(): Promise<void> {
       run: () => createCustomTask(undefined),
     },
     {
+      label: '$(sparkle) Create AI task',
+      description: 'a prompt for Claude Code or Codex',
+      detail: `Kept in ${CUSTOM_TASKS_FILE} beside the custom tasks, with the access it runs with.`,
+      run: () => createAiTask(undefined),
+    },
+    {
       label: '$(refresh) Refresh scripts',
       description: 'read every manifest again',
       run: refreshScripts,
@@ -4328,6 +5170,8 @@ function createTree(): vscode.Disposable[] {
     getTreeItem: treeItemFor,
     getChildren: async (node) => {
       if (!node) {
+        // So the first paint does not draw every approved task with a shield.
+        await approvalsSettled();
         return buildTreeRoots(await listScripts());
       }
       return node.kind === 'group' && !isFileItem(node) ? node.children : [];
@@ -5224,7 +6068,9 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     shownText(node.script, commandFor(node.script)),
     node.script.location,
     ...(needsConfirmation(node.script) ? ['Asks before it starts or stops.'] : []),
-    ...(cleared === 'unapproved' ? ['Changed outside this tree — shows the command and asks before it runs.'] : []),
+    ...(cleared === 'unapproved'
+      ? [`Changed outside this tree — shows the ${node.script.ai ? 'prompt and access' : 'command'} and asks before it runs.`]
+      : []),
     ...(cleared === 'blocked' ? ['Holds a line break or a hidden character, and will not run.'] : []),
   ].join('\n');
   const tint = nodeColor(node);
@@ -5272,7 +6118,16 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // because that one is matched with a `$` anchor — see below. A custom task
     // is a third kind: its line is ours to edit and delete, and it can be typed
     // into a terminal the way a shell row is.
-    node.script.kind === 'shell' ? 'shell' : node.script.kind === 'custom' ? 'custom' : 'task',
+    //
+    // An AI task is a fourth: edited and deleted like a custom task, but it has
+    // no command line to type into a terminal or copy, and a prompt instead.
+    node.script.kind === 'shell'
+      ? 'shell'
+      : node.script.ai
+        ? 'ai'
+        : node.script.kind === 'custom'
+          ? 'custom'
+          : 'task',
     // The last axis, and absent altogether on a row whose file the tree draws as
     // one item — which is the whole of how neither half of the toggle reaches
     // one. Both clauses that offer it end in `:confirm$` or `:noconfirm$`, so a
@@ -5634,7 +6489,9 @@ function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string, up = fa
   if (isRunning) {
     return runningIcon();
   }
-  const category = categoryFor(script);
+  // An AI task's dimmed text is its prompt, and a prompt that mentions tests is
+  // not a test runner: it takes no category, and the sparkle instead of `play`.
+  const category = script.ai ? undefined : categoryFor(script);
   // An icon the user picked wins over the category's for the same reason the
   // colour does: the category guessed, this one was asked for by name. The
   // spinner still wins over both — a running row is answering a different
@@ -5644,7 +6501,7 @@ function iconFor(script: ScriptEntry, isRunning: boolean, tint?: string, up = fa
   // a deployment before it is a shell script, and the rules that read the name
   // say the more useful of the two things. What it replaces is the `play`
   // triangle every unmatched row used to wear — see `SHELL_ICONS`.
-  const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? shellIcon(script) ?? 'play';
+  const glyph = storedIcon(scriptRef(script)) ?? category?.icon ?? (script.ai ? 'sparkle' : shellIcon(script)) ?? 'play';
   const colored = vscode.workspace.getConfiguration('taskRunnerUltimate').get<boolean>('colorIcons', true);
   // Containers of this row's are up, but nothing of ours is running: the row
   // keeps its own glyph and takes the running colour, which says "this is alive"
@@ -6654,6 +7511,11 @@ async function copyCommandOf(node: TreeNode | undefined): Promise<void> {
  * argument stops being one.
  */
 function promptLine(script: ScriptEntry, outcome: string): string | undefined {
+  // An AI task runs no line a terminal could be handed; its menu offers its
+  // prompt instead, and this is the guard for a command that reaches it anyway.
+  if (script.ai) {
+    return undefined;
+  }
   const line = terminalLine(script);
   if (clearance(script) === 'blocked' || (line !== undefined && HIDDEN_CHARACTERS.test(line))) {
     void vscode.window.showWarningMessage(
@@ -7143,7 +8005,7 @@ function scriptItem(script: ScriptEntry, inFavorites: boolean): Item {
       ? 'error'
       : cleared === 'unapproved'
         ? 'shield'
-        : storedIcon(scriptRef(script)) ?? categoryFor(script)?.icon ?? 'play';
+        : storedIcon(scriptRef(script)) ?? (script.ai ? 'sparkle' : categoryFor(script)?.icon) ?? 'play';
   // An icon out of the file icon theme carries over too, and here it has to be
   // the picture itself: a quick pick row has no resource behind it for the
   // workbench to resolve a `ThemeIcon.File` against, the way a tree row does. A
@@ -7248,6 +8110,13 @@ async function stopExecution(execution: vscode.TaskExecution): Promise<boolean> 
   // below sees that ending; the rejection itself has nothing to add.
   Promise.resolve(execution.terminate()).catch(() => undefined);
   const stopped = await ended;
+  // An AI task's end is its terminal going, which comes before its agent has
+  // exited. A restart that went on at that point would start a second agent on
+  // the same files while the first one was still in them.
+  const key = stopped ? keyForTask(execution.task) : undefined;
+  if (key) {
+    await agentsStopped(key);
+  }
 
   if (!stopped) {
     void vscode.window.showWarningMessage(
@@ -7362,9 +8231,14 @@ function buildTask(script: ScriptEntry, reveal = true, verb?: string): vscode.Ta
     TASK_SOURCE,
     // A custom task is a command line and goes to the shell whole, as typed —
     // see `ScriptEntry.line`. Everything else is an argv, quoted word by word.
-    script.line !== undefined
-      ? new vscode.ShellExecution(script.line, { cwd: script.cwd.fsPath })
-      : executionFor(launchArgv(script), script.cwd.fsPath),
+    //
+    // An AI task is neither: its agent is started and watched by `AiRun`, inside
+    // a terminal the task system still owns, so Stop and the running count treat
+    // it as any other task.
+    aiExecution(script) ??
+      (script.line !== undefined
+        ? new vscode.ShellExecution(script.line, { cwd: script.cwd.fsPath })
+        : executionFor(launchArgv(script), script.cwd.fsPath)),
   );
   task.presentationOptions = {
     reveal: reveal ? vscode.TaskRevealKind.Always : vscode.TaskRevealKind.Never,
@@ -7375,6 +8249,16 @@ function buildTask(script: ScriptEntry, reveal = true, verb?: string): vscode.Ta
     showReuseMessage: false,
   };
   return task;
+}
+
+/** How an AI task runs, or `undefined` for every other row. */
+function aiExecution(script: ScriptEntry): vscode.CustomExecution | undefined {
+  const task = script.ai;
+  if (!task) {
+    return undefined;
+  }
+  const request = { key: script.key, name: script.name, task, cwd: script.cwd.fsPath };
+  return new vscode.CustomExecution(async () => new AiRun(request));
 }
 
 /**

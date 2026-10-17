@@ -14,9 +14,9 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-// The ignore rules and the TOML reader are modules of their own that touch
-// nothing, so each is run bare once and handed to every harness as what
-// `./gitignore` and `./toml` resolve to.
+// The ignore rules, the TOML reader and the AI task reader are modules of their
+// own that touch nothing, so each is run bare once and handed to every harness
+// as what `./gitignore`, `./toml` and `./aiTask` resolve to.
 const bare = (file) => {
   const text = fs.readFileSync(path.join(__dirname, '../src', file), 'utf8');
   const context = vm.createContext({ exports: {} });
@@ -29,6 +29,7 @@ const bare = (file) => {
 };
 const gitignore = bare('gitignore.ts');
 const toml = bare('toml.ts');
+const aiTask = bare('aiTask.ts');
 
 /** A URI as much as the scan ever asks one to be. */
 function uri(at) {
@@ -109,7 +110,7 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
     // excludes file is looked for where the test says the home directory is —
     // never in the home directory of whoever runs the suite.
     process: Object.create(process, { env: { value: env } }),
-    require: (name) => (name === 'vscode' ? vscode : name === 'path' ? path : name === './gitignore' ? gitignore : name === './toml' ? toml : {}),
+    require: (name) => (name === 'vscode' ? vscode : name === 'path' ? path : name === './gitignore' ? gitignore : name === './toml' ? toml : name === './aiTask' ? aiTask : {}),
   });
   vm.runInContext(
     compiled +
@@ -1472,6 +1473,60 @@ test('what the reader skips is still in the file after the tree writes it', asyn
     ['deploy', { cmd: 'x' }],
     ['lint', 'make lint'],
   ]);
+});
+
+test('an AI task is an object in the same map, and a wrong one is not a task', () => {
+  const { parseCustomTasks } = harness();
+  const text = JSON.stringify({
+    tasks: {
+      build: 'make',
+      review: { agent: 'claude', model: 'sonnet', prompt: 'Review the diff', access: 'full', result: 'clipboard', notify: 'text' },
+      // Only the agent and the prompt are required; the rest fall back to the safest reading.
+      short: { agent: 'codex', prompt: 'line one\r\nline two' },
+      typo: { agent: 'claude', prompt: 'x', access: 'ful' },
+      flag: { agent: 'claude', prompt: 'x', model: '--dangerously-skip-permissions' },
+      stranger: { agent: 'gemini', prompt: 'x' },
+      empty: { agent: 'claude', prompt: '   ' },
+    },
+  });
+  assert.deepEqual(plain(parseCustomTasks(text)), [
+    ['build', 'make'],
+    ['review', { agent: 'claude', model: 'sonnet', prompt: 'Review the diff', access: 'full', result: 'clipboard', notify: 'text' }],
+    ['short', { agent: 'codex', prompt: 'line one\nline two', access: 'read', result: 'report', notify: 'done' }],
+  ]);
+});
+
+test('an AI task the tree did not touch is written back as the file had it', async () => {
+  const review = { agent: 'claude', prompt: 'Review', note: 'kept, though nothing reads it' };
+  const h = harness({ found: { [CUSTOM]: JSON.stringify({ tasks: { review, build: 'make' } }) } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  // A rename moves it whole; a change the tree makes writes it out afresh, with
+  // the keys that are not a task's own carried over — and a task key the change
+  // dropped, such as a model set back to Default, staying dropped.
+  await h.editCustomTasks(folder, (tasks) => tasks.map(([name, value]) => [name === 'review' ? 'check' : name, value]));
+  assert.deepEqual(JSON.parse(h.written[CUSTOM]).tasks, { check: review, build: 'make' });
+  const modelled = harness({ found: { [CUSTOM]: JSON.stringify({ tasks: { review: { ...review, model: 'opus' } } }) } });
+  await modelled.editCustomTasks(folder, (tasks) =>
+    tasks.map(([name, value]) => [name, name === 'review' ? { agent: 'codex', prompt: 'Review' } : value]),
+  );
+  assert.deepEqual(JSON.parse(modelled.written[CUSTOM]).tasks.review, {
+    agent: 'codex',
+    prompt: 'Review',
+    note: 'kept, though nothing reads it',
+  });
+});
+
+test('the scan reads an AI task as a row with its task on it and no command line', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    found: { [CUSTOM]: JSON.stringify({ tasks: { review: { agent: 'claude', prompt: 'Review\nthe diff', access: 'edit' } } }) },
+  });
+  const [row] = await h.collectScripts();
+  assert.equal(row.name, 'review');
+  assert.equal(row.line, undefined);
+  assert.equal(row.ai.access, 'edit');
+  assert.equal(row.command, 'Claude Code · Edit files · Review the diff');
 });
 
 test('a `tasks` that is not an object is refused, not replaced', async () => {

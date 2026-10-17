@@ -12,9 +12,18 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-function harness() {
+function harness({ agentExit } = {}) {
   const listeners = new Set();
   const launches = [];
+  // The agent processes of AI task runs, which outlive their task's end event:
+  // what a stop waits on, by row key, before it reports the run stopped.
+  const agentWaits = [];
+  const ai = {
+    agentsStopped: async (key) => {
+      agentWaits.push(key);
+      await agentExit?.(key);
+    },
+  };
   const tasks = {
     taskExecutions: [],
     onDidEndTask(listener) {
@@ -29,7 +38,7 @@ function harness() {
   const repaints = [];
   const context = vm.createContext({
     exports: {}, setTimeout, clearTimeout, launches, repaints,
-    require: (name) => name === 'vscode' ? vscode : name === 'path' ? path : {},
+    require: (name) => name === 'vscode' ? vscode : name === 'path' ? path : name === './ai' ? ai : {},
   });
   vm.runInContext(compiled + `
     onStateChanged = () => repaints.push(1);
@@ -55,7 +64,7 @@ function harness() {
     };
     return run;
   }
-  return { ...api, vscode, tasks, launches, execution, listeners, repaints };
+  return { ...api, vscode, tasks, launches, execution, listeners, repaints, agentWaits };
 }
 
 test('restart discards an absent execution and starts the script', async () => {
@@ -104,6 +113,25 @@ test('restart uses the current handle and waits for its end before launching', a
   assert.deepEqual(h.launches, [stale.task]);
   assert.equal(h.tasks.taskExecutions.length, 0);
   assert.equal(h.listeners.size, 0);
+});
+
+test('a restart waits for the old run\'s agent to exit, not only for its task to end', async () => {
+  // An AI task's end event is its terminal going; its agent may still be in the
+  // files for a moment after. The relaunch waits until it has let go.
+  let release;
+  const exited = new Promise((resolve) => (release = resolve));
+  const h = harness({ agentExit: () => exited });
+  const run = h.execution();
+  h.tasks.taskExecutions = [run];
+  const script = { key: 'dev' };
+  h.running.set('dev', run);
+  const restarting = h.restartNode({ kind: 'script', script }, false);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(h.agentWaits, ['dev']);
+  assert.equal(h.launches.length, 0);
+  release();
+  await restarting;
+  assert.deepEqual(h.launches, [script]);
 });
 
 test('a stale row is idle when deciding whether a click should start it', () => {

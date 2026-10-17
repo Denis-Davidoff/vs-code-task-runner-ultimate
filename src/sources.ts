@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { excludesFileOf, ignoredBy, IgnoreFile, IgnoreRule, parseIgnore } from './gitignore';
+import { AI_FIELDS, AiTask, aiDescription, parseAiTask } from './aiTask';
 import { parseToml, tomlTable, tomlTables } from './toml';
 
 /**
@@ -546,6 +547,12 @@ export interface ScriptEntry {
    * `$VAR` included, and quoting it would run nothing they wrote.
    */
   line?: string;
+  /**
+   * The prompt, agent and rights of a custom task that is an AI task rather
+   * than a command line. Such a row has no `line` and no `argv`: what runs is
+   * the agent, built from this at launch. See `aiTask.ts`.
+   */
+  ai?: AiTask;
 }
 
 /** What a parser hands back for one manifest. */
@@ -3453,9 +3460,32 @@ interface CustomTasksText {
   malformed: boolean;
 }
 
-/** Whether a member of `tasks` is a task: a name, and a command line to run. */
-function isTask(entry: [string, unknown]): entry is [string, string] {
-  return entry[0].trim().length > 0 && typeof entry[1] === 'string' && entry[1].trim().length > 0;
+/**
+ * What a custom task is in the file: a command line, or an AI task's object.
+ * The second is handed around parsed, and written back as it was found unless
+ * the tree changed it — see `editCustomTasks`.
+ */
+export type CustomTaskValue = string | AiTask;
+
+/** A member of `tasks` read as a task, or `undefined` when it is not one. */
+function taskValue(entry: [string, unknown]): CustomTaskValue | undefined {
+  if (!entry[0].trim()) {
+    return undefined;
+  }
+  const value = entry[1];
+  return typeof value === 'string' ? (value.trim() ? value : undefined) : parseAiTask(value);
+}
+
+/** The members of `tasks` that are tasks — a name, and a command line or an AI task — parsed. */
+function tasksOf(members: Array<[string, unknown]>): Array<[string, CustomTaskValue]> {
+  const tasks: Array<[string, CustomTaskValue]> = [];
+  for (const member of members) {
+    const value = taskValue(member);
+    if (value !== undefined) {
+      tasks.push([member[0], value]);
+    }
+  }
+  return tasks;
 }
 
 /**
@@ -3502,12 +3532,12 @@ function readCustomTasksText(text: string): CustomTasksText | undefined {
  * one hand-edited mistake does not take its neighbours down with it — and it is
  * kept, not dropped, when the tree next writes the file: see `editCustomTasks`.
  */
-export function parseCustomTasks(text: string): Array<[string, string]> | undefined {
+export function parseCustomTasks(text: string): Array<[string, CustomTaskValue]> | undefined {
   const file = readCustomTasksText(text);
   // A `tasks` that is not an object is a file the writer refuses, so it is not
   // an emptied list either: read as one, it would have the prune forget every
   // star and approval of the folder's tasks over one mistyped bracket.
-  return file && !file.malformed ? file.members.filter(isTask) : undefined;
+  return file && !file.malformed ? tasksOf(file.members) : undefined;
 }
 
 /**
@@ -3535,7 +3565,9 @@ async function customTasksText(
  * Read fresh, for the prompts and the checks that must not act on a scan that
  * is already behind the file.
  */
-export async function readCustomTasks(folder: vscode.WorkspaceFolder): Promise<Array<[string, string]> | undefined> {
+export async function readCustomTasks(
+  folder: vscode.WorkspaceFolder,
+): Promise<Array<[string, CustomTaskValue]> | undefined> {
   const file = await customTasksText(customTasksFile(folder));
   if (file.state === 'absent') {
     return [];
@@ -3562,6 +3594,12 @@ export async function readCustomTasks(folder: vscode.WorkspaceFolder): Promise<A
  * the members around it keep their neighbours. A skipped member whose name a
  * task now takes is the one thing given up: the name is the task's.
  *
+ * An AI task `edit` hands back as it was given — the same object — is written
+ * back as the file had it, keys the reader does not know included. One the tree
+ * changed is written out afresh, from `aiTaskValue`, with those same unknown
+ * keys carried over after it: a `"$comment"` on a task outlives a change to its
+ * access.
+ *
  * Comments do not survive, which is the price of writing the file back rather
  * than patching its text; the tree is the way these are meant to be edited, and
  * a file edited by hand is still read, comments and all, until the tree next
@@ -3576,7 +3614,7 @@ export async function readCustomTasks(folder: vscode.WorkspaceFolder): Promise<A
  */
 export async function editCustomTasks(
   folder: vscode.WorkspaceFolder,
-  edit: (tasks: Array<[string, string]>) => Array<[string, string]> | undefined,
+  edit: (tasks: Array<[string, CustomTaskValue]>) => Array<[string, CustomTaskValue | Record<string, string>]> | undefined,
 ): Promise<string | undefined> {
   const file = customTasksFile(folder);
   const found = await customTasksText(file);
@@ -3593,19 +3631,30 @@ export async function editCustomTasks(
   if (current.malformed) {
     throw new Error(`"tasks" in ${CUSTOM_TASKS_FILE} is not an object. Fix it by hand, then try again.`);
   }
-  const next = edit(current.members.filter(isTask).map(([name, line]): [string, string] => [name, line]));
+  const tasks = tasksOf(current.members);
+  // The value each parsed AI task was read from, so one handed back untouched
+  // is written as it was rather than as the parser understood it.
+  const raw = new Map<unknown, unknown>();
+  for (const member of current.members) {
+    const found = tasks.find(([name]) => name === member[0]);
+    if (found && typeof found[1] !== 'string') {
+      raw.set(found[1], member[1]);
+    }
+  }
+  const next = edit(tasks)?.map(([name, value]): [string, unknown] => [name, raw.has(value) ? raw.get(value) : value]);
   if (!next) {
     return undefined;
   }
 
   const lines = new Map(next);
-  const known = new Set(current.members.filter(isTask).map(([name]) => name));
+  const known = new Set(tasks.map(([name]) => name));
   const incoming = next.filter(([name]) => !known.has(name));
   const members: Array<[string, unknown]> = [];
   for (const member of current.members) {
-    if (isTask(member)) {
+    if (taskValue(member) !== undefined) {
       const kept = lines.get(member[0]);
-      const task: [string, string] | undefined = kept !== undefined ? [member[0], kept] : incoming.shift();
+      const task: [string, unknown] | undefined =
+        kept !== undefined ? [member[0], withUnknownKeys(kept, member[1])] : incoming.shift();
       if (task) {
         members.push(task);
       }
@@ -3621,6 +3670,21 @@ export async function editCustomTasks(
   await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, path.posix.dirname(CUSTOM_TASKS_FILE)));
   await vscode.workspace.fs.writeFile(file, Buffer.from(body, 'utf8'));
   return body;
+}
+
+/**
+ * A rewritten AI task with the keys of the object it replaces that are not an AI
+ * task's own put back after it. Anything that is not two objects is left as it
+ * is: a command line has no keys to keep.
+ */
+function withUnknownKeys(next: unknown, before: unknown): unknown {
+  const isObject = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+  if (next === before || !isObject(next) || !isObject(before)) {
+    return next;
+  }
+  const extra = Object.entries(before).filter(([key]) => !AI_FIELDS.includes(key) && !(key in next));
+  return extra.length > 0 ? { ...next, ...Object.fromEntries(extra) } : next;
 }
 
 /**
@@ -3770,12 +3834,13 @@ async function collectCustomTasks(): Promise<{ entries: ScriptEntry[]; blank: vs
       blank.push(manifest);
       continue;
     }
-    for (const [name, line] of tasks) {
+    for (const [name, value] of tasks) {
       entries.push({
         key: scriptKey(manifest.toString(), name),
         name,
-        command: line.replace(/\s+/g, ' ').trim(),
-        line: line.trim(),
+        ...(typeof value === 'string'
+          ? { command: value.replace(/\s+/g, ' ').trim(), line: value.trim() }
+          : { command: aiDescription(value), ai: value }),
         manifest,
         kind: 'custom',
         cwd: folder.uri,
@@ -4032,7 +4097,7 @@ export function launchArgv(script: ScriptEntry): string[] {
 
 /** The same command as a person reads it: the row's tooltip and the picker. */
 export function commandFor(script: ScriptEntry): string {
-  return script.line ?? launchArgv(script).map(displayArg).join(' ');
+  return script.line ?? (script.ai ? script.command : launchArgv(script).map(displayArg).join(' '));
 }
 
 /**

@@ -59,7 +59,8 @@ monorepo.
 - **Add to Terminal** — right-click a shell row and a new terminal opens with its command line
   *typed but not run*, so a script can be given the arguments the tree has no way to ask for.
 - **Copy Command** — right-click a script row, a compose file or a Dockerfile to put the command line
-  it runs on the clipboard, quoted for your shell. A line holding a line break or a hidden character
+  it runs on the clipboard, quoted for your shell. An [AI task](#ai-tasks) runs no command line, and
+  offers **Copy Prompt** in its place. A line holding a line break or a hidden character
   is not copied, since pasting it would run more than the line shows, and neither is one that needs
   quoting in a shell [it does not know how to quote for](#shell-scripts).
 - **Jump to where a task is written** — right-click → **Go to Script Definition** opens the manifest
@@ -547,15 +548,142 @@ An unapproved task is also left out of the workbench's own **Run Task** list, wh
 a way round the question.
 
 Approvals are kept in [workspace storage](#where-list-customizations-are-stored), out of the project,
-where nothing that can only write the repository reaches them — that is all their strength rests on.
-They are the command itself rather than a hash of it, which is what lets a changed task show the old
-line. A rename made in the tree carries the approval to the new name, a task deleted from the file
+where nothing that can only write the repository reaches them. They are the command itself rather
+than a hash of it, which is what lets a changed task show the old line.
+
+Workspace storage is still a file in your profile, though, which another program or extension could
+write into. So each approval is **signed**: stored with an HMAC-SHA256 under a random 32-byte key that
+is made on first start and kept in VS Code's secret storage. VS Code keeps secrets encrypted, with
+the encryption key held by the operating system — the Keychain on macOS, DPAPI on Windows, the
+Secret Service keyring on Linux. An approval whose signature does not match what it says counts as
+no approval, so a task approved that way asks as a new one would.
+
+How much that adds depends on the platform. On macOS another program reading the key out of the
+Keychain needs your permission. On Windows, DPAPI hands the key to any program running as you, and on
+Linux without a keyring VS Code falls back to a weaker store of its own — there the signature stops a
+stray write to workspace storage, not a program set on forging one. If secret storage cannot be used
+at all, the key falls back to the extension's global storage: the protection approvals had before
+they were signed, and no less.
+
+Approvals made before signing existed are signed once, the first time each workspace is opened with
+a key, and only if its storage holds no signed approval yet. That this has happened is noted in
+secret storage too, so an unsigned value that turns up later is never signed for you. A key replaced
+while a window is open — two windows making one at the same moment — carries over what the old key
+signed.
+
+A rename made in the tree carries the approval to the new name, a task deleted from the file
 takes its approval with it, and **Reset all changes for this project** forgets them all.
 
 This guards one case, not the repository: the same `git pull` can rewrite a `package.json` script,
 and that runs unasked, as `npm run` would run it. The boundary for a repository as a whole is
 [Workspace Trust](https://code.visualstudio.com/docs/editor/workspace-trust) — in Restricted Mode this
 extension does not run at all.
+
+### AI tasks
+
+An **AI task** is a prompt handed to a coding agent — **Claude Code** or **Codex** — run headless in
+the workspace folder, with what the agent may do fixed by the task. *Review the uncommitted changes
+and list anything that looks like a bug*, kept as a row and run with a click. It sits under **Custom
+Tasks** beside the command lines, with a sparkle for an icon, and is a row like any other: star it,
+paint it, rename it, drag it, stop it with ■.
+
+It is made from ⋮ → **Create AI task**, the **Custom Tasks** heading's right-click menu, or **New AI
+Task…** in the command palette, which asks in turn for:
+
+| Step | Choices |
+| --- | --- |
+| **Name** | What the row is called. |
+| **Agent** | Claude Code or Codex, each marked with the version found on this machine — or *not found*. |
+| **Model** | **Default** — whatever the agent is set to use — or one it lists: `opus`, `sonnet`, `haiku` for Claude Code, the models in Codex's own model cache for Codex. **Other…** takes any name. |
+| **Prompt** | One line here. **Edit Prompt** on the row opens it in an editor for anything longer. |
+| **Access** | **Read-only** (the default), **Edit files**, or **Full access** — see below. |
+| **Result** | **Open a report** — a Markdown preview of the answer — **Copy to clipboard**, or **Nothing**, for a task whose work is the files it changes. |
+| **Notification** | None, **Notify when done**, or **Notify with the answer**. A failure is reported whatever this says. |
+
+The agent's progress streams into the task's terminal — the files it reads, the commands it runs, a
+✗ for each one it was refused — and Ctrl+C there stops it, along with any command it had started.
+
+#### Access
+
+| Level | Claude Code | Codex |
+| --- | --- | --- |
+| **Read-only** | `--permission-mode dontAsk --allowedTools=Read(./**),Grep(./**),Glob(./**) --setting-sources user`: it reads the project folder and nothing outside it, and runs only commands Claude Code itself counts as read-only inside it, such as `git diff`. | `--sandbox read-only --ignore-rules` |
+| **Edit files** | The same, with Edit, Write, MultiEdit and NotebookEdit allowed — each held to the project folder too. | `--sandbox workspace-write --ignore-rules` |
+| **Full access** | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` |
+
+Saving a task with **Full access** asks once more, in words, what that means. Read-only is a limit on
+the agent's tools, not a promise about your data: what it reads in the project is sent to its
+provider.
+
+At the two limited levels the project's own agent configuration is left out — Claude Code's
+`.claude/settings.json` and `.claude/settings.local.json`, Codex's execpolicy `.rules` files — since
+those are files a pull can rewrite, and a task approved as read-only must not become whatever they
+allow. Your user-level Claude Code settings (`~/.claude/settings.json`) still apply, so an allow rule
+you put there, such as `Bash(npm test:*)`, is allowed here too. At **Full access** the agent loads its
+configuration as it always does.
+
+#### Approving a prompt you did not write
+
+AI tasks are approved the way [command lines](#approving-a-command-you-did-not-type) are, with what
+an approval covers widened to the whole of what the task may do:
+
+- A task made or changed in the tree is approved as it is saved.
+- A task that reached the file some other way asks before its first run — **with full access** said
+  in the question when that is what it has — and shows the agent, the access in words and the start
+  of the prompt. **Show Prompt** opens all of it.
+- It asks again when its **agent**, its **prompt** or its **access** changes, and says which of them
+  did. A changed prompt opens as a diff — the one that last ran beside the one in the file — from
+  **Show Changes**.
+- Narrowing the access never asks: an approval of **Full access** covers the same prompt read-only.
+  Changing the model, the result or the notification never asks either; none of them changes what the
+  agent may do.
+- A prompt holding a **hidden character** is **blocked**. Line breaks and tabs are a prompt's own;
+  everything else on the [list above](#approving-a-command-you-did-not-type) is refused, and for a
+  sharper reason than in a command line — a model reads tag characters and zero-width spaces as text,
+  so an instruction written in them is one nobody approving the prompt is shown.
+- Changing one part of a not-yet-approved task in the tree — its notification, say — does not approve
+  the rest of it. It still asks before it next runs.
+
+An approval guards against the task being changed. It does not guard against what the agent reads
+while it works: an agent with **Full access** that opens a file telling it to do something else may do
+it. That is what **Read-only** is the default for.
+
+#### In the file
+
+An AI task is an object where a command line would be a string:
+
+```jsonc
+{
+  "tasks": {
+    "Reset DB": "docker compose down -v && docker compose up -d db",
+    "Review changes": {
+      "agent": "claude",
+      "model": "sonnet",
+      "access": "read",
+      "result": "report",
+      "notify": "text",
+      "prompt": "Review the uncommitted changes and list anything that looks like a bug."
+    }
+  }
+}
+```
+
+`agent` and `prompt` are required; `access` defaults to `read`, `result` to `report`, `notify` to
+`done`. A value the tree does not recognise — an `access` of `"ful"`, a `model` starting with `-` —
+makes the entry not a task at all rather than one with a guessed meaning. Keys it does not know, a
+`"$comment"` say, are kept when the tree writes the file, including on the task it has just changed.
+
+An answer shown in a notification is shown as text: a `[label](command:…)` link in it, which the
+workbench would otherwise make clickable, is broken up first, since what an agent writes can be
+steered by what it read.
+
+The agents are found on the login shell's `PATH`, in the directories their installers use, and inside
+the Claude Code and Codex VS Code extensions; each is used only once its `--version` names it, since
+more than one tool installs itself as `agent`. **`taskRunnerUltimate.aiAgentPaths`** sets either path
+by hand. It is machine-scoped, so a repository's own settings cannot point it somewhere else.
+
+Reports are written to this workspace's extension storage, out of the project, so there is nothing
+to commit or ignore.
 
 ## Where the button appears
 
@@ -862,6 +990,7 @@ The ⋮ in the view header opens everything that is not aimed at one row:
 | Entry | What it does |
 | --- | --- |
 | **Create custom task** | Asks for a name and a shell command and adds it to [Custom Tasks](#custom-tasks) at the top of the tree. First in the menu, because until that heading exists — with a **+** of its own — this is where the first one is made. |
+| **Create AI task** | Asks for a name, an agent, a model, a prompt, the access and what happens to the answer, and adds it to [Custom Tasks](#ai-tasks). |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
 | **Check containers** | Asks Docker which compose services are actually running and marks those rows — see [Knowing what is actually up](#knowing-what-is-actually-up). Nothing happens in the background; this is the question. |
@@ -1170,7 +1299,8 @@ busy" is the one thing the icon is being asked.
 **Run**, **Stop**, **Add to Favorites**, **Remove from Favorites**, **Enable Confirmation**,
 **Disable Confirmation**, **Go to Script Definition**, **Open Manifest File**, **Show Terminal**,
 **Add to Terminal**, **Copy Path**, **Copy Relative Path**, **Reveal in Finder**, **Reveal in
-Explorer View**, **Rename…**, **Change Colour…** and **Change Icon…** all act on the row they were
+Explorer View**, **Rename…**, **Change Colour…**, **Change Icon…**, **Edit AI Task…**, **Edit
+Prompt** and **Copy Prompt** all act on the row they were
 invoked from, so they
 live where there is a row to invoke them on:
 
@@ -1191,7 +1321,10 @@ live where there is a row to invoke them on:
 | Compose Down | ■ inline on hover and right-click, on a compose item — it ends whatever of ours the file has running and then runs `docker compose down`, and does neither if something refuses to stop |
 | Compose Commands… | right-click only, on a compose item — the picker holding one `up` per declared service and the extra subcommands from [`dockerComposeCommands`](#settings) |
 | Add to Terminal | right-click only, on a [shell row](#shell-scripts) — a new terminal with the command line typed into it and not run, which is where a script takes arguments nobody wrote down. A manifest task says its own arguments in the manifest, so the entry is not offered there. Refused for a line holding a line break or a hidden character, and for one that needs quoting in a shell it does not know how to quote for |
-| Copy Command | right-click only, on a script row, a compose item and a Dockerfile — the command line the row runs, on the clipboard and quoted for the shell your terminal opens in; a compose item copies its `up` and a Dockerfile its `build`. Not on OTHER TASKS, whose command is another extension's, and refused on the same lines Add to Terminal refuses, which a paste would run past what it shows |
+| Copy Command | right-click only, on a script row, a compose item and a Dockerfile — the command line the row runs, on the clipboard and quoted for the shell your terminal opens in; a compose item copies its `up` and a Dockerfile its `build`. Not on OTHER TASKS, whose command is another extension's, nor on an AI task, which runs none; refused on the same lines Add to Terminal refuses, which a paste would run past what it shows |
+| Edit AI Task… | right-click only, on an [AI task](#ai-tasks) — picks one part of it to change: the prompt, the agent and model, the access, the result or the notification |
+| Edit Prompt | right-click only, on an AI task — its prompt in an editor, where saving writes it back to the task |
+| Copy Prompt | right-click only, on an AI task — its prompt on the clipboard, where a command row offers Copy Command |
 | Copy Path | right-click only, on the rows that are a file or a folder — a heading's manifest, the directory a [shell group](#shell-scripts) stands for, or a shell row's own script — copied whole. A manifest task is not one of them: an npm script is a line in a file its siblings share, so every row of the group would copy the same `package.json`. The rows that name no file — FAVORITES, OTHER TASKS, an ecosystem parent and the aggregated `shell [N]` heading — do not offer any of the four |
 | Copy Relative Path | the same rows, cut to the workspace root and named with its folder when more than one is open; a folder that *is* the root copies its own name, which is the one path there is nothing to cut off |
 | Reveal in Finder | the same rows, in the platform's file manager — **Reveal in File Explorer** on Windows, **Open Containing Folder** on Linux, since the workbench calls it something different on each. Not offered over a remote connection, where the file is on the other machine and the workbench opens nothing; WSL is the exception it makes, and the one remote that keeps the entry |
@@ -1351,11 +1484,12 @@ That *adds* a shortcut. To retire the default as well, disable it with a leading
 ## Settings
 
 Everything lives under `taskRunnerUltimate.*` and works in user settings as well as in a workspace's
-`.vscode/settings.json`, so a repository can pin its own runner for everyone who opens it. Three
-exceptions, and they are deliberate: `dockerCompose`, `shellRunner` and `shellRunners` are
-machine-scoped, because each of those values is the name of a program this extension executes rather
-than text typed into a task terminal — and a program name is not something a repository you cloned
-gets to choose for the machine that opens it. Those three are set in your own settings.
+`.vscode/settings.json`, so a repository can pin its own runner for everyone who opens it. Four
+exceptions, and they are deliberate: `dockerCompose`, `shellRunner`, `shellRunners` and
+`aiAgentPaths` are machine-scoped, because each of those values is the name of a program this
+extension executes rather than text typed into a task terminal — and a program name is not something
+a repository you cloned gets to choose for the machine that opens it. Those four are set in your own
+settings.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -1371,6 +1505,7 @@ gets to choose for the machine that opens it. Those three are set in your own se
 | `shellScripts` | `**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}`, the same under `**/bin/**/`, and the bare `*.{sh,…}` | Where [shell scripts](#shell-scripts) are looked for, as globs matched against each file's path relative to its workspace folder. |
 | `shellRunner` | `bash` | What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through. Empty runs the path on its own. |
 | `shellRunners` | `powershell -NoProfile -File` for `.ps1`, nothing for `.bat` and `.cmd` | What each extension is run through, keyed by extension. One that is not named here falls back to `shellRunner`. |
+| `aiAgentPaths` | `{}` | Where the `claude` and `codex` command lines are, for a machine where [AI tasks](#ai-tasks) do not find them on their own. Machine-scoped. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `respectGitignore` | `true` | Skips manifests and scripts that git ignores — see [What git ignores](#what-git-ignores). Off lists everything `exclude` lets through. |
 | `showInEditorTitle` | `true` | The ▶ icon in the editor title bar. |
