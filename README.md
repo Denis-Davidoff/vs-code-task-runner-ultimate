@@ -1,4 +1,4 @@
-# ▶ Task & Script Explorer
+# ▶ AI Task & Script Explorer
 
 **Every script in your workspace, and everything currently running, in one list. Start, stop and
 restart without ever going looking for a terminal tab.**
@@ -7,6 +7,13 @@ restart without ever going looking for a terminal tab.**
 
 ## Extension Features
 
+- ✨ **[AI tasks — new](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#ai-tasks)** — a prompt for **Claude Code** or **Codex**, kept as a
+  row and run with a click: *review the uncommitted changes*, *write the release notes*, *find what
+  breaks the build*. The **+** at the head of the panel → **AI Task** makes one. Pick the agent and model, then the access it runs with — **read-only**, **edit
+  files** or **full** — and where the answer goes: a Markdown report, the clipboard, a notification.
+  The agents are found on their own, Claude Code and Codex inside their VS Code extensions included.
+  A prompt that changed behind your back — a teammate's commit, a hand edit — asks once before it
+  runs, and says what changed.
 - 📋 **[A panel in the left bar](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#the-task--script-explorer-view)** — every task of the workspace as a
   tree, grouped by the manifest it came from. Nothing moves when a task starts, and the number of
   running tasks rides on the activity bar icon as a real VS Code badge.
@@ -63,9 +70,6 @@ restart without ever going looking for a terminal tab.**
   `docker compose down -v && docker compose up -d db` included, under one **Custom Tasks** heading at
   the top of the tree. ⋮ → **Create custom task** makes the first, the heading's **+** the rest. Kept in
   `.vscode/task-script-explorer.json`: commit it for the team, or keep it to yourself.
-- ✨ **[AI tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#ai-tasks)** — a prompt for **Claude Code** or **Codex**, kept as a row and
-  run headless with the access you chose: read-only, edit files, or full. The answer opens as a
-  report or lands on the clipboard. A prompt that changed behind your back asks before it runs.
 - 🧠 **[Knows how to run things](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
   package from `packageManager`, the lock files and `engines`; everything else named by the table it
   is declared in.
@@ -96,6 +100,8 @@ Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?
 Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/tab-browser-ultimate
 
 ## Change log 0.9
+
+- 0.9.8: New [AI tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#ai-tasks): a prompt for Claude Code or Codex, kept under **Custom Tasks** and run headless with the access you choose — read-only, edit files, or full. Press the new **+** at the head of the panel and pick **AI Task** — or **Shell Task** for a command line of your own. The answer opens as a Markdown report, goes to the clipboard or shows in a notification, and the agent's progress streams into the task's terminal, where ■ or Ctrl+C stops it. An AI task that reached the file some other way asks once before it runs, and again whenever its prompt, agent or access changes. Approvals of custom tasks and AI tasks alike are now signed with a key kept in VS Code's secret storage, so they cannot be forged by writing into workspace storage. A task whose agent is not installed on this machine, or whose model is not available here, offers to pick the agent and model again and run. New setting `taskRunnerUltimate.aiAgentPaths` for agents installed somewhere they are not found on their own.
 
 - 0.9.7: A click on a [compose file](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#docker-compose) or a [Dockerfile](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#dockerfiles) row now runs it, `docker compose up` or `docker build`, and brings up its terminal; once something of the file's is running, the click goes to that terminal instead. New **Copy Command** in the right-click menu of every script row, compose file and Dockerfile puts the command line it runs on the clipboard, quoted for your shell. A compose file or a Dockerfile can be added to [Favorites](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#favorites) with ☆ on its row or from the right-click menu, and shows up there as the file itself, ▶, ■ and click included. **Add to Terminal** and **Copy Command** quote for fish as well, and refuse a line holding a control character, or one that needs quoting in a shell they do not know how to quote for.
 

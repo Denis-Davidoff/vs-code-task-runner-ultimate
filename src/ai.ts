@@ -323,12 +323,40 @@ export function setReportsRoot(root: vscode.Uri): void {
   reportsRoot = root;
 }
 
+/**
+ * A failure that is about the task's choice of agent rather than about its
+ * work: the agent is not installed here, or the model it names is not one this
+ * agent can use here. Both are what a project moved to another machine runs
+ * into, and both are answered by changing the agent or the model — which is why
+ * they are told apart from every other failure.
+ */
+export type AgentProblem = 'missing' | 'model';
+
 export interface AiRunRequest {
   /** The row's key: what a stop waits on, through `agentsStopped`. */
   key: string;
   name: string;
   task: AiTask;
   cwd: string;
+  /**
+   * Told about an `AgentProblem` in place of the plain failure notification, so
+   * the message can offer to fix it. Called once the task has ended.
+   */
+  onAgentProblem?: (problem: AgentProblem, detail: string) => void;
+}
+
+/**
+ * What an agent says when the model it was asked for is not there for it. Claude
+ * Code sends a structured `model_not_found` on its stream as well, which is read
+ * first; this is for its stderr and for Codex, which says it in prose — "The
+ * 'x' model is not supported when using Codex with a ChatGPT account", or a
+ * `model_not_found` / "does not exist" from the API behind it.
+ */
+const MODEL_PROBLEM =
+  /model_not_found|unrecognized_model|\bmodel\b[^\n]{0,120}?\b(?:not supported|not found|does not exist|is not available|unknown|unsupported|no access)/i;
+
+export function isModelProblem(text: string): boolean {
+  return MODEL_PROBLEM.test(text);
 }
 
 const DIM = '\x1b[2m';
@@ -418,6 +446,8 @@ export class AiRun implements vscode.Pseudoterminal {
   private result: { text: string; error: boolean } | undefined;
   /** The last line the agent wrote to stderr, which is usually the reason it failed. */
   private lastError = '';
+  /** Set once the agent has said the model is not one it can use. See `AgentProblem`. */
+  private modelProblem = false;
   private pending = '';
   private answerFile = '';
   /** Resolves once there is no agent process left: it exited, or was never started. */
@@ -473,7 +503,7 @@ export class AiRun implements vscode.Pseudoterminal {
         `${RED}${AGENT_LABEL[task.agent]} was not found on this machine.${RESET}\r\n` +
           `Install its command line, or set its path in the taskRunnerUltimate.aiAgentPaths setting.\r\n`,
       );
-      this.end(127, `${AGENT_LABEL[task.agent]} was not found on this machine.`);
+      this.end(127, `${AGENT_LABEL[task.agent]} was not found on this machine.`, 'missing');
       return;
     }
     // Resolved before the check below, which is then the last thing between the
@@ -520,10 +550,16 @@ export class AiRun implements vscode.Pseudoterminal {
     });
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) =>
-      task.agent === 'claude' ? this.claudeOutput(chunk) : this.write(terminalText(chunk)),
-    );
+    child.stdout?.on('data', (chunk: string) => {
+      if (task.agent === 'claude') {
+        this.claudeOutput(chunk);
+      } else {
+        this.noteModelProblem(chunk);
+        this.write(terminalText(chunk));
+      }
+    });
     child.stderr?.on('data', (chunk: string) => {
+      this.noteModelProblem(chunk);
       const lines = chunk.split(/\r?\n/).filter((line) => line.trim());
       if (lines.length > 0) {
         this.lastError = lines[lines.length - 1];
@@ -533,6 +569,12 @@ export class AiRun implements vscode.Pseudoterminal {
     child.on('close', (code) => void this.exited(code ?? 1));
     child.stdin?.on('error', () => undefined);
     child.stdin?.end(task.prompt);
+  }
+
+  private noteModelProblem(text: string): void {
+    if (!this.modelProblem && isModelProblem(text)) {
+      this.modelProblem = true;
+    }
   }
 
   /** Claude Code's events, one JSON object a line, split however the pipe chose to deliver them. */
@@ -556,6 +598,9 @@ export class AiRun implements vscode.Pseudoterminal {
       return;
     }
     if (event.type === 'assistant') {
+      if (event.error === 'model_not_found') {
+        this.modelProblem = true;
+      }
       for (const part of event.message?.content ?? []) {
         if (part?.type === 'text' && typeof part.text === 'string') {
           this.write(terminalText(`${part.text}\n\n`));
@@ -609,7 +654,11 @@ export class AiRun implements vscode.Pseudoterminal {
       return;
     }
     if (answer === undefined) {
-      this.end(code === 0 ? 1 : code, this.lastError || `${AGENT_LABEL[task.agent]} exited with code ${code}.`);
+      this.end(
+        code === 0 ? 1 : code,
+        this.lastError || `${AGENT_LABEL[task.agent]} exited with code ${code}.`,
+        this.modelProblem ? 'model' : undefined,
+      );
       return;
     }
     const seconds = Math.round((Date.now() - this.started) / 1000);
@@ -619,7 +668,7 @@ export class AiRun implements vscode.Pseudoterminal {
   }
 
   /** Ends the terminal's task, and says why when it failed and somebody did not ask for it. */
-  private end(code: number, failure?: string): void {
+  private end(code: number, failure?: string, problem?: AgentProblem): void {
     if (this.finished) {
       return;
     }
@@ -631,11 +680,20 @@ export class AiRun implements vscode.Pseudoterminal {
     }
     if (failure !== undefined) {
       this.write(`\r\n${RED}${terminalText(failure)}${RESET}\r\n`);
+    }
+    this.closed.fire(code);
+    if (failure === undefined) {
+      return;
+    }
+    // After the task has ended, so a run started from the offer that follows is
+    // a new run of the row rather than one queued behind this.
+    if (problem && this.request.onAgentProblem) {
+      this.request.onAgentProblem(problem, plain(failure).slice(0, 300));
+    } else {
       void vscode.window.showErrorMessage(
         notificationText(`"${this.request.name}" failed: ${plain(failure).slice(0, 300)}`),
       );
     }
-    this.closed.fire(code);
   }
 
   private stop(): void {

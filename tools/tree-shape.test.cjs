@@ -1030,11 +1030,24 @@ test('only the commands that work without a row are offered in the palette', () 
   ]);
 });
 
-test('nothing is left pointing at the colour submenu that no longer exists', () => {
+test('the one submenu is the panel header\'s +, and nothing points at the colour submenu that is gone', () => {
   // An id left in contributes.submenus draws an empty `Colour ▸` in every menu.
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
-  assert.equal(manifest.contributes.submenus, undefined);
-  assert.equal(JSON.stringify(manifest.contributes.menus).includes('submenu'), false);
+  const id = 'taskRunnerUltimate.newTaskMenu';
+  assert.deepEqual(manifest.contributes.submenus.map((entry) => entry.id), [id]);
+  const used = Object.values(manifest.contributes.menus)
+    .flat()
+    .filter((entry) => entry.submenu)
+    .map((entry) => entry.submenu);
+  assert.deepEqual(used, [id]);
+  // First in the header, and holding the two kinds of task in that order.
+  const title = manifest.contributes.menus['view/title'];
+  assert.equal(title.find((entry) => entry.submenu === id).group, 'navigation@0');
+  assert.ok(title.every((entry) => entry.submenu === id || entry.group > 'navigation@0'));
+  assert.deepEqual(
+    manifest.contributes.menus[id].map((entry) => entry.command),
+    ['taskRunnerUltimate.newAiTask', 'taskRunnerUltimate.newShellTask'],
+  );
 });
 
 test('an icon picked by hand stands in for the theme\'s', () => {

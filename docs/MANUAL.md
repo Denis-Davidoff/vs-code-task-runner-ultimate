@@ -468,8 +468,9 @@ every other morning, or a `tail -f logs/*.log | grep ERROR`. A **custom task** i
 command, nothing more, and every one of them sits under a single **Custom Tasks** heading at the very
 top of the tree, above every package and in both [grouping modes](#grouping-by-ecosystem).
 
-The first one is made from [the menu](#the-menu): ⋮ → **Create custom task**, which asks for a name
-and then for the command. Once the heading exists it carries a **+** of its own, and its right-click
+The first one is made from the **+** at the head of the panel — **Shell Task** in the menu it drops
+down — or from [the menu](#the-menu): ⋮ → **Create custom task**. Either asks for a name and then for
+the command. Once the heading exists it carries a **+** of its own, and its right-click
 menu has **New Custom Task…** as well; the command palette has it under the same name. With more than
 one workspace folder open you are asked which folder the task belongs to, and each folder gets its
 own heading, with the folder's name after the bullet.
@@ -587,8 +588,9 @@ and list anything that looks like a bug*, kept as a row and run with a click. It
 Tasks** beside the command lines, with a sparkle for an icon, and is a row like any other: star it,
 paint it, rename it, drag it, stop it with ■.
 
-It is made from ⋮ → **Create AI task**, the **Custom Tasks** heading's right-click menu, or **New AI
-Task…** in the command palette, which asks in turn for:
+It is made from the **+** at the head of the panel → **AI Task**, ⋮ → **Create AI task**, the
+**Custom Tasks** heading's right-click menu, or **New AI Task…** in the command palette, which asks in
+turn for:
 
 | Step | Choices |
 | --- | --- |
@@ -602,6 +604,14 @@ Task…** in the command palette, which asks in turn for:
 
 The agent's progress streams into the task's terminal — the files it reads, the commands it runs, a
 ✗ for each one it was refused — and Ctrl+C there stops it, along with any command it had started.
+
+A task kept in the project travels with it, and the machine it lands on may not have what the task
+names. When the agent is **not installed** here, or the **model** it names is not one the agent can
+use here — retired, not on this account, or a default from its own config that this account does not
+offer — the run says so and offers **Change Agent and Model…**: the same two pickers as the wizard,
+listing what this machine has, and then **Run** to try again with what you picked. A missing agent
+also offers **Set Path…**, for one installed somewhere it is not found on its own. Every other failure
+is reported as it is.
 
 #### Access
 
@@ -952,9 +962,11 @@ on all of them unless you [paint one](#painting-a-row), which is what keeps the 
 with the rows under it. `taskRunnerUltimate.groupIcons: "uniform"` puts a single stack (≣) back on
 every heading.
 
-The view header holds five actions. **Restart all** (⟳) and **stop all** (◼) appear only while
-something is running, so the header stays quiet on an idle workspace; **open the dropdown** (▶), the
-**grouping switch** and the **menu** (⋮) are always there. The switch is one button drawn as whichever
+The view header holds six actions. First is **new task** (+), a dropdown with **AI Task** and
+**Shell Task** — the two kinds of [custom task](#custom-tasks), each going on to its own questions.
+**Restart all** (⟳) and **stop all** (◼) appear only while something is running, so the header stays
+quiet on an idle workspace; **open the dropdown** (▶), the **grouping switch** and the **menu** (⋮)
+are always there. The switch is one button drawn as whichever
 mode it would put you in — a tree (⊞) while the list is flat, a flat list while it is
 [grouped by ecosystem](#grouping-by-ecosystem) — so the header never shows you the mode you are
 already in. Stop-all and restart-all reach every running task, including ones

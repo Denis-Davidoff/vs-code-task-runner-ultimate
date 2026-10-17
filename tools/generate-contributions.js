@@ -353,6 +353,11 @@ manifest.contributes.commands = [
   // one is kept in the palette for the same reason as a custom task; the other
   // three act on a row.
   { command: 'taskRunnerUltimate.createAiTask', title: 'New AI Task…', category: 'Task & Script Explorer', icon: '$(sparkle)' },
+  // The two entries of the panel header's + menu, named for what they make
+  // rather than as commands: in a menu titled New Task, "AI Task" is the whole
+  // sentence. The palette has New AI Task… and New Custom Task… for the same.
+  { command: 'taskRunnerUltimate.newAiTask', title: 'AI Task', category: 'Task & Script Explorer', icon: '$(sparkle)' },
+  { command: 'taskRunnerUltimate.newShellTask', title: 'Shell Task', category: 'Task & Script Explorer', icon: '$(terminal)' },
   { command: 'taskRunnerUltimate.editAiTask', title: 'Edit AI Task…', category: 'Task & Script Explorer', icon: '$(edit)' },
   { command: 'taskRunnerUltimate.editAiPrompt', title: 'Edit Prompt', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
   { command: 'taskRunnerUltimate.copyAiPrompt', title: 'Copy Prompt', category: 'Task & Script Explorer', icon: '$(copy)' },
@@ -592,16 +597,27 @@ const toolbarEntries = (when) => [
   { command: 'taskRunnerUltimate.show', group: 'navigation@1', when },
 ];
 
-// The colours were a flyout and are a list now, so the extension contributes no
-// submenu at all. Left behind, the id would still draw an empty `Colour ▸` in
-// every row's menu.
-delete manifest.contributes.submenus;
+// One submenu: the + in the panel header, which drops down the two kinds of
+// task there are to make. A submenu in the `navigation` group is drawn as a
+// button that opens it, which is the whole of why this is one rather than a
+// command asking in a picker. The colours used to be a submenu too and are a
+// list now; nothing points at that id any more.
+const NEW_TASK_MENU = 'taskRunnerUltimate.newTaskMenu';
+manifest.contributes.submenus = [{ id: NEW_TASK_MENU, label: 'New Task', icon: '$(add)' }];
 
 manifest.contributes.menus = {
+  [NEW_TASK_MENU]: [
+    { command: 'taskRunnerUltimate.newAiTask', group: '1_new@1' },
+    { command: 'taskRunnerUltimate.newShellTask', group: '1_new@2' },
+  ],
   'editor/title': toolbarEntries(inTitle),
   // Notebooks render their own toolbar instead of the editor title actions.
   'notebook/toolbar': toolbarEntries(inTitle),
   'view/title': [
+    // First of all: the one header action that adds to the list rather than
+    // acting on what is in it, and the way the first custom task is made before
+    // there is a Custom Tasks heading with a + of its own.
+    { submenu: NEW_TASK_MENU, group: 'navigation@0', when: inTree },
     {
       command: 'taskRunnerUltimate.restartAll',
       group: 'navigation@1',
@@ -839,6 +855,8 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.editTitle', when: 'false' },
     { command: 'taskRunnerUltimate.editCustomTask', when: 'false' },
     { command: 'taskRunnerUltimate.deleteCustomTask', when: 'false' },
+    { command: 'taskRunnerUltimate.newAiTask', when: 'false' },
+    { command: 'taskRunnerUltimate.newShellTask', when: 'false' },
     { command: 'taskRunnerUltimate.editAiTask', when: 'false' },
     { command: 'taskRunnerUltimate.editAiPrompt', when: 'false' },
     { command: 'taskRunnerUltimate.copyAiPrompt', when: 'false' },

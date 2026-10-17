@@ -1,6 +1,15 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { agentModels, agentsStopped, AiRun, findAgent, forgetAgents, setReportsRoot, stopAllRuns } from './ai';
+import {
+  AgentProblem,
+  agentModels,
+  agentsStopped,
+  AiRun,
+  findAgent,
+  forgetAgents,
+  setReportsRoot,
+  stopAllRuns,
+} from './ai';
 import {
   ACCESS_DETAIL,
   ACCESS_LABEL,
@@ -514,6 +523,10 @@ export function activate(context: vscode.ExtensionContext): void {
       deleteCustomTask(node),
     ),
     vscode.commands.registerCommand('taskRunnerUltimate.createAiTask', (node?: TreeNode) => createAiTask(node)),
+    // The two entries of the panel header's + menu. A title-bar menu hands its
+    // commands no row, so each asks for a folder when there is more than one.
+    vscode.commands.registerCommand('taskRunnerUltimate.newAiTask', () => createAiTask(undefined)),
+    vscode.commands.registerCommand('taskRunnerUltimate.newShellTask', () => createCustomTask(undefined)),
     vscode.commands.registerCommand('taskRunnerUltimate.editAiTask', (node?: TreeNode) => editAiTask(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.editAiPrompt', (node?: TreeNode) => editAiPrompt(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.copyAiPrompt', (node?: TreeNode) => copyAiPrompt(node)),
@@ -2263,18 +2276,7 @@ async function editAiTask(node: TreeNode | undefined): Promise<void> {
   } else if (part === 'editor') {
     await editAiPrompt(node);
   } else if (part === 'agent') {
-    const agent = await pickAgent(title, task.agent);
-    if (!agent) {
-      return;
-    }
-    // A model is an agent's own name for it, so one picked for the other agent
-    // is not offered as the current one.
-    const model = await pickModel(title, agent, agent === task.agent ? task.model : undefined);
-    if (model === undefined) {
-      return;
-    }
-    const { model: _old, ...rest } = task;
-    await saveAiTask(script, { ...rest, agent, ...(model ? { model } : {}) });
+    await changeAgent(script, task, title);
   } else if (part === 'access') {
     const access = await pickAccess(title, task.access);
     if (access && access !== task.access) {
@@ -2290,6 +2292,68 @@ async function editAiTask(node: TreeNode | undefined): Promise<void> {
     if (notify && notify !== task.notify) {
       await saveAiTask(script, { ...task, notify });
     }
+  }
+}
+
+/**
+ * The agent and then the model, asked in turn and saved — from Edit AI Task, and
+ * from the offer a run makes when its agent or model is not there. Says whether
+ * anything was saved.
+ */
+async function changeAgent(script: ScriptEntry, task: AiTask, title: string): Promise<boolean> {
+  const agent = await pickAgent(title, task.agent);
+  if (!agent) {
+    return false;
+  }
+  // A model is an agent's own name for it, so one picked for the other agent
+  // is not offered as the current one.
+  const model = await pickModel(title, agent, agent === task.agent ? task.model : undefined);
+  if (model === undefined) {
+    return false;
+  }
+  if (agent === task.agent && (model || undefined) === task.model) {
+    return false;
+  }
+  const { model: _old, ...rest } = task;
+  return saveAiTask(script, { ...rest, agent, ...(model ? { model } : {}) });
+}
+
+/**
+ * What a run says when it could not start for want of its agent or its model —
+ * a project opened on another machine, an agent uninstalled, a model retired or
+ * not on this account. Rather than only failing, it offers what fixes it: the
+ * agent and model, picked again among the ones this machine has, and then the
+ * run it was trying to make.
+ */
+async function offerAgentChange(script: ScriptEntry, task: AiTask, problem: AgentProblem, detail: string): Promise<void> {
+  const name = visible(script.name);
+  const agent = AGENT_LABEL[task.agent];
+  const change = 'Change Agent and Model…';
+  const locate = 'Set Path…';
+  const answer = await vscode.window.showWarningMessage(
+    problem === 'missing'
+      ? `"${name}" did not run: ${agent} was not found on this machine.`
+      : `"${name}" did not run: ${task.model ? `the model "${task.model}"` : 'its default model'} is not available to ${agent} here.`,
+    { detail },
+    change,
+    ...(problem === 'missing' ? [locate] : []),
+  );
+  if (answer === locate) {
+    void vscode.commands.executeCommand('workbench.action.openSettings', 'taskRunnerUltimate.aiAgentPaths');
+    return;
+  }
+  if (answer !== change || !(await changeAgent(script, task, `Change "${name}"`))) {
+    return;
+  }
+  const run = 'Run';
+  if ((await vscode.window.showInformationMessage(`"${name}" was saved. Run it now?`, run)) !== run) {
+    return;
+  }
+  // The row as the file now has it: the one this run was built from names the
+  // agent it no longer has.
+  const fresh = (await collectScripts()).find((entry) => entry.key === script.key);
+  if (fresh?.ai) {
+    await startScript(fresh, true);
   }
 }
 
@@ -8257,7 +8321,13 @@ function aiExecution(script: ScriptEntry): vscode.CustomExecution | undefined {
   if (!task) {
     return undefined;
   }
-  const request = { key: script.key, name: script.name, task, cwd: script.cwd.fsPath };
+  const request = {
+    key: script.key,
+    name: script.name,
+    task,
+    cwd: script.cwd.fsPath,
+    onAgentProblem: (problem: AgentProblem, detail: string) => void offerAgentChange(script, task, problem, detail),
+  };
   return new vscode.CustomExecution(async () => new AiRun(request));
 }
 

@@ -1,8 +1,8 @@
 {
   "name": "task-runner-ultimate",
-  "displayName": "Task & Script Explorer🏆",
-  "description": "A task runner for all your monorepo's scripts, in a single list.: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.9.7",
+  "displayName": "AI Task & Script Explorer🏆",
+  "description": "AI task runner + script runner for all your monorepo's scripts, in a single list.: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
+  "version": "0.9.8",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -19,6 +19,10 @@
   "keywords": [
     "task explorer",
     "tasks explorer",
+    "ai task",
+    "ai tasks",
+    "agent task",
+    "agent tasks",
     "scripts explorer",
     "script exporer",
     "task script explorer",
@@ -219,6 +223,18 @@
         "title": "New AI Task…",
         "category": "Task & Script Explorer",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "taskRunnerUltimate.newAiTask",
+        "title": "AI Task",
+        "category": "Task & Script Explorer",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "taskRunnerUltimate.newShellTask",
+        "title": "Shell Task",
+        "category": "Task & Script Explorer",
+        "icon": "$(terminal)"
       },
       {
         "command": "taskRunnerUltimate.editAiTask",
@@ -521,6 +537,16 @@
       }
     ],
     "menus": {
+      "taskRunnerUltimate.newTaskMenu": [
+        {
+          "command": "taskRunnerUltimate.newAiTask",
+          "group": "1_new@1"
+        },
+        {
+          "command": "taskRunnerUltimate.newShellTask",
+          "group": "1_new@2"
+        }
+      ],
       "editor/title": [
         {
           "command": "taskRunnerUltimate.show",
@@ -536,6 +562,11 @@
         }
       ],
       "view/title": [
+        {
+          "submenu": "taskRunnerUltimate.newTaskMenu",
+          "group": "navigation@0",
+          "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/"
+        },
         {
           "command": "taskRunnerUltimate.restartAll",
           "group": "navigation@1",
@@ -919,6 +950,14 @@
         },
         {
           "command": "taskRunnerUltimate.deleteCustomTask",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.newAiTask",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.newShellTask",
           "when": "false"
         },
         {
@@ -1736,7 +1775,14 @@
           "visibility": "collapsed"
         }
       ]
-    }
+    },
+    "submenus": [
+      {
+        "id": "taskRunnerUltimate.newTaskMenu",
+        "label": "New Task",
+        "icon": "$(add)"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

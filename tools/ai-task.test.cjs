@@ -135,3 +135,24 @@ test('an agent\'s answer cannot put a clickable command link into a notification
   // Text that is not a link is left alone.
   assert.equal(runner.notificationText('Nothing to see (really) [here]'), 'Nothing to see (really) [here]');
 });
+
+test('a model the agent cannot use is told apart from every other failure', () => {
+  for (const text of [
+    // Codex, on a ChatGPT account, for a model its config names.
+    `ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}}`,
+    // Claude Code's stderr, and the API's own words.
+    '[claude-code:unrecognized_model] {"model":"claude-old-1"}',
+    '{"error":"model_not_found"}',
+    'The model `gpt-4-legacy` does not exist or you do not have access to it.',
+  ]) {
+    assert.equal(runner.isModelProblem(text), true, text);
+  }
+  for (const text of [
+    'ERROR: stream disconnected before completion',
+    'Not logged in · Please run /login',
+    'rate limit exceeded, try again later',
+    'Error: ENOENT: no such file or directory, open model.ts',
+  ]) {
+    assert.equal(runner.isModelProblem(text), false, text);
+  }
+});
