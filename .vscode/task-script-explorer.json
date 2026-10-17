@@ -8,5 +8,15 @@
       "notify": "done",
       "prompt": "Commit all the changes into main branch directly"
     }
+  },
+  "folders": {
+    "Global test": {
+      "type": "workflow",
+      "tasks": [
+        "Commit into main",
+        "package.json::vscode:prepublish",
+        "package.json::compile"
+      ]
+    }
   }
 }
