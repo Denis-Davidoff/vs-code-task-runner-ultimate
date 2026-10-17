@@ -4,20 +4,28 @@ import {
   AgentProblem,
   agentModels,
   agentsStopped,
+  apiModels,
+  apiProvider,
+  ApiProvider,
+  apiProviders,
   AiRun,
   findAgent,
   forgetAgents,
   notificationText,
   onAiRunEnd,
+  setProviderKey,
   setReportsRoot,
+  setSecretStorage,
   stopAllRuns,
 } from './ai';
+import { CONTEXT_VARIABLES } from './aiContext';
 import {
   ACCESS_DETAIL,
   ACCESS_LABEL,
   AGENT_LABEL,
-  AI_ACCESS,
-  AI_AGENTS,
+  agentAccess,
+  agentText,
+  accessText,
   AI_NOTIFY,
   AI_RESULTS,
   AiAccess,
@@ -30,9 +38,13 @@ import {
   AiTask,
   aiTaskValue,
   approvedPrompt,
+  CLI_AGENTS,
+  isCliAgent,
   NOTIFY_LABEL,
   RESULT_LABEL,
+  validCommand,
   validModel,
+  validProvider,
 } from './aiTask';
 import { isSigned, newApprovalKey, resignApprovals, signApproval, signLegacyApprovals, verifyApproval } from './approval';
 import { composeState } from './containers';
@@ -431,6 +443,8 @@ export function activate(context: vscode.ExtensionContext): void {
   extensionUri = context.extensionUri;
   // AI reports go with the rest of this workspace's state, out of the project.
   setReportsRoot(context.storageUri ?? context.globalStorageUri);
+  // API providers' keys, which are kept nowhere else.
+  setSecretStorage(context.secrets);
   approvalsReady = loadApprovalKey(context).catch(() => undefined);
   context.subscriptions.push(
     // Another window made the key at the same moment as this one and stored its
@@ -533,6 +547,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // The two entries of the panel header's + menu. A title-bar menu hands its
     // commands no row, so each asks for a folder when there is more than one.
     vscode.commands.registerCommand('taskRunnerUltimate.newAiTask', () => createAiTask(undefined)),
+    vscode.commands.registerCommand('taskRunnerUltimate.manageAiProviders', () => manageProviders()),
     vscode.commands.registerCommand('taskRunnerUltimate.newShellTask', () => createCustomTask(undefined)),
     vscode.commands.registerCommand('taskRunnerUltimate.newFolder', () => createTaskFolder('folder')),
     vscode.commands.registerCommand('taskRunnerUltimate.newWorkflow', () => createTaskFolder('workflow')),
@@ -2974,9 +2989,10 @@ function choose<T>(options: {
 }
 
 /**
- * Which agent runs the prompt. Both are always offered — a task is kept in the
- * project, and the machine it runs on may have what this one does not — but each
- * says whether it was found here, and at which version.
+ * Which agent runs the prompt. The three this extension knows are always
+ * offered — a task is kept in the project, and the machine it runs on may have
+ * what this one does not — each saying whether it was found here, and at which
+ * version; then a model behind an API, and any other command line.
  */
 function pickAgent(title: string, current?: AiAgent): Promise<AiAgent | undefined> {
   const item = (agent: AiAgent, description: string, detail?: string): Choice<AiAgent> => ({
@@ -2985,41 +3001,68 @@ function pickAgent(title: string, current?: AiAgent): Promise<AiAgent | undefine
     description,
     detail,
   });
+  const others: Array<Choice<AiAgent>> = [
+    {
+      value: 'api',
+      label: '$(cloud) API',
+      description: 'a model behind an OpenAI-compatible API',
+      detail: 'OpenAI, OpenRouter, a local Ollama or LM Studio… It sees the prompt and the context it names, and nothing else.',
+    },
+    {
+      value: 'command',
+      label: '$(terminal) Command',
+      description: 'any other command line, given the prompt on stdin',
+      detail: 'opencode, aider, a script of your own… Nothing here can limit what it does, so it always runs with full access.',
+    },
+  ];
   return choose({
     title,
-    placeholder: 'Which agent runs the prompt?',
-    items: AI_AGENTS.map((agent) => item(agent, 'looking for it…')),
+    placeholder: 'What runs the prompt?',
+    items: [...CLI_AGENTS.map((agent) => item(agent, 'looking for it…')), ...others],
     current,
-    refine: Promise.all(AI_AGENTS.map((agent) => findAgent(agent))).then((installs) =>
-      AI_AGENTS.map((agent, index) => {
+    refine: Promise.all(CLI_AGENTS.map((agent) => findAgent(agent))).then((installs) => [
+      ...CLI_AGENTS.map((agent, index) => {
         const install = installs[index];
         return install
           ? item(agent, install.version, install.path)
           : item(agent, 'not found on this machine', 'Install its command line, or set its path in the aiAgentPaths setting.');
       }),
-    ),
+      ...others,
+    ]),
   });
 }
 
 /**
  * The model, or `''` for the agent's own default — what it is configured to use
- * when nobody names one. `undefined` is the step dismissed.
+ * when nobody names one. `undefined` is the step dismissed. A provider behind an
+ * API has no default to fall back on: its models are what its `/models` lists,
+ * and one of them has to be named.
  */
-async function pickModel(title: string, agent: AiAgent, current?: string): Promise<string | undefined> {
+async function pickModel(
+  title: string,
+  agent: AiAgent,
+  current?: string,
+  provider?: ApiProvider,
+): Promise<string | undefined> {
   const other = '\u0000other';
-  const known = (await agentModels(agent)).filter((model) => validModel(model.name));
+  const listed = provider ? await apiModels(provider) : isCliAgent(agent) ? await agentModels(agent) : [];
+  const known = listed.filter((model) => validModel(model.name));
   // The current one stays on the list when the agent no longer lists it, so
   // Enter still keeps it.
   const models = current && !known.some((model) => model.name === current) ? [...known, { name: current }] : known;
   const picked = await choose<string>({
     title,
-    placeholder: 'Which model?',
+    placeholder: provider
+      ? known.length > 0
+        ? `Which of ${provider.name}'s models?`
+        : `${provider.name} listed no models — type one with Other…`
+      : 'Which model?',
     items: [
-      { value: '', label: 'Default', description: `whatever ${AGENT_LABEL[agent]} is set to use` },
+      ...(provider ? [] : [{ value: '', label: 'Default', description: `whatever ${AGENT_LABEL[agent]} is set to use` }]),
       ...models.map((model) => ({ value: model.name, label: model.name, description: model.description })),
       { value: other, label: 'Other…', description: 'type a model name' },
     ],
-    current: current ?? '',
+    current: current ?? (provider ? undefined : ''),
   });
   if (picked !== other) {
     return picked;
@@ -3027,7 +3070,7 @@ async function pickModel(title: string, agent: AiAgent, current?: string): Promi
   return (
     await vscode.window.showInputBox({
       title,
-      prompt: `A model name as ${AGENT_LABEL[agent]}'s --model takes it.`,
+      prompt: provider ? `A model name as ${provider.name} knows it.` : `A model name as ${AGENT_LABEL[agent]}'s --model takes it.`,
       value: current,
       validateInput: (value) =>
         validModel(value.trim()) ? undefined : 'Letters, digits and . _ : / @ [ ] + - only, starting with a letter or digit.',
@@ -3035,12 +3078,202 @@ async function pickModel(title: string, agent: AiAgent, current?: string): Promi
   )?.trim();
 }
 
+/** Which provider an API task asks — one set up on this machine, or a new one set up now. */
+async function pickProvider(title: string, current?: string): Promise<ApiProvider | undefined> {
+  const add = '\u0000add';
+  const picked = await choose<string>({
+    title,
+    placeholder: 'Which API provider?',
+    items: [
+      ...apiProviders().map((provider) => ({ value: provider.name, label: provider.name, description: provider.baseUrl })),
+      { value: add, label: '$(add) Set up a provider…', description: 'OpenAI, OpenRouter, Ollama, LM Studio, or any other' },
+    ],
+    current,
+  });
+  if (picked === undefined) {
+    return undefined;
+  }
+  const name = picked === add ? await setUpProvider() : picked;
+  return name ? apiProvider(name) : undefined;
+}
+
+/** A few well-known OpenAI-compatible endpoints, to pick rather than type. */
+const PROVIDER_PRESETS: Array<{ name: string; baseUrl: string; detail: string; key: boolean }> = [
+  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', detail: 'an API key from platform.openai.com', key: true },
+  { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', detail: 'hundreds of models behind one key, some free', key: true },
+  { name: 'Ollama', baseUrl: 'http://localhost:11434/v1', detail: 'models running on this machine — no key, nothing leaves it', key: false },
+  { name: 'LM Studio', baseUrl: 'http://localhost:1234/v1', detail: 'models running on this machine — no key, nothing leaves it', key: false },
+];
+
+/**
+ * Sets up a provider: an address, a name, and a key, which goes to VS Code's
+ * secret storage. The address goes to `aiProviders` in the user's own settings,
+ * which is machine-scoped: a task in a repository names a provider, and only
+ * this machine says where that provider is. Answers with its name.
+ */
+async function setUpProvider(): Promise<string | undefined> {
+  const custom = '\u0000custom';
+  const preset = await choose<string>({
+    title: 'Set Up an API Provider',
+    placeholder: 'Where is the API?',
+    items: [
+      ...PROVIDER_PRESETS.map((entry) => ({ value: entry.name, label: entry.name, description: entry.baseUrl, detail: entry.detail })),
+      { value: custom, label: 'Other…', description: 'any OpenAI-compatible endpoint', detail: 'DeepSeek, Groq, Mistral, Azure OpenAI, a gateway of your own…' },
+    ],
+  });
+  if (preset === undefined) {
+    return undefined;
+  }
+  const known = PROVIDER_PRESETS.find((entry) => entry.name === preset);
+  const baseUrl = known
+    ? known.baseUrl
+    : (
+        await vscode.window.showInputBox({
+          title: 'Set Up an API Provider',
+          prompt: 'The base URL — the part before /chat/completions.',
+          placeHolder: 'https://api.example.com/v1',
+          validateInput: (value) => (/^https?:\/\/\S+$/i.test(value.trim()) ? undefined : 'An http:// or https:// address.'),
+        })
+      )?.trim();
+  if (!baseUrl) {
+    return undefined;
+  }
+  const taken = new Set(apiProviders().map((provider) => provider.name));
+  const name = (
+    await vscode.window.showInputBox({
+      title: 'Set Up an API Provider',
+      prompt: 'What tasks call it. A task names the provider, never its address or key.',
+      value: known?.name,
+      validateInput: (value) =>
+        !validProvider(value.trim())
+          ? 'Letters, digits, spaces and . _ - only, up to 40, starting with a letter or digit.'
+          : taken.has(value.trim())
+            ? 'A provider by that name is already set up — pick another name, or remove it first.'
+            : undefined,
+    })
+  )?.trim();
+  if (!name) {
+    return undefined;
+  }
+  const local = isLocal(baseUrl);
+  const key = await vscode.window.showInputBox({
+    title: `Set Up ${name}`,
+    prompt: local
+      ? 'An API key, if this server wants one. Leave it empty for Ollama and LM Studio.'
+      : known?.key === false
+        ? 'An API key, if this server wants one.'
+        : 'The API key. It is kept in VS Code\'s secret storage, not in any settings file.',
+    password: true,
+    ignoreFocusOut: true,
+  });
+  if (key === undefined || (key.trim() && !(await keyMayGo(name, baseUrl)))) {
+    return undefined;
+  }
+  const settings = vscode.workspace.getConfiguration('taskRunnerUltimate');
+  const current = settings.get<Record<string, unknown>>('aiProviders', {}) ?? {};
+  await settings.update('aiProviders', { ...current, [name]: { baseUrl } }, vscode.ConfigurationTarget.Global);
+  await setProviderKey({ name, baseUrl }, key.trim() || undefined);
+  return name;
+}
+
+/** Whether an address is this machine's own, where nothing sent leaves it. */
+function isLocal(baseUrl: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//i.test(`${baseUrl}/`);
+}
+
+/**
+ * Whether a key may be saved for an address: always, unless the address is
+ * plain `http://` on another machine, where the key would cross the network
+ * unencrypted — then only once the user has said so. Asked wherever a key is
+ * saved, set up or changed.
+ */
+async function keyMayGo(name: string, baseUrl: string): Promise<boolean> {
+  if (!/^http:/i.test(baseUrl) || isLocal(baseUrl)) {
+    return true;
+  }
+  const go = 'Save Anyway';
+  const answer = await vscode.window.showWarningMessage(
+    `${name} is reached over plain http://, so its key would cross the network unencrypted.`,
+    { modal: true },
+    go,
+  );
+  return answer === go;
+}
+
+/** ⋮ → AI providers: the providers set up here, to change a key or remove one, and a new one to set up. */
+async function manageProviders(): Promise<void> {
+  const add = '\u0000add';
+  const picked = await choose<string>({
+    title: 'API Providers',
+    placeholder: 'Pick one to change, or set up another',
+    items: [
+      ...apiProviders().map((provider) => ({ value: provider.name, label: provider.name, description: provider.baseUrl })),
+      { value: add, label: '$(add) Set up a provider…' },
+    ],
+  });
+  if (picked === undefined) {
+    return;
+  }
+  if (picked === add) {
+    await setUpProvider();
+    return;
+  }
+  const action = await choose<'key' | 'remove'>({
+    title: picked,
+    placeholder: 'What to do with it?',
+    items: [
+      { value: 'key', label: '$(key) Change its API key' },
+      { value: 'remove', label: '$(trash) Remove it', detail: 'Its key goes too. Tasks that name it ask for another provider when they next run.' },
+    ],
+  });
+  const provider = apiProvider(picked);
+  if (!provider) {
+    return;
+  }
+  if (action === 'key') {
+    // Saved for the address the provider has now — which is also how a key is
+    // set again after the address was changed in settings. See `providerKey`.
+    const key = await vscode.window.showInputBox({
+      title: picked,
+      prompt: `The API key for ${provider.baseUrl}. Empty removes it.`,
+      password: true,
+      ignoreFocusOut: true,
+    });
+    if (key !== undefined && (!key.trim() || (await keyMayGo(picked, provider.baseUrl)))) {
+      await setProviderKey(provider, key.trim() || undefined);
+    }
+  } else if (action === 'remove') {
+    const settings = vscode.workspace.getConfiguration('taskRunnerUltimate');
+    const { [picked]: _gone, ...rest } = settings.get<Record<string, unknown>>('aiProviders', {}) ?? {};
+    await settings.update('aiProviders', rest, vscode.ConfigurationTarget.Global);
+    await setProviderKey(provider, undefined);
+  }
+}
+
+/** The command line a `command` task hands its prompt to. */
+function askCommand(title: string, value?: string): Thenable<string | undefined> {
+  return vscode.window.showInputBox({
+    title,
+    prompt: 'A command line, run in the workspace folder with the prompt on its standard input. What it prints is the answer.',
+    placeHolder: 'e.g. opencode run -m opencode/big-pickle',
+    value,
+    validateInput: (text) =>
+      !validCommand(text)
+        ? 'One line, up to 500 characters.'
+        : HIDDEN_CHARACTERS.test(text)
+          ? 'Hidden characters cannot be part of a command.'
+          : undefined,
+  });
+}
+
 /** A prompt typed in one line; a longer one is written with Edit Prompt, in an editor. */
 function askPrompt(title: string, value?: string): Thenable<string | undefined> {
   return vscode.window.showInputBox({
     title,
-    prompt: 'What the agent is asked to do. For a prompt of several lines, use Edit Prompt on the row once it is saved.',
-    placeHolder: 'e.g. Review the uncommitted changes and list anything that looks like a bug',
+    prompt: `What the agent is asked to do. Context goes in as it runs: ${Object.keys(CONTEXT_VARIABLES)
+      .map((name) => `\${${name}}`)
+      .join(', ')}. For several lines, use Edit Prompt on the row once it is saved.`,
+    placeHolder: 'e.g. Review these changes and list anything that looks like a bug: ${gitDiff}',
     value,
     validateInput: (text) =>
       !text.trim()
@@ -3051,21 +3284,35 @@ function askPrompt(title: string, value?: string): Thenable<string | undefined> 
   });
 }
 
-function pickAccess(title: string, current?: AiAccess): Promise<AiAccess | undefined> {
+/** The access, among the levels the agent can be held to. */
+function pickAccess(title: string, agent: AiAgent, current?: AiAccess): Promise<AiAccess | undefined> {
+  const levels = agentAccess(agent);
   return choose({
     title,
     placeholder: 'What may the agent do?',
-    items: AI_ACCESS.map((access) => ({
+    items: levels.map((access) => ({
       value: access,
       label: `${access === 'full' ? '$(warning)' : access === 'edit' ? '$(edit)' : '$(eye)'} ${ACCESS_LABEL[access]}`,
       detail: ACCESS_DETAIL[access],
     })),
-    current: current ?? 'read',
+    current: current && levels.includes(current) ? current : levels[0],
   });
 }
 
+/**
+ * The access of a task after its agent changed: kept when the new agent can be
+ * held to it, the agent's only level when it has one, and asked otherwise.
+ */
+async function accessFor(title: string, agent: AiAgent, current?: AiAccess): Promise<AiAccess | undefined> {
+  const levels = agentAccess(agent);
+  if (current && levels.includes(current)) {
+    return current;
+  }
+  return levels.length === 1 ? levels[0] : pickAccess(title, agent);
+}
+
 const RESULT_DETAIL: Record<AiResult, string> = {
-  report: 'The answer is saved as a Markdown report and opened beside the editor.',
+  report: 'The answer is saved as a Markdown report and opened beside the editor, which keeps the focus.',
   clipboard: 'The answer is copied to the clipboard.',
   none: 'The answer stays in the terminal — for a task whose work is the files it changes.',
 };
@@ -3099,61 +3346,96 @@ function pickNotify(title: string, current?: AiNotify): Promise<AiNotify | undef
  * prompts take is the user's own and is approved as it is saved — the way a
  * command typed into the tree is — and this one is too; the question is only
  * there so that the last thing seen before an agent is allowed everything is
- * what that means.
+ * what that means. A command line of the user's own is said as what it is:
+ * there is no level to choose, only the command to run.
  */
-async function confirmFullAccess(name: string): Promise<boolean> {
+async function confirmFullAccess(name: string, task: Pick<AiTask, 'agent' | 'command'>): Promise<boolean> {
   const save = 'Save';
   const answer = await vscode.window.showWarningMessage(
     `Save "${name}" with full access?`,
     {
       modal: true,
-      detail: `${ACCESS_DETAIL.full}\n\nIt will not be asked about again until its prompt, agent or access changes.`,
+      detail: [
+        task.agent === 'command'
+          ? `It runs \`${task.command}\` in the workspace folder with the prompt on its input, and nothing here limits what that does.`
+          : ACCESS_DETAIL.full,
+        '',
+        'It will not be asked about again until its prompt, agent, command or access changes.',
+      ].join('\n'),
     },
     save,
   );
   return answer === save;
 }
 
-/** A name, an agent, a model, a prompt, the access, and what happens to the answer — asked in turn, and filed. */
+/**
+ * Who runs a task — the agent, then what that agent needs: a provider and one
+ * of its models, a command line, or a model of the agent's own — asked in turn.
+ * `current` is what the task has now, when this is a change rather than a new
+ * task; `undefined` is any step dismissed.
+ */
+async function askRunner(
+  title: string,
+  current?: AiTask,
+): Promise<Pick<AiTask, 'agent' | 'model' | 'provider' | 'command'> | undefined> {
+  const agent = await pickAgent(title, current?.agent);
+  if (!agent) {
+    return undefined;
+  }
+  const same = agent === current?.agent;
+  if (agent === 'api') {
+    const provider = await pickProvider(title, same ? current?.provider : undefined);
+    if (!provider) {
+      return undefined;
+    }
+    const model = await pickModel(title, agent, same && provider.name === current?.provider ? current?.model : undefined, provider);
+    return model ? { agent, provider: provider.name, model } : undefined;
+  }
+  if (agent === 'command') {
+    const command = (await askCommand(title, same ? current?.command : undefined))?.trim();
+    return command ? { agent, command } : undefined;
+  }
+  // A model is an agent's own name for it, so one picked for the other agent
+  // is not offered as the current one.
+  const model = await pickModel(title, agent, same ? current?.model : undefined);
+  return model === undefined ? undefined : { agent, ...(model ? { model } : {}) };
+}
+
+/** A name, who runs it, a prompt, the access, and what happens to the answer — asked in turn, and filed. */
 async function createAiTask(node: TreeNode | undefined): Promise<void> {
   const folder = await customFolder(node);
   if (!folder) {
     return;
   }
-  const steps = 7;
-  const name = (await askTaskName({ title: `New AI Task (1/${steps})`, taken: await customNames(folder) }))?.trim();
+  const name = (await askTaskName({ title: 'New AI Task', taken: await customNames(folder) }))?.trim();
   if (!name) {
     return;
   }
-  const title = (step: number) => `New AI Task (${step}/${steps}): ${name}`;
-  const agent = await pickAgent(title(2));
-  if (!agent) {
+  const title = `New AI Task: ${name}`;
+  const runner = await askRunner(title);
+  if (!runner) {
     return;
   }
-  const model = await pickModel(title(3), agent);
-  if (model === undefined) {
-    return;
-  }
-  const prompt = (await askPrompt(title(4)))?.trim();
+  const prompt = (await askPrompt(title))?.trim();
   if (!prompt) {
     return;
   }
-  const access = await pickAccess(title(5));
+  const access = await accessFor(title, runner.agent);
   if (!access) {
     return;
   }
-  const result = await pickResult(title(6));
+  const result = await pickResult(title);
   if (!result) {
     return;
   }
-  const notify = await pickNotify(title(7));
+  const notify = await pickNotify(title);
   if (!notify) {
     return;
   }
-  if (access === 'full' && !(await confirmFullAccess(name))) {
+  if (access === 'full' && !(await confirmFullAccess(name, runner))) {
     return;
   }
-  const task: AiTask = { agent, ...(model ? { model } : {}), prompt, access, result, notify };
+  const task: AiTask = { ...runner, prompt, access, result, notify };
   await writeCustomTasks(
     folder,
     (tasks) =>
@@ -3179,7 +3461,8 @@ async function saveAiTask(script: ScriptEntry, next: AiTask): Promise<boolean> {
   }
   const ref = scriptRef(script);
   const approved = clearance(script) === 'approved';
-  if (next.access === 'full' && script.ai.access !== 'full' && !(await confirmFullAccess(script.name))) {
+  const widened = next.access === 'full' && (script.ai.access !== 'full' || next.command !== script.ai.command);
+  if (widened && !(await confirmFullAccess(script.name, next))) {
     return false;
   }
   const seen = JSON.stringify(aiTaskValue(script.ai));
@@ -3215,8 +3498,15 @@ async function editAiTask(node: TreeNode | undefined): Promise<void> {
     items: [
       { value: 'prompt', label: '$(comment) Prompt', description: visible(task.prompt.replace(/\s+/g, ' ').slice(0, 80)) },
       { value: 'editor', label: '$(go-to-file) Prompt in an editor', description: 'for a prompt of several lines' },
-      { value: 'agent', label: '$(hubot) Agent and model', description: aiAgentText(task) },
-      { value: 'access', label: '$(shield) Access', description: ACCESS_LABEL[task.access] },
+      {
+        value: 'agent',
+        label: task.agent === 'api' ? '$(cloud) Provider and model' : task.agent === 'command' ? '$(terminal) Command' : '$(hubot) Agent and model',
+        description: visible(agentText(task)),
+      },
+      // An agent held to one level has nothing here to change.
+      ...(agentAccess(task.agent).length > 1
+        ? [{ value: 'access' as const, label: '$(shield) Access', description: ACCESS_LABEL[task.access] }]
+        : []),
       { value: 'result', label: '$(output) Result', description: RESULT_LABEL[task.result] },
       { value: 'notify', label: '$(bell) Notification', description: NOTIFY_LABEL[task.notify] },
     ],
@@ -3237,7 +3527,7 @@ async function editAiTask(node: TreeNode | undefined): Promise<void> {
   } else if (part === 'agent') {
     await changeAgent(script, task, title);
   } else if (part === 'access') {
-    const access = await pickAccess(title, task.access);
+    const access = await pickAccess(title, task.agent, task.access);
     if (access && access !== task.access) {
       await saveAiTask(script, { ...task, access });
     }
@@ -3255,57 +3545,76 @@ async function editAiTask(node: TreeNode | undefined): Promise<void> {
 }
 
 /**
- * The agent and then the model, asked in turn and saved — from Edit AI Task, and
- * from the offer a run makes when its agent or model is not there. Says whether
- * anything was saved.
+ * Who runs the task, asked again and saved — from Edit AI Task, and from the
+ * offer a run makes when its agent, model or provider is not there. Says
+ * whether anything was saved.
  */
 async function changeAgent(script: ScriptEntry, task: AiTask, title: string): Promise<boolean> {
-  const agent = await pickAgent(title, task.agent);
-  if (!agent) {
+  const runner = await askRunner(title, task);
+  if (!runner) {
     return false;
   }
-  // A model is an agent's own name for it, so one picked for the other agent
-  // is not offered as the current one.
-  const model = await pickModel(title, agent, agent === task.agent ? task.model : undefined);
-  if (model === undefined) {
+  if (
+    runner.agent === task.agent &&
+    runner.model === task.model &&
+    runner.provider === task.provider &&
+    runner.command === task.command
+  ) {
     return false;
   }
-  if (agent === task.agent && (model || undefined) === task.model) {
+  // An agent held to a single level never chose it — a command's full access,
+  // an API's none — so it is not carried over to an agent that has a choice.
+  const chosen = agentAccess(task.agent).length > 1 ? task.access : undefined;
+  const access = await accessFor(title, runner.agent, chosen);
+  if (!access) {
     return false;
   }
-  const { model: _old, ...rest } = task;
-  return saveAiTask(script, { ...rest, agent, ...(model ? { model } : {}) });
+  const { model: _model, provider: _provider, command: _command, ...rest } = task;
+  return saveAiTask(script, { ...rest, ...runner, access });
 }
 
 /**
- * What a run says when it could not start for want of its agent or its model —
- * a project opened on another machine, an agent uninstalled, a model retired or
- * not on this account. Rather than only failing, it offers what fixes it: the
- * agent and model, picked again among the ones this machine has, and then the
+ * What a run says when it could not start for want of its agent, its model or
+ * its provider — a project opened on another machine, an agent uninstalled, a
+ * model retired or not on this account, a provider not set up here or turning
+ * its key away. Rather than only failing, it offers what fixes it, and then the
  * run it was trying to make.
  */
 async function offerAgentChange(script: ScriptEntry, task: AiTask, problem: AgentProblem, detail: string): Promise<void> {
   const name = visible(script.name);
   const agent = AGENT_LABEL[task.agent];
-  const change = 'Change Agent and Model…';
+  const change = task.agent === 'api' ? 'Change Provider and Model…' : 'Change Agent and Model…';
   const locate = 'Set Path…';
+  const setUp = 'Set Up Provider…';
+  const provider = task.provider ? visible(task.provider) : '';
   const answer = await vscode.window.showWarningMessage(
-    problem === 'missing'
-      ? `"${name}" did not run: ${agent} was not found on this machine.`
-      : `"${name}" did not run: ${task.model ? `the model "${task.model}"` : 'its default model'} is not available to ${agent} here.`,
+    notificationText(
+      problem === 'missing'
+        ? `"${name}" did not run: ${agent} was not found on this machine.`
+        : problem === 'provider'
+          ? apiProvider(task.provider ?? '')
+            ? `"${name}" did not run: ${provider} could not be used — its address or its key.`
+            : `"${name}" did not run: no API provider named "${provider}" is set up on this machine.`
+          : `"${name}" did not run: ${task.model ? `the model "${task.model}"` : 'its default model'} is not available to ${task.agent === 'api' ? provider : agent} here.`,
+    ),
     { detail },
     change,
     ...(problem === 'missing' ? [locate] : []),
+    ...(problem === 'provider' ? [setUp] : []),
   );
   if (answer === locate) {
     void vscode.commands.executeCommand('workbench.action.openSettings', 'taskRunnerUltimate.aiAgentPaths');
+    return;
+  }
+  if (answer === setUp) {
+    await manageProviders();
     return;
   }
   if (answer !== change || !(await changeAgent(script, task, `Change "${name}"`))) {
     return;
   }
   const run = 'Run';
-  if ((await vscode.window.showInformationMessage(`"${name}" was saved. Run it now?`, run)) !== run) {
+  if ((await vscode.window.showInformationMessage(notificationText(`"${name}" was saved. Run it now?`), run)) !== run) {
     return;
   }
   // The row as the file now has it: the one this run was built from names the
@@ -3702,7 +4011,11 @@ function visible(text: string): string {
  */
 function clearance(script: ScriptEntry): 'approved' | 'unapproved' | 'blocked' {
   if (script.ai) {
-    if (HIDDEN_CHARACTERS.test(script.name) || hiddenInPrompt(script.ai.prompt)) {
+    if (
+      HIDDEN_CHARACTERS.test(script.name) ||
+      hiddenInPrompt(script.ai.prompt) ||
+      HIDDEN_CHARACTERS.test(script.ai.command ?? '')
+    ) {
       return 'blocked';
     }
     return aiCovered(script.ai, approvedText(scriptRef(script))) ? 'approved' : 'unapproved';
@@ -3828,7 +4141,7 @@ async function approveAiLaunch(script: ScriptEntry, task: AiTask): Promise<boole
       {
         modal: true,
         detail: [
-          'Its name or prompt holds a hidden character — one that draws as nothing here and is still read by the agent, which is how an instruction is slipped past whoever approves a prompt. Nothing typed into this tree can hold one, so it was written some other way.',
+          'Its name, prompt or command holds a hidden character — one that draws as nothing here and is still read by the agent or the shell, which is how an instruction is slipped past whoever approves it. Nothing typed into this tree can hold one, so it was written some other way.',
           '',
           visible(promptExcerpt(task.prompt)),
         ].join('\n'),
@@ -3855,12 +4168,12 @@ async function approveAiLaunch(script: ScriptEntry, task: AiTask): Promise<boole
       modal: true,
       detail: [
         ...(changes.length > 0 ? [`Changed: ${changes.join(', ')}.`, ''] : []),
-        `${aiAgentText(task)} · ${ACCESS_LABEL[task.access]}: ${ACCESS_DETAIL[task.access]}`,
+        ...aiRunnerLines(task),
         '',
         'Prompt:',
         promptExcerpt(task.prompt),
         '',
-        `Runs in ${where ?? 'the workspace folder'}. Once run, it is not asked about again until its prompt, agent or access changes.`,
+        `Runs in ${where ?? 'the workspace folder'}. Once run, it is not asked about again until its prompt, agent, command or access changes.`,
       ].join('\n'),
     },
     run,
@@ -3883,9 +4196,21 @@ async function approveAiLaunch(script: ScriptEntry, task: AiTask): Promise<boole
   return true;
 }
 
-/** The agent of a task, and its model when it names one. */
-function aiAgentText(task: AiTask): string {
-  return task.model ? `${AGENT_LABEL[task.agent]} (${task.model})` : AGENT_LABEL[task.agent];
+/**
+ * Who runs a task and what it may do, as the approval dialog says it. A command
+ * of the user's own is shown whole — it is the thing being approved — and a
+ * model behind an API is said to touch nothing, because it cannot.
+ */
+function aiRunnerLines(task: AiTask): string[] {
+  if (task.agent === 'command') {
+    return [`Command: ${shownLine(task.command ?? '')}`, `${ACCESS_LABEL.full}: it runs with the prompt on its input, and nothing here limits what it does.`];
+  }
+  if (task.agent === 'api') {
+    return [
+      `${visible(agentText(task))} · ${accessText(task)}: the model sees the prompt and the context it names, and nothing else. It cannot read or change the project.`,
+    ];
+  }
+  return [`${agentText(task)} · ${ACCESS_LABEL[task.access]}: ${ACCESS_DETAIL[task.access]}`];
 }
 
 /**
@@ -5208,9 +5533,15 @@ async function showMenu(): Promise<void> {
     },
     {
       label: '$(sparkle) Create AI task',
-      description: 'a prompt for Claude Code or Codex',
+      description: 'a prompt for Claude Code, Codex, Copilot, an API or a command',
       detail: `Kept in ${CUSTOM_TASKS_FILE} beside the custom tasks, with the access it runs with.`,
       run: () => createAiTask(undefined),
+    },
+    {
+      label: '$(cloud) AI providers',
+      description: 'OpenAI-compatible APIs for AI tasks',
+      detail: 'OpenAI, OpenRouter, a local Ollama or LM Studio… Keys are kept in VS Code\'s secret storage.',
+      run: () => manageProviders(),
     },
     {
       label: '$(refresh) Refresh scripts',

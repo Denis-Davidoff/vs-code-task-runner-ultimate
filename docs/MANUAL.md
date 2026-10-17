@@ -583,8 +583,10 @@ extension does not run at all.
 
 ### AI tasks
 
-An **AI task** is a prompt handed to a coding agent — **Claude Code** or **Codex** — run headless in
-the workspace folder, with what the agent may do fixed by the task. *Review the uncommitted changes
+An **AI task** is a prompt handed to a coding agent — **Claude Code**, **Codex** or **GitHub
+Copilot** — run headless in the workspace folder, with what the agent may do fixed by the task. Or
+handed to a model behind an **OpenAI-compatible API** — OpenAI, OpenRouter, a local Ollama or LM
+Studio — or to **any other command line** you name. *Review the uncommitted changes
 and list anything that looks like a bug*, kept as a row and run with a click. It sits under **Custom
 Tasks** beside the command lines, with a sparkle for an icon, and is a row like any other: star it,
 paint it, rename it, drag it, stop it with ■.
@@ -596,15 +598,39 @@ turn for:
 | Step | Choices |
 | --- | --- |
 | **Name** | What the row is called. |
-| **Agent** | Claude Code or Codex, each marked with the version found on this machine — or *not found*. |
-| **Model** | **Default** — whatever the agent is set to use — or one it lists: `opus`, `sonnet`, `haiku` for Claude Code, the models in Codex's own model cache for Codex. **Other…** takes any name. |
-| **Prompt** | One line here. **Edit Prompt** on the row opens it in an editor for anything longer. |
-| **Access** | **Read-only** (the default), **Edit files**, or **Full access** — see below. |
-| **Result** | **Open a report** — a Markdown preview of the answer — **Copy to clipboard**, or **Nothing**, for a task whose work is the files it changes. |
+| **What runs it** | Claude Code, Codex or GitHub Copilot, each marked with the version found on this machine — or *not found*; **API**, a model behind an [API provider](#api-providers); or **Command**, any other command line. |
+| **Model** | For an agent: **Default** — whatever the agent is set to use — or one it lists: `opus`, `sonnet`, `haiku` for Claude Code, the models in Codex's own model cache for Codex, `auto` for Copilot. For an API: a provider, then one of the models its `/models` lists. **Other…** takes any name. |
+| **Command** | For **Command** only: the command line, run in the workspace folder with the prompt on its standard input — `opencode run -m opencode/big-pickle`, `aider --message-file /dev/stdin`, a script of your own. What it prints is the answer. |
+| **Prompt** | One line here, with [context](#context-in-the-prompt) such as `${gitDiff}` in it. **Edit Prompt** on the row opens it in an editor for anything longer. |
+| **Access** | For an agent: **Read-only** (the default), **Edit files**, or **Full access** — see below. A **Command** always runs with full access, since nothing here can narrow it; an **API** model touches nothing, so it is not asked. |
+| **Result** | **Open a report** — a Markdown preview of the answer, beside the editor, which keeps the focus — **Copy to clipboard**, or **Nothing**, for a task whose work is the files it changes. |
 | **Notification** | None, **Notify when done**, or **Notify with the answer**. A failure is reported whatever this says. |
 
 The agent's progress streams into the task's terminal — the files it reads, the commands it runs, a
-✗ for each one it was refused — and Ctrl+C there stops it, along with any command it had started.
+✗ for each one it was refused, or an API model's answer word by word — and Ctrl+C there stops it,
+along with any command it had started.
+
+#### Context in the prompt
+
+A prompt can name context that is read as it runs and put in its place:
+
+| Variable | Becomes |
+| --- | --- |
+| `${selection}` | the text selected in the active editor |
+| `${file}` | the whole of the file in the active editor |
+| `${filePath}` | that file's path inside its workspace folder |
+| `${gitDiff}` | every uncommitted change to tracked files — `git diff HEAD`; a file git does not track yet is not in it |
+| `${gitDiffStaged}` | the changes staged for commit — `git diff --cached` |
+| `${gitLog}` | the last 30 commits, one line each |
+| `${clipboard}` | what is on the clipboard |
+
+*Write a commit message for these changes: `${gitDiffStaged}`* is a task an API model can do as well
+as any agent, since everything it needs is in the prompt. The terminal says which context went in and
+how much of it. Each value is put in once — one that happens to hold `${gitDiff}` is text, not another
+substitution — and one over 200,000 characters is cut, with a note saying so; the terminal says
+which were. A diff past 20 MB is cut there already, and says so too, rather than failing. What is approved is the
+prompt as written; what the variables hold is your own work at the moment you run it, read as data
+the way anything an agent reads is.
 
 A task kept in the project travels with it, and the machine it lands on may not have what the task
 names. When the agent is **not installed** here, or the **model** it names is not one the agent can
@@ -616,22 +642,68 @@ is reported as it is.
 
 #### Access
 
-| Level | Claude Code | Codex |
-| --- | --- | --- |
-| **Read-only** | `--permission-mode dontAsk --allowedTools=Read(./**),Grep(./**),Glob(./**) --setting-sources user`: it reads the project folder and nothing outside it, and runs only commands Claude Code itself counts as read-only inside it, such as `git diff`. | `--sandbox read-only --ignore-rules` |
-| **Edit files** | The same, with Edit, Write, MultiEdit and NotebookEdit allowed — each held to the project folder too. | `--sandbox workspace-write --ignore-rules` |
-| **Full access** | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` |
+| Level | Claude Code | Codex | GitHub Copilot |
+| --- | --- | --- | --- |
+| **Read-only** | `--permission-mode dontAsk --allowedTools=Read(./**),Grep(./**),Glob(./**) --setting-sources user`: it reads the project folder and nothing outside it, and runs only commands Claude Code itself counts as read-only inside it, such as `git diff`. | `--sandbox read-only --ignore-rules` | `--available-tools=view,glob,grep,rg` — the model is shown no other tool — with `write`, `shell`, `url` and `memory` denied besides, the built-in MCP servers off and the temp folder out of reach. |
+| **Edit files** | The same, with Edit, Write, MultiEdit and NotebookEdit allowed — each held to the project folder too. | `--sandbox workspace-write --ignore-rules` | `--available-tools=view,glob,grep,rg,create,edit,apply_patch,str_replace_editor --allow-tool=write`: the tools that write, held to the project folder by Copilot's own path check, and none that run commands; `shell`, `url` and `memory` denied, the built-in MCP servers off and the temp folder out of reach. |
+| **Full access** | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` | `--allow-all` |
+
+Copilot is always started with `--no-ask-user` and `--no-auto-update`, and its version is asked the
+same way, so the version shown is the one that runs. One thing its command line cannot switch off: in
+a folder you have told Copilot to trust, the repository's own hooks run even headless, and a hook can
+run any command as the session starts, whatever tools the model is shown. So a **Read-only** or
+**Edit files** Copilot task does not run in a folder Copilot trusts — it says why, and runs at **Full
+access** or once the folder is no longer in Copilot's trusted folders. Which folders those are is
+read from `config.json` and `settings.json` in Copilot's own folder (`~/.copilot`, or `COPILOT_HOME`).
+
+A **Command** has no row here: it runs as itself, with whatever access it takes. An **API** model has
+none either: it is sent the prompt and answers with text, and never touches the project.
 
 Saving a task with **Full access** asks once more, in words, what that means. Read-only is a limit on
 the agent's tools, not a promise about your data: what it reads in the project is sent to its
 provider.
 
 At the two limited levels the project's own agent configuration is left out — Claude Code's
-`.claude/settings.json` and `.claude/settings.local.json`, Codex's execpolicy `.rules` files — since
+`.claude/settings.json` and `.claude/settings.local.json`, Codex's execpolicy `.rules` files,
+Copilot's repository hooks, MCP servers and extensions (by never passing on the
+`GITHUB_COPILOT_PROMPT_MODE_*`, `COPILOT_ALLOW_ALL` and `COPILOT_PLAN_THEN_AUTOPILOT` variables that
+would let them in, and by not running in a folder Copilot trusts at all) — since
 those are files a pull can rewrite, and a task approved as read-only must not become whatever they
 allow. Your user-level Claude Code settings (`~/.claude/settings.json`) still apply, so an allow rule
 you put there, such as `Bash(npm test:*)`, is allowed here too. At **Full access** the agent loads its
 configuration as it always does.
+
+#### API providers
+
+An **API** task names a provider — `OpenRouter`, `Ollama`, whatever you called it — and the provider
+is set up on each machine, out of the project: ⋮ → **AI providers**, **AI Providers…** in the command
+palette, or **Set up a provider…** while making a task. It offers OpenAI, OpenRouter, Ollama and LM
+Studio by name, and **Other…** for any OpenAI-compatible endpoint — DeepSeek, Groq, Mistral, Azure
+OpenAI, a gateway of your own. The address goes to **`taskRunnerUltimate.aiProviders`** in your user
+settings, which is machine-scoped; the key goes to VS Code's secret storage and nowhere else, saved
+for that address. A local server needs no key, and a prompt sent to one stays on the machine — unless
+the model itself is one the server forwards to a cloud of its own, as some Ollama models are. A key
+bound for a plain `http://` address on another machine asks first, wherever it is saved, since it
+would cross the network unencrypted.
+
+A key is only ever sent to the address it was saved for. In a remote window — a dev container, SSH —
+settings come from the remote machine, which a repository's own container configuration can write,
+while secrets stay on yours; so a provider whose address has changed since its key was saved sends no
+key, and the task says why. **Change its API key** in **AI providers** saves it for the address the
+provider has now. Redirects are not followed, so a prompt never ends up somewhere else on the way.
+
+An answer is read as an answer only when it is one: an error the provider sends inside a stream, as
+JSON with a 200, or a web page where an API should be fails the task rather than delivering it. The
+model's text reaches the terminal without its escape sequences, and a report shows an image in an
+answer as its link rather than loading it — an answer steered by what the model read could otherwise
+name an image whose address carries the rest of the context away.
+
+A task in a repository names only the provider, so a pull cannot point it at a server of its own and
+have your prompt and key sent there. Moving a task to another of your providers — from a local model
+to a cloud one, say — asks again before it runs, since the prompt and its context would leave for
+somewhere new; another model of the same provider does not. Run on a machine where that provider is not set up, or where its
+key is turned away, it offers **Set Up Provider…** and **Change Provider and Model…**; a model the
+provider does not have offers the second.
 
 #### Approving a prompt you did not write
 
@@ -642,8 +714,9 @@ an approval covers widened to the whole of what the task may do:
 - A task that reached the file some other way asks before its first run — **with full access** said
   in the question when that is what it has — and shows the agent, the access in words and the start
   of the prompt. **Show Prompt** opens all of it.
-- It asks again when its **agent**, its **prompt** or its **access** changes, and says which of them
-  did. A changed prompt opens as a diff — the one that last ran beside the one in the file — from
+- It asks again when its **agent**, its **prompt**, its **access** or — for a **Command** — its
+  **command** changes, and says which of them did. A command task shows its command whole in the
+  question, since that is what is being allowed to run. A changed prompt opens as a diff — the one that last ran beside the one in the file — from
   **Show Changes**.
 - Narrowing the access never asks: an approval of **Full access** covers the same prompt read-only.
   Changing the model, the result or the notification never asks either; none of them changes what the
@@ -679,8 +752,18 @@ An AI task is an object where a command line would be a string:
 }
 ```
 
-`agent` and `prompt` are required; `access` defaults to `read`, `result` to `report`, `notify` to
-`done`. A value the tree does not recognise — an `access` of `"ful"`, a `model` starting with `-` —
+Other kinds name what they need beside it:
+
+```jsonc
+"Commit message": { "agent": "api", "provider": "Ollama", "model": "qwen2.5-coder:7b", "result": "clipboard",
+                    "prompt": "Write a commit message for: ${gitDiffStaged}" },
+"Ask opencode":   { "agent": "command", "command": "opencode run", "access": "full", "prompt": "…" }
+```
+
+`agent` and `prompt` are required — and `provider` and `model` for `api`, `command` for `command`;
+`access` defaults to `read`, `result` to `report`, `notify` to `done`. An `api` task is always read as
+read-only and a `command` task as full access, whatever the file says, since that is what each of them
+is. A value the tree does not recognise — an `access` of `"ful"`, a `model` starting with `-` —
 makes the entry not a task at all rather than one with a guessed meaning. Keys it does not know, a
 `"$comment"` say, are kept when the tree writes the file, including on the task it has just changed.
 
@@ -690,8 +773,8 @@ steered by what it read.
 
 The agents are found on the login shell's `PATH`, in the directories their installers use, and inside
 the Claude Code and Codex VS Code extensions; each is used only once its `--version` names it, since
-more than one tool installs itself as `agent`. **`taskRunnerUltimate.aiAgentPaths`** sets either path
-by hand. It is machine-scoped, so a repository's own settings cannot point it somewhere else.
+a name proves little — AWS's CLI installs itself as `copilot` too. **`taskRunnerUltimate.aiAgentPaths`**
+sets any of the three paths by hand. It is machine-scoped, so a repository's own settings cannot point it somewhere else.
 
 Reports are written to this workspace's extension storage, out of the project, so there is nothing
 to commit or ignore.
@@ -1078,7 +1161,8 @@ The ⋮ in the view header opens everything that is not aimed at one row:
 | Entry | What it does |
 | --- | --- |
 | **Create custom task** | Asks for a name and a shell command and adds it to [Custom Tasks](#custom-tasks) at the top of the tree. First in the menu, because until that heading exists — with a **+** of its own — this is where the first one is made. |
-| **Create AI task** | Asks for a name, an agent, a model, a prompt, the access and what happens to the answer, and adds it to [Custom Tasks](#ai-tasks). |
+| **Create AI task** | Asks for a name, what runs it — an agent, an API or a command — a prompt, the access and what happens to the answer, and adds it to [Custom Tasks](#ai-tasks). |
+| **AI providers** | The [OpenAI-compatible APIs](#api-providers) API tasks run on: set one up, change its key, or remove it. |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
 | **Check containers** | Asks Docker which compose services are actually running and marks those rows — see [Knowing what is actually up](#knowing-what-is-actually-up). Nothing happens in the background; this is the question. |
@@ -1421,9 +1505,9 @@ live where there is a row to invoke them on:
 | Change Colour… | right-click only, on every row the tree draws itself — one entry opening a list of fifteen, so the palette costs the menu one line rather than fifteen |
 
 All of them are deliberately hidden from the command palette, which has no row to hand them. The
-palette keeps the nine that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
-**New Custom Task…**, **Check Containers**, **Stop All Running Tasks**, **Restart All Running Tasks**,
-and the two halves of the grouping switch — **Group by Ecosystem** and **Show as a Flat List**, each of which sets a mode
+palette keeps the eleven that stand on their own: **Show Scripts**, **Menu**, **Refresh Scripts**,
+**New Custom Task…**, **New AI Task…**, **AI Providers…**, **Check Containers**, **Stop All Running
+Tasks**, **Restart All Running Tasks**, and the two halves of the grouping switch — **Group by Ecosystem** and **Show as a Flat List**, each of which sets a mode
 rather than toggling one, so invoking the one you are already in changes nothing.
 
 ### Where list customizations are stored
@@ -1572,12 +1656,13 @@ That *adds* a shortcut. To retire the default as well, disable it with a leading
 ## Settings
 
 Everything lives under `taskRunnerUltimate.*` and works in user settings as well as in a workspace's
-`.vscode/settings.json`, so a repository can pin its own runner for everyone who opens it. Four
+`.vscode/settings.json`, so a repository can pin its own runner for everyone who opens it. Five
 exceptions, and they are deliberate: `dockerCompose`, `shellRunner`, `shellRunners` and
 `aiAgentPaths` are machine-scoped, because each of those values is the name of a program this
 extension executes rather than text typed into a task terminal — and a program name is not something
-a repository you cloned gets to choose for the machine that opens it. Those four are set in your own
-settings.
+a repository you cloned gets to choose for the machine that opens it. `aiProviders` is the fifth, for
+the same reason about a server: it says where prompts and keys are sent. Those five are set in your
+own settings.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -1593,7 +1678,8 @@ settings.
 | `shellScripts` | `**/scripts/**/*.{sh,bash,zsh,ksh,ps1,bat,cmd}`, the same under `**/bin/**/`, and the bare `*.{sh,…}` | Where [shell scripts](#shell-scripts) are looked for, as globs matched against each file's path relative to its workspace folder. |
 | `shellRunner` | `bash` | What a Bourne-family shell row — `.sh`, `.bash`, `.zsh`, `.ksh` — is run through. Empty runs the path on its own. |
 | `shellRunners` | `powershell -NoProfile -File` for `.ps1`, nothing for `.bat` and `.cmd` | What each extension is run through, keyed by extension. One that is not named here falls back to `shellRunner`. |
-| `aiAgentPaths` | `{}` | Where the `claude` and `codex` command lines are, for a machine where [AI tasks](#ai-tasks) do not find them on their own. Machine-scoped. |
+| `aiAgentPaths` | `{}` | Where the `claude`, `codex` and `copilot` command lines are, for a machine where [AI tasks](#ai-tasks) do not find them on their own. Machine-scoped. |
+| `aiProviders` | `{}` | The OpenAI-compatible APIs that [API tasks](#api-providers) run on, by name: `{ "Ollama": { "baseUrl": "http://localhost:11434/v1" } }`. Set up with **AI providers** in the ⋮ menu, which keeps each key in secret storage, not here. Machine-scoped. |
 | `exclude` | `**/{node_modules,.git,dist,out,build,.next,coverage,target,vendor,__pycache__,.venv,venv,.tox,.nox,.mypy_cache,.pytest_cache}/**` | Glob of manifests to skip while scanning. Widen it in a large monorepo. |
 | `respectGitignore` | `true` | Skips manifests and scripts that git ignores — see [What git ignores](#what-git-ignores). Off lists everything `exclude` lets through. |
 | `showInEditorTitle` | `true` | The ▶ icon in the editor title bar. |

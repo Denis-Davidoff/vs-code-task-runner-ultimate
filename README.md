@@ -7,13 +7,15 @@ restart without ever going looking for a terminal tab.**
 
 ## Extension Features
 
-- ✨ **[AI tasks — new](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#ai-tasks)** — a prompt for **Claude Code** or **Codex**, kept as a
-  row and run with a click: *review the uncommitted changes*, *write the release notes*, *find what
-  breaks the build*. The **+** at the head of the panel → **AI Task** makes one. Pick the agent and model, then the access it runs with — **read-only**, **edit
-  files** or **full** — and where the answer goes: a Markdown report, the clipboard, a notification.
-  The agents are found on their own, Claude Code and Codex inside their VS Code extensions included.
-  A prompt that changed behind your back — a teammate's commit, a hand edit — asks once before it
-  runs, and says what changed.
+- ✨ **[AI tasks — new](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#ai-tasks)** — a prompt for **Claude Code**, **Codex** or **GitHub Copilot**,
+  kept as a row and run with a click: *review the uncommitted changes*, *write the release notes*,
+  *find what breaks the build*. Or for any **OpenAI-compatible API** — OpenAI, OpenRouter, or a
+  **local model** in Ollama or LM Studio, where nothing leaves your machine — or for any other command
+  line. Put context in the prompt with `${gitDiff}`, `${selection}`, `${file}` and more. Pick the
+  access an agent runs with — **read-only**, **edit files** or **full** — and where the answer goes: a
+  Markdown report, the clipboard, a notification. The **+** at the head of the panel → **AI Task**
+  makes one. A prompt that changed behind your back — a teammate's commit, a hand edit — asks once
+  before it runs, and says what changed.
 - 🔁 **[Folders and workflows — new](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#folders-and-workflows)** — lists of your own made out of
   any tasks the workspace has. A **folder** starts everything in it at once — the whole dev stack in
   one click. A **workflow** runs its steps one after another and stops at the first that fails:
@@ -104,6 +106,8 @@ Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?
 Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/tab-browser-ultimate
 
 ## Change log 0.9
+
+- 0.9.10: [AI tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#ai-tasks) can now run on **GitHub Copilot's CLI**, held to read-only, edit files or full access like Claude Code and Codex; on any **OpenAI-compatible API** — OpenAI, OpenRouter, DeepSeek, Groq, or a local Ollama or LM Studio — set up once per machine with **AI providers** in the ⋮ menu, its key kept in VS Code's secret storage; or on **any other command line** you name, which is given the prompt on its input and runs with full access. Prompts can take [context](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#context-in-the-prompt) as they run: `${gitDiff}`, `${gitDiffStaged}`, `${gitLog}`, `${selection}`, `${file}`, `${filePath}` and `${clipboard}`. A task whose API provider is not set up on this machine, or whose key is turned away, offers to set it up or pick another.
 
 - 0.9.9: New [folders and workflows](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#folders-and-workflows), made from the **+** at the head of the panel. Put any tasks of the workspace in one — package scripts, make targets, compose services, custom and AI tasks — by dragging them onto it, with **Add to Folder…** on a row, or with **Add Tasks…** on the folder. ▶ on a folder starts everything in it at once; ▶ on a workflow runs its steps one after another, marks each ✓ as it passes, and stops at the first that fails, offering to run again from that step. Both are kept in `.vscode/task-script-explorer.json`, and one that changed outside the tree asks once before it runs, showing its whole list; a change you make in the tree keeps an approved list approved but never approves one that came from somewhere else. A workflow whose list changes while it runs stops before its next step, ■ stops it before the next step starts, a second ▶ while it is starting is ignored rather than starting it twice, and **Run Again from Step N** finds the step that failed even if the list has changed since. Scripts in the root of the project are saved without the folder name, so a workflow works in every clone. The extension is now called **AI Task & Script Explorer** — its commands in the palette, its settings and its messages carry the new name; the view in the activity bar is still **Task & Script Explorer**.
 

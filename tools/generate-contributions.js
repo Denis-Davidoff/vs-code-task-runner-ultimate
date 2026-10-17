@@ -353,6 +353,9 @@ manifest.contributes.commands = [
   // one is kept in the palette for the same reason as a custom task; the other
   // three act on a row.
   { command: 'taskRunnerUltimate.createAiTask', title: 'New AI Task…', category: 'AI Task & Script Explorer', icon: '$(sparkle)' },
+  // The OpenAI-compatible endpoints API tasks run on. Needs no row, so it stays
+  // in the palette.
+  { command: 'taskRunnerUltimate.manageAiProviders', title: 'AI Providers…', category: 'AI Task & Script Explorer', icon: '$(cloud)' },
   // The two entries of the panel header's + menu, named for what they make
   // rather than as commands: in a menu titled New Task, "AI Task" is the whole
   // sentence. The palette has New AI Task… and New Custom Task… for the same.

@@ -1056,6 +1056,8 @@ test('only the commands that work without a row are offered in the palette', () 
     'createCustomTask',
     'groupByEcosystem',
     'groupFlat',
+    // The API providers AI tasks run on, set up with no row at hand.
+    'manageAiProviders',
     'menu',
     'refresh',
     'restartAll',

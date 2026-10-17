@@ -2,7 +2,7 @@
   "name": "task-runner-ultimate",
   "displayName": "AI Task & Script Explorer🏆",
   "description": "AI task runner + script runner for all your monorepo's scripts, in a single list.: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.9.9",
+  "version": "0.9.10",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -228,6 +228,12 @@
         "title": "New AI Task…",
         "category": "AI Task & Script Explorer",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "taskRunnerUltimate.manageAiProviders",
+        "title": "AI Providers…",
+        "category": "AI Task & Script Explorer",
+        "icon": "$(cloud)"
       },
       {
         "command": "taskRunnerUltimate.newAiTask",
@@ -1550,10 +1556,37 @@
             "codex": {
               "type": "string",
               "description": "Path to the Codex command line (`codex`)."
+            },
+            "copilot": {
+              "type": "string",
+              "description": "Path to the GitHub Copilot command line (`copilot`)."
             }
           },
           "additionalProperties": false,
           "markdownDescription": "Where the agents that AI tasks run are, for a machine where they are not found on their own. Left empty, each is looked for on the login shell's `PATH`, in the directories their installers use, and in the Claude Code and Codex VS Code extensions — and is used only once its `--version` names it.\n\nMachine-scoped, like `#taskRunnerUltimate.shellRunners#`: this is a program the extension starts, so a repository's own `.vscode/settings.json` cannot choose it for you."
+        },
+        "taskRunnerUltimate.aiProviders": {
+          "type": "object",
+          "scope": "machine",
+          "default": {},
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$",
+            "patternErrorMessage": "Letters, digits, spaces and . _ - only, up to 40, starting with a letter or digit — a task cannot name any other."
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "baseUrl": {
+                "type": "string",
+                "description": "The base URL of an OpenAI-compatible API — the part before /chat/completions.",
+                "pattern": "^https?://\\S+$"
+              }
+            },
+            "required": [
+              "baseUrl"
+            ]
+          },
+          "markdownDescription": "The OpenAI-compatible APIs that AI tasks of the **API** kind run on, by name — e.g. `{ \"OpenRouter\": { \"baseUrl\": \"https://openrouter.ai/api/v1\" } }`. Set them up with **AI Providers…** in the ⋮ menu, which keeps each key in VS Code's secret storage rather than here.\n\nMachine-scoped: a task in a repository names a provider, and only this machine says where that provider is — so a repository cannot point a task, its prompt and your key at a server of its choosing."
         },
         "taskRunnerUltimate.colorIcons": {
           "type": "boolean",
