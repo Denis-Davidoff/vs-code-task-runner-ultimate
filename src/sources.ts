@@ -769,7 +769,7 @@ async function runScan(): Promise<ScriptEntry[]> {
   if (manifests.length === MAX_MANIFESTS && !warnedAboutTruncation) {
     warnedAboutTruncation = true;
     void vscode.window.showWarningMessage(
-      `Task & Script Explorer stopped after ${MAX_MANIFESTS} manifests, so some tasks are missing. ` +
+      `AI Task & Script Explorer stopped after ${MAX_MANIFESTS} manifests, so some tasks are missing. ` +
         'Widen "taskRunnerUltimate.exclude" or trim "taskRunnerUltimate.sources" to skip the ones you do not need.',
     );
   }
@@ -3664,7 +3664,7 @@ export async function editCustomTasks(
   }
   members.push(...incoming);
 
-  const body = customTasksBody(current.data, current.top, members);
+  const body = customTasksBody(current.data, current.top, members, rawFolders(text, current.data));
   // `createDirectory` is `mkdir -p`: a folder with no `.vscode` yet gets one, and
   // one that has it is left as it is.
   await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, path.posix.dirname(CUSTOM_TASKS_FILE)));
@@ -3692,17 +3692,27 @@ function withUnknownKeys(next: unknown, before: unknown): unknown {
  * order given — `JSON.stringify` of an object would put `1` and `2` before
  * `build`, which is the reordering the reader works to avoid.
  */
-function customTasksBody(data: Record<string, unknown>, top: string[], tasks: Array<[string, unknown]>): string {
+function customTasksBody(
+  data: Record<string, unknown>,
+  top: string[],
+  tasks: Array<[string, unknown]>,
+  folders?: Array<[string, unknown]>,
+): string {
   const indented = (value: unknown, depth: number) =>
     JSON.stringify(value, null, 2).replace(/\n/g, `\n${'  '.repeat(depth)}`);
-  const block =
-    tasks.length === 0
+  // `folders`, when it is being written, goes member by member for the same
+  // reason `tasks` always does: a folder named `2024` keeps its place.
+  const ordered = (members: Array<[string, unknown]>) =>
+    members.length === 0
       ? '{}'
-      : `{\n${tasks.map(([name, value]) => `    ${JSON.stringify(name)}: ${indented(value, 2)}`).join(',\n')}\n  }`;
-  const keys = top.includes('tasks') ? top : [...top, 'tasks'];
+      : `{\n${members.map(([name, value]) => `    ${JSON.stringify(name)}: ${indented(value, 2)}`).join(',\n')}\n  }`;
+  const keys = [...top, ...(top.includes('tasks') ? [] : ['tasks']), ...(folders && !top.includes('folders') ? ['folders'] : [])];
   const lines = keys
-    .filter((key) => key === 'tasks' || key in data)
-    .map((key) => `  ${JSON.stringify(key)}: ${key === 'tasks' ? block : indented(data[key], 1)}`);
+    .filter((key) => key === 'tasks' || (key === 'folders' && folders) || key in data)
+    .map(
+      (key) =>
+        `  ${JSON.stringify(key)}: ${key === 'tasks' ? ordered(tasks) : key === 'folders' && folders ? ordered(folders) : indented(data[key], 1)}`,
+    );
   return `{\n${lines.join(',\n')}\n}\n`;
 }
 
@@ -3797,6 +3807,182 @@ function jsonKeys(text: string, at: string[]): string[] | undefined {
   }
 }
 
+// --- folders and workflows ---------------------------------------------------
+
+/**
+ * What a folder does when it is run: start everything in it side by side, or
+ * one task after another, each waiting for the one before it to finish and the
+ * whole stopping at the first that fails.
+ */
+export type TaskFolderType = 'folder' | 'workflow';
+
+/** A folder as the custom tasks file writes it. */
+export interface TaskFolderValue {
+  type: TaskFolderType;
+  /**
+   * The tasks in it, in order, as the file names them: the manifest's path
+   * inside the workspace folder and the task's name, `apps/web/package.json::dev`
+   * — or, for a task of this same file, its name alone. Relative, so the file
+   * means the same thing in every clone of the project, wherever it is on disk.
+   */
+  tasks: string[];
+}
+
+/** A folder of tasks, read out of one workspace folder's custom tasks file. */
+export interface TaskFolder extends TaskFolderValue {
+  name: string;
+  workspace: vscode.WorkspaceFolder;
+}
+
+/**
+ * The folders a custom tasks file declares under `folders`, in the order it
+ * declares them — `undefined` when the text is not a file of ours, or its
+ * `folders` is not an object, which a write refuses rather than replaces.
+ *
+ * Like the tasks, anything that is not a folder is skipped rather than
+ * rejected: a `type` that is neither kind, a `tasks` that is not a list. A name
+ * listed twice inside one folder is the one task once — a folder that started
+ * it twice would be two runs of it under one row.
+ */
+export function parseTaskFolders(text: string): Array<[string, TaskFolderValue]> | undefined {
+  const file = readCustomTasksText(text);
+  if (!file) {
+    return undefined;
+  }
+  const folders = file.data.folders;
+  if (folders === undefined) {
+    return [];
+  }
+  if (!folders || typeof folders !== 'object' || Array.isArray(folders)) {
+    return undefined;
+  }
+  const record = folders as Record<string, unknown>;
+  const order = jsonKeys(stripJsonc(text), ['folders']) ?? Object.keys(record);
+  const found: Array<[string, TaskFolderValue]> = [];
+  for (const name of [...new Set(order)]) {
+    const value = taskFolderValue(record[name]);
+    if (name.trim() && value) {
+      found.push([name, value]);
+    }
+  }
+  return found;
+}
+
+/**
+ * The members of `folders` as the text writes them, in its order — values as
+ * parsed — or `undefined` when there is no `folders` object to read. What the
+ * writers hand back to `customTasksBody` so a write keeps the order the reader
+ * reads, integer-like names included.
+ */
+function rawFolders(text: string, data: Record<string, unknown>): Array<[string, unknown]> | undefined {
+  const record = data.folders;
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return undefined;
+  }
+  const values = record as Record<string, unknown>;
+  const order = (text.trim() ? jsonKeys(stripJsonc(text), ['folders']) : undefined) ?? Object.keys(values);
+  return [...new Set(order)].filter((name) => name in values).map((name) => [name, values[name]]);
+}
+
+function taskFolderValue(value: unknown): TaskFolderValue | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const type = raw.type === undefined ? 'folder' : raw.type;
+  if (type !== 'folder' && type !== 'workflow') {
+    return undefined;
+  }
+  const tasks = Array.isArray(raw.tasks)
+    ? raw.tasks.filter((task): task is string => typeof task === 'string' && task.trim().length > 0)
+    : [];
+  return { type, tasks: [...new Set(tasks)] };
+}
+
+/** The folders the last scan read, every workspace folder's together, in file order. */
+let foldersRead: TaskFolder[] = [];
+
+export function taskFolders(): TaskFolder[] {
+  return foldersRead;
+}
+
+/**
+ * Rewrites a folder's `folders` through `edit`, the way `editCustomTasks`
+ * rewrites its `tasks` — handed what is on disk, returning what should be, or
+ * `undefined` to write nothing — and answers with the text written. Everything
+ * else in the file is written back as it was found, the tasks included, and a
+ * folder handed back with keys the reader does not know keeps them.
+ *
+ * The members of `folders` the reader skipped — a `type` it does not know, a
+ * value that is not an object — are kept where they were, as `editCustomTasks`
+ * keeps the tasks it skips: a folder somebody is halfway through writing by hand
+ * is not deleted by a drag onto another one. A folder `edit` hands back under a
+ * name the file did not have takes the slot of the first one that went missing,
+ * which is what a rename is.
+ *
+ * And a file whose `tasks` is not an object is refused rather than written: the
+ * tasks are written back from what was read of them, and there nothing was.
+ */
+export async function editTaskFolders(
+  folder: vscode.WorkspaceFolder,
+  edit: (folders: Array<[string, TaskFolderValue]>) => Array<[string, TaskFolderValue]> | undefined,
+): Promise<string | undefined> {
+  const file = customTasksFile(folder);
+  const found = await customTasksText(file);
+  if (found.state === 'unreadable') {
+    throw new Error(`${CUSTOM_TASKS_FILE} could not be read — it is over 1 MB, or the read failed. Nothing was written.`);
+  }
+  const text = found.state === 'read' ? found.text : '';
+  const current: CustomTasksText | undefined = !text.trim()
+    ? { data: {}, top: [], members: [], malformed: false }
+    : readCustomTasksText(text);
+  if (!current) {
+    throw new Error(`${CUSTOM_TASKS_FILE} is not a JSON object. Fix it by hand, then try again.`);
+  }
+  if (current.malformed) {
+    throw new Error(`"tasks" in ${CUSTOM_TASKS_FILE} is not an object. Fix it by hand, then try again.`);
+  }
+  const folders = text.trim() ? parseTaskFolders(text) : [];
+  if (!folders) {
+    throw new Error(`"folders" in ${CUSTOM_TASKS_FILE} is not an object. Fix it by hand, then try again.`);
+  }
+  const next = edit(folders);
+  if (!next) {
+    return undefined;
+  }
+  const raw = rawFolders(text, current.data) ?? [];
+  const isFolder = ([name, value]: [string, unknown]) => name.trim().length > 0 && taskFolderValue(value) !== undefined;
+  const values = new Map(next);
+  const known = new Set(folders.map(([name]) => name));
+  const incoming = next.filter(([name]) => !known.has(name));
+  const written: Array<[string, unknown]> = [];
+  const withExtras = (value: TaskFolderValue, old: unknown) => ({
+    type: value.type,
+    tasks: value.tasks,
+    ...(old && typeof old === 'object' && !Array.isArray(old)
+      ? Object.fromEntries(Object.entries(old).filter(([key]) => key !== 'type' && key !== 'tasks'))
+      : {}),
+  });
+  for (const member of raw) {
+    if (isFolder(member)) {
+      const kept = values.get(member[0]);
+      const moved = kept === undefined ? incoming.shift() : undefined;
+      if (kept !== undefined) {
+        written.push([member[0], withExtras(kept, member[1])]);
+      } else if (moved) {
+        written.push([moved[0], withExtras(moved[1], member[1])]);
+      }
+    } else if (!values.has(member[0])) {
+      written.push(member);
+    }
+  }
+  written.push(...incoming.map(([name, value]): [string, unknown] => [name, withExtras(value, undefined)]));
+  const body = customTasksBody(current.data, current.top, current.members, written);
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, path.posix.dirname(CUSTOM_TASKS_FILE)));
+  await vscode.workspace.fs.writeFile(file, Buffer.from(body, 'utf8'));
+  return body;
+}
+
 /**
  * One row per task in every workspace folder's custom tasks file, and the files
  * that were read and declared none — the second half is what lets
@@ -3821,12 +4007,18 @@ async function collectCustomTasks(): Promise<{ entries: ScriptEntry[]; blank: vs
       // read it — not a broken one, which would keep every star and approval of
       // the tasks it held for as long as it stayed empty.
       const tasks = text === undefined ? undefined : text.trim() ? parseCustomTasks(text) : [];
-      return { folder, manifest, tasks };
+      return { folder, manifest, tasks, text };
     }),
   );
   const entries: ScriptEntry[] = [];
   const blank: vscode.Uri[] = [];
-  for (const { folder, manifest, tasks } of read) {
+  const declared: TaskFolder[] = [];
+  for (const { folder, manifest, tasks, text } of read) {
+    // Read before the tasks are, and whether there are any: a file can hold a
+    // workflow of package scripts and no task of its own.
+    for (const [name, value] of (text?.trim() ? parseTaskFolders(text) : undefined) ?? []) {
+      declared.push({ name, workspace: folder, ...value });
+    }
     if (!tasks) {
       continue;
     }
@@ -3850,6 +4042,7 @@ async function collectCustomTasks(): Promise<{ entries: ScriptEntry[]; blank: vs
       });
     }
   }
+  foldersRead = declared;
   return { entries, blank };
 }
 

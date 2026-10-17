@@ -318,49 +318,60 @@ manifest.contributes.colors = [
 ];
 
 manifest.contributes.commands = [
-  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'Task & Script Explorer', icon: icon('') },
-  { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
-  { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'Task & Script Explorer', icon: '$(refresh)' },
-  { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'Task & Script Explorer', icon: '$(play)' },
-  { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
-  { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'AI Task & Script Explorer', icon: icon('') },
+  { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'AI Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'AI Task & Script Explorer', icon: '$(refresh)' },
+  { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'AI Task & Script Explorer', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopItem', title: 'Stop', category: 'AI Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartItem', title: 'Restart', category: 'AI Task & Script Explorer', icon: '$(debug-restart)' },
   // What a click on the row does, all three states of it — run, show, stop. Not
   // a toggle any more; the id is kept because a user's keybinding may name it.
-  { command: 'taskRunnerUltimate.toggleItem', title: 'Run, Show Terminal or Stop', category: 'Task & Script Explorer' },
+  { command: 'taskRunnerUltimate.toggleItem', title: 'Run, Show Terminal or Stop', category: 'AI Task & Script Explorer' },
   // Run and Stop a second time, for the right-click menu alone. A menu entry
   // takes its label from the command, and these two spell out the mouse gesture
   // that does the same thing — the closest a click gets to the keybinding a menu
   // entry would otherwise show on its right. The titles cannot go on `runItem`
   // and `stopItem`: those are the inline ▶ and ■, whose tooltips would then
   // promise a double click for a button that acts on one press.
-  { command: 'taskRunnerUltimate.runItemMenu', title: 'Run (Click)', category: 'Task & Script Explorer', icon: '$(play)' },
-  { command: 'taskRunnerUltimate.stopItemMenu', title: 'Stop (Double-Click)', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
-  { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'Task & Script Explorer', icon: '$(star-empty)' },
-  { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'Task & Script Explorer', icon: '$(star-full)' },
+  { command: 'taskRunnerUltimate.runItemMenu', title: 'Run (Click)', category: 'AI Task & Script Explorer', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopItemMenu', title: 'Stop (Double-Click)', category: 'AI Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.addFavorite', title: 'Add to Favorites', category: 'AI Task & Script Explorer', icon: '$(star-empty)' },
+  { command: 'taskRunnerUltimate.removeFavorite', title: 'Remove from Favorites', category: 'AI Task & Script Explorer', icon: '$(star-full)' },
   // Asking before a row runs, and not asking any more. Two commands rather than
   // one toggle for the same reason the star is two: a menu entry says what the
   // click will do, and "Confirmation" alone says only what the row is.
-  { command: 'taskRunnerUltimate.enableConfirmation', title: 'Enable Confirmation', category: 'Task & Script Explorer', icon: '$(question)' },
-  { command: 'taskRunnerUltimate.disableConfirmation', title: 'Disable Confirmation', category: 'Task & Script Explorer', icon: '$(question)' },
-  { command: 'taskRunnerUltimate.editTitle', title: 'Rename…', category: 'Task & Script Explorer', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.enableConfirmation', title: 'Enable Confirmation', category: 'AI Task & Script Explorer', icon: '$(question)' },
+  { command: 'taskRunnerUltimate.disableConfirmation', title: 'Disable Confirmation', category: 'AI Task & Script Explorer', icon: '$(question)' },
+  { command: 'taskRunnerUltimate.editTitle', title: 'Rename…', category: 'AI Task & Script Explorer', icon: '$(edit)' },
   // The custom tasks, which the tree writes rather than reads. Creating one needs
   // no row — it is the + on the Custom Tasks heading, the first entry of the ⋯
   // menu, and a palette command — so it is the one of the three the palette keeps.
-  { command: 'taskRunnerUltimate.createCustomTask', title: 'New Custom Task…', category: 'Task & Script Explorer', icon: '$(add)' },
-  { command: 'taskRunnerUltimate.editCustomTask', title: 'Edit Command…', category: 'Task & Script Explorer', icon: '$(edit)' },
-  { command: 'taskRunnerUltimate.deleteCustomTask', title: 'Delete Custom Task', category: 'Task & Script Explorer', icon: '$(trash)' },
+  { command: 'taskRunnerUltimate.createCustomTask', title: 'New Custom Task…', category: 'AI Task & Script Explorer', icon: '$(add)' },
+  { command: 'taskRunnerUltimate.editCustomTask', title: 'Edit Command…', category: 'AI Task & Script Explorer', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.deleteCustomTask', title: 'Delete Custom Task', category: 'AI Task & Script Explorer', icon: '$(trash)' },
   // The AI tasks, which are custom tasks that run an agent on a prompt. Creating
   // one is kept in the palette for the same reason as a custom task; the other
   // three act on a row.
-  { command: 'taskRunnerUltimate.createAiTask', title: 'New AI Task…', category: 'Task & Script Explorer', icon: '$(sparkle)' },
+  { command: 'taskRunnerUltimate.createAiTask', title: 'New AI Task…', category: 'AI Task & Script Explorer', icon: '$(sparkle)' },
   // The two entries of the panel header's + menu, named for what they make
   // rather than as commands: in a menu titled New Task, "AI Task" is the whole
   // sentence. The palette has New AI Task… and New Custom Task… for the same.
-  { command: 'taskRunnerUltimate.newAiTask', title: 'AI Task', category: 'Task & Script Explorer', icon: '$(sparkle)' },
-  { command: 'taskRunnerUltimate.newShellTask', title: 'Shell Task', category: 'Task & Script Explorer', icon: '$(terminal)' },
-  { command: 'taskRunnerUltimate.editAiTask', title: 'Edit AI Task…', category: 'Task & Script Explorer', icon: '$(edit)' },
-  { command: 'taskRunnerUltimate.editAiPrompt', title: 'Edit Prompt', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
-  { command: 'taskRunnerUltimate.copyAiPrompt', title: 'Copy Prompt', category: 'Task & Script Explorer', icon: '$(copy)' },
+  { command: 'taskRunnerUltimate.newAiTask', title: 'AI Task', category: 'AI Task & Script Explorer', icon: '$(sparkle)' },
+  { command: 'taskRunnerUltimate.newShellTask', title: 'Shell Task', category: 'AI Task & Script Explorer', icon: '$(terminal)' },
+  { command: 'taskRunnerUltimate.newFolder', title: 'Folder', category: 'AI Task & Script Explorer', icon: '$(folder-library)' },
+  { command: 'taskRunnerUltimate.newWorkflow', title: 'Workflow', category: 'AI Task & Script Explorer', icon: '$(list-ordered)' },
+  // A folder's and a workflow's own: ▶ and ■ on the heading, what is in it, and
+  // the heading itself. See `runTaskFolder` and `runWorkflow`.
+  { command: 'taskRunnerUltimate.runTaskFolder', title: 'Run', category: 'AI Task & Script Explorer', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopTaskFolder', title: 'Stop', category: 'AI Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.addTasksToFolder', title: 'Add Tasks…', category: 'AI Task & Script Explorer', icon: '$(add)' },
+  { command: 'taskRunnerUltimate.renameTaskFolder', title: 'Rename…', category: 'AI Task & Script Explorer', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.deleteTaskFolder', title: 'Delete', category: 'AI Task & Script Explorer', icon: '$(trash)' },
+  { command: 'taskRunnerUltimate.addToFolder', title: 'Add to Folder…', category: 'AI Task & Script Explorer', icon: '$(folder-library)' },
+  { command: 'taskRunnerUltimate.removeFromFolder', title: 'Remove from Folder', category: 'AI Task & Script Explorer', icon: '$(close)' },
+  { command: 'taskRunnerUltimate.editAiTask', title: 'Edit AI Task…', category: 'AI Task & Script Explorer', icon: '$(edit)' },
+  { command: 'taskRunnerUltimate.editAiPrompt', title: 'Edit Prompt', category: 'AI Task & Script Explorer', icon: '$(go-to-file)' },
+  { command: 'taskRunnerUltimate.copyAiPrompt', title: 'Copy Prompt', category: 'AI Task & Script Explorer', icon: '$(copy)' },
   // Putting a group away and bringing it back. Only the second is a button on the
   // row — see the menus below — and the icon on the first is declared all the
   // same: a context menu drops icons, but the command palette and any keybinding
@@ -368,14 +379,14 @@ manifest.contributes.commands = [
   //
   // Reordering has no command at all: a heading is moved by dragging it, which is
   // the gesture the rows inside it already answer to.
-  { command: 'taskRunnerUltimate.hideGroup', title: 'Hide Package', category: 'Task & Script Explorer', icon: '$(eye-closed)' },
-  { command: 'taskRunnerUltimate.stopGroup', title: 'Stop All in Package', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.hideGroup', title: 'Hide Package', category: 'AI Task & Script Explorer', icon: '$(eye-closed)' },
+  { command: 'taskRunnerUltimate.stopGroup', title: 'Stop All in Package', category: 'AI Task & Script Explorer', icon: '$(debug-stop)' },
   // The three a compose item answers to, which no other row has: a compose file
   // is a stack rather than a folder of tasks, so it is a leaf with ▶ and ■ of
   // its own and a menu holding everything else compose can be asked for.
-  { command: 'taskRunnerUltimate.runGroup', title: 'Compose Up', category: 'Task & Script Explorer', icon: '$(play)' },
-  { command: 'taskRunnerUltimate.stopStack', title: 'Compose Down', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
-  { command: 'taskRunnerUltimate.composeActions', title: 'Compose Commands…', category: 'Task & Script Explorer', icon: '$(menu)' },
+  { command: 'taskRunnerUltimate.runGroup', title: 'Compose Up', category: 'AI Task & Script Explorer', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopStack', title: 'Compose Down', category: 'AI Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.composeActions', title: 'Compose Commands…', category: 'AI Task & Script Explorer', icon: '$(menu)' },
   // And the four a Dockerfile answers to, for the same reason: a Dockerfile is an
   // image rather than a folder of tasks — `build` is the one action it has and
   // `run`, `push` and the per-stage builds are variations on it — so it is a leaf
@@ -383,30 +394,30 @@ manifest.contributes.commands = [
   //
   // ■ and ↻ are the group's stop-all and restart-all under names that fit a row
   // drawn as one line: "all in package" is a tooltip about rows nobody can see.
-  { command: 'taskRunnerUltimate.buildImage', title: 'Docker Build', category: 'Task & Script Explorer', icon: '$(play)' },
-  { command: 'taskRunnerUltimate.stopDockerfile', title: 'Stop Docker Tasks', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
-  { command: 'taskRunnerUltimate.restartDockerfile', title: 'Restart Docker Tasks', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
-  { command: 'taskRunnerUltimate.dockerfileActions', title: 'Docker Commands…', category: 'Task & Script Explorer', icon: '$(menu)' },
-  { command: 'taskRunnerUltimate.restartGroup', title: 'Restart All in Package', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.buildImage', title: 'Docker Build', category: 'AI Task & Script Explorer', icon: '$(play)' },
+  { command: 'taskRunnerUltimate.stopDockerfile', title: 'Stop Docker Tasks', category: 'AI Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartDockerfile', title: 'Restart Docker Tasks', category: 'AI Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.dockerfileActions', title: 'Docker Commands…', category: 'AI Task & Script Explorer', icon: '$(menu)' },
+  { command: 'taskRunnerUltimate.restartGroup', title: 'Restart All in Package', category: 'AI Task & Script Explorer', icon: '$(debug-restart)' },
   // The same pair on a heading that is not a package: an ecosystem, Favorites,
   // the hidden pile and OTHER TASKS.
-  { command: 'taskRunnerUltimate.stopSection', title: 'Stop All in Group', category: 'Task & Script Explorer', icon: '$(debug-stop)' },
-  { command: 'taskRunnerUltimate.restartSection', title: 'Restart All in Group', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
-  { command: 'taskRunnerUltimate.showGroup', title: 'Show Package', category: 'Task & Script Explorer', icon: '$(eye)' },
-  { command: 'taskRunnerUltimate.openScript', title: 'Go to Script Definition', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
-  { command: 'taskRunnerUltimate.openManifest', title: 'Open Manifest File', category: 'Task & Script Explorer', icon: '$(go-to-file)' },
-  { command: 'taskRunnerUltimate.showTerminal', title: 'Show Terminal (Click)', category: 'Task & Script Explorer', icon: '$(terminal)' },
-  { command: 'taskRunnerUltimate.openTerminalEditor', title: 'Open Terminal in Editor Area', category: 'Task & Script Explorer', icon: '$(open-preview)' },
+  { command: 'taskRunnerUltimate.stopSection', title: 'Stop All in Group', category: 'AI Task & Script Explorer', icon: '$(debug-stop)' },
+  { command: 'taskRunnerUltimate.restartSection', title: 'Restart All in Group', category: 'AI Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.showGroup', title: 'Show Package', category: 'AI Task & Script Explorer', icon: '$(eye)' },
+  { command: 'taskRunnerUltimate.openScript', title: 'Go to Script Definition', category: 'AI Task & Script Explorer', icon: '$(go-to-file)' },
+  { command: 'taskRunnerUltimate.openManifest', title: 'Open Manifest File', category: 'AI Task & Script Explorer', icon: '$(go-to-file)' },
+  { command: 'taskRunnerUltimate.showTerminal', title: 'Show Terminal (Click)', category: 'AI Task & Script Explorer', icon: '$(terminal)' },
+  { command: 'taskRunnerUltimate.openTerminalEditor', title: 'Open Terminal in Editor Area', category: 'AI Task & Script Explorer', icon: '$(open-preview)' },
   // A terminal holding the row's command line, unrun — the way to pass a script
   // arguments the tree has no way to ask for. See `addToTerminal`.
-  { command: 'taskRunnerUltimate.addToTerminal', title: 'Add to Terminal', category: 'Task & Script Explorer', icon: '$(terminal)' },
+  { command: 'taskRunnerUltimate.addToTerminal', title: 'Add to Terminal', category: 'AI Task & Script Explorer', icon: '$(terminal)' },
   // The same line on the clipboard instead, for a terminal somewhere else, a CI
   // file or a README. See `copyCommandOf`.
-  { command: 'taskRunnerUltimate.copyCommand', title: 'Copy Command', category: 'Task & Script Explorer', icon: '$(copy)' },
+  { command: 'taskRunnerUltimate.copyCommand', title: 'Copy Command', category: 'AI Task & Script Explorer', icon: '$(copy)' },
   // The four that are about the file a row stands for rather than the task it
   // runs, worded the way the workbench words them so the menu reads as one menu.
-  { command: 'taskRunnerUltimate.copyRelativePath', title: 'Copy Relative Path', category: 'Task & Script Explorer', icon: '$(copy)' },
-  { command: 'taskRunnerUltimate.copyPath', title: 'Copy Path', category: 'Task & Script Explorer', icon: '$(copy)' },
+  { command: 'taskRunnerUltimate.copyRelativePath', title: 'Copy Relative Path', category: 'AI Task & Script Explorer', icon: '$(copy)' },
+  { command: 'taskRunnerUltimate.copyPath', title: 'Copy Path', category: 'AI Task & Script Explorer', icon: '$(copy)' },
   // One action under three ids, which is how the workbench itself says this:
   // the label of a menu entry is the command's, a command's title is a constant
   // in this file, and the file manager it opens is called something different on
@@ -415,13 +426,13 @@ manifest.contributes.commands = [
   // platform keys are the window's own: they answer for the machine the
   // workbench is drawn on, not for the one the extension host runs on, which is
   // what makes the WSL case below a Windows entry.
-  { command: 'taskRunnerUltimate.revealFileInOS.mac', title: 'Reveal in Finder', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
-  { command: 'taskRunnerUltimate.revealFileInOS.windows', title: 'Reveal in File Explorer', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
-  { command: 'taskRunnerUltimate.revealFileInOS.linux', title: 'Open Containing Folder', category: 'Task & Script Explorer', icon: '$(folder-opened)' },
+  { command: 'taskRunnerUltimate.revealFileInOS.mac', title: 'Reveal in Finder', category: 'AI Task & Script Explorer', icon: '$(folder-opened)' },
+  { command: 'taskRunnerUltimate.revealFileInOS.windows', title: 'Reveal in File Explorer', category: 'AI Task & Script Explorer', icon: '$(folder-opened)' },
+  { command: 'taskRunnerUltimate.revealFileInOS.linux', title: 'Open Containing Folder', category: 'AI Task & Script Explorer', icon: '$(folder-opened)' },
   // Not "Show in File Explorer": on Windows that is the entry above, and these
   // two land in different places. This is the workbench's own name for its side
   // bar, and the tree is contributed into that side bar as well as its own.
-  { command: 'taskRunnerUltimate.revealInExplorerView', title: 'Reveal in Explorer View', category: 'Task & Script Explorer', icon: '$(list-tree)' },
+  { command: 'taskRunnerUltimate.revealInExplorerView', title: 'Reveal in Explorer View', category: 'AI Task & Script Explorer', icon: '$(list-tree)' },
   // One command per colour still, though nothing in the menus points at them any
   // more: the picker is a quick pick and needs none of them. They stay so that a
   // keybinding somebody already wrote against `setColor.green` does not start
@@ -432,27 +443,27 @@ manifest.contributes.commands = [
   ...PALETTE.map(({ name }) => ({
     command: colourCommand(name),
     title: `Paint ${titleCase(name)}`,
-    category: 'Task & Script Explorer',
+    category: 'AI Task & Script Explorer',
   })),
-  { command: CLEAR_COLOUR, title: 'Default', category: 'Task & Script Explorer' },
-  { command: 'taskRunnerUltimate.pickColor', title: 'Change Colour…', category: 'Task & Script Explorer', icon: '$(symbol-color)' },
-  { command: 'taskRunnerUltimate.pickIcon', title: 'Change Icon…', category: 'Task & Script Explorer', icon: '$(symbol-misc)' },
-  { command: 'taskRunnerUltimate.checkContainers', title: 'Check Containers', category: 'Task & Script Explorer', icon: '$(archive)' },
+  { command: CLEAR_COLOUR, title: 'Default', category: 'AI Task & Script Explorer' },
+  { command: 'taskRunnerUltimate.pickColor', title: 'Change Colour…', category: 'AI Task & Script Explorer', icon: '$(symbol-color)' },
+  { command: 'taskRunnerUltimate.pickIcon', title: 'Change Icon…', category: 'AI Task & Script Explorer', icon: '$(symbol-misc)' },
+  { command: 'taskRunnerUltimate.checkContainers', title: 'Check Containers', category: 'AI Task & Script Explorer', icon: '$(archive)' },
   // One switch, two commands: a header button can show the mode it puts you in
   // or the mode you are in, never both, and the first is the one worth a click.
-  { command: 'taskRunnerUltimate.groupByEcosystem', title: 'Group by Ecosystem', category: 'Task & Script Explorer', icon: '$(list-tree)' },
-  { command: 'taskRunnerUltimate.groupFlat', title: 'Show as a Flat List', category: 'Task & Script Explorer', icon: '$(list-flat)' },
+  { command: 'taskRunnerUltimate.groupByEcosystem', title: 'Group by Ecosystem', category: 'AI Task & Script Explorer', icon: '$(list-tree)' },
+  { command: 'taskRunnerUltimate.groupFlat', title: 'Show as a Flat List', category: 'AI Task & Script Explorer', icon: '$(list-flat)' },
   // The three dots every editor draws an overflow menu as, rather than the three
   // lines of `$(menu)`: a hamburger reads as navigation — a list of places — and
   // this one is a list of actions on the view it sits in.
-  { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'Task & Script Explorer', icon: '$(kebab-vertical)' },
+  { command: 'taskRunnerUltimate.menu', title: 'Menu', category: 'AI Task & Script Explorer', icon: '$(kebab-vertical)' },
   {
     command: 'taskRunnerUltimate.stopAll',
     title: 'Stop All Running Tasks',
-    category: 'Task & Script Explorer',
+    category: 'AI Task & Script Explorer',
     icon: { light: 'media/stop-all-light.svg', dark: 'media/stop-all-dark.svg' },
   },
-  { command: 'taskRunnerUltimate.restartAll', title: 'Restart All Running Tasks', category: 'Task & Script Explorer', icon: '$(debug-restart)' },
+  { command: 'taskRunnerUltimate.restartAll', title: 'Restart All Running Tasks', category: 'AI Task & Script Explorer', icon: '$(debug-restart)' },
 ];
 
 const inTitle = 'config.taskRunnerUltimate.showInEditorTitle';
@@ -532,6 +543,16 @@ const CUSTOM_TASK = '/^script:.+:custom:/';
 // the file is concerned, so it is deleted like one, and edited through its own
 // command, which asks which part of it to change.
 const AI_TASK = '/^script:.+:ai:/';
+// A folder's or a workflow's heading — `taskfolder:<folder|workflow>`, with
+// `:running` while anything in it runs or the workflow is going. A folder keeps
+// ▶ while some of it runs, since ▶ there starts what is not running yet; a
+// workflow runs from its first step or not at all, so it trades ▶ for ■.
+const TASK_FOLDER = '/^taskfolder:/';
+const TASK_FOLDER_RUNNABLE = '/^taskfolder:(folder(:running)?|workflow)$/';
+const TASK_FOLDER_RUNNING = '/^taskfolder:.+:running$/';
+// A row drawn inside one — the `:step` segment `treeItemFor` puts in front of
+// the confirm axis — or a member that names no task the workspace has.
+const FOLDER_MEMBER = '/^(script:.+:step(:|$)|missingStep$)/';
 const OWN_TASK = '/^script:.+:(custom|ai):/';
 // Every row the tree read off a file, whichever kind: the two actions that are
 // about the manifest rather than the task — opening it and renaming it — reach
@@ -609,6 +630,9 @@ manifest.contributes.menus = {
   [NEW_TASK_MENU]: [
     { command: 'taskRunnerUltimate.newAiTask', group: '1_new@1' },
     { command: 'taskRunnerUltimate.newShellTask', group: '1_new@2' },
+    // The two kinds of list, under a separator: they hold tasks rather than run one.
+    { command: 'taskRunnerUltimate.newFolder', group: '2_lists@1' },
+    { command: 'taskRunnerUltimate.newWorkflow', group: '2_lists@2' },
   ],
   'editor/title': toolbarEntries(inTitle),
   // Notebooks render their own toolbar instead of the editor title actions.
@@ -702,6 +726,16 @@ manifest.contributes.menus = {
     // right-aligned, so it holds the row's right edge and the ↻ and ■ a running
     // task puts on the heading appear beside it rather than pushing it along.
     { command: 'taskRunnerUltimate.createCustomTask', group: 'inline@5', when: `${inTree} && viewItem =~ ${CUSTOM_HEADING}` },
+    { command: 'taskRunnerUltimate.stopTaskFolder', group: 'inline@4', when: `${inTree} && viewItem =~ ${TASK_FOLDER_RUNNING}` },
+    { command: 'taskRunnerUltimate.runTaskFolder', group: 'inline@5', when: `${inTree} && viewItem =~ ${TASK_FOLDER_RUNNABLE}` },
+    { command: 'taskRunnerUltimate.runTaskFolder', group: '0_actions@1', when: `${inTree} && viewItem =~ ${TASK_FOLDER_RUNNABLE}` },
+    { command: 'taskRunnerUltimate.stopTaskFolder', group: '0_actions@2', when: `${inTree} && viewItem =~ ${TASK_FOLDER_RUNNING}` },
+    { command: 'taskRunnerUltimate.addTasksToFolder', group: '2_modify@1', when: `${inTree} && viewItem =~ ${TASK_FOLDER}` },
+    { command: 'taskRunnerUltimate.renameTaskFolder', group: '2_modify@2', when: `${inTree} && viewItem =~ ${TASK_FOLDER}` },
+    { command: 'taskRunnerUltimate.deleteTaskFolder', group: '3_delete@1', when: `${inTree} && viewItem =~ ${TASK_FOLDER}` },
+    // Every task row can be put in a folder; a row inside one can be taken out.
+    { command: 'taskRunnerUltimate.addToFolder', group: '1_favorites@3', when: `${inTree} && viewItem =~ /^script:/` },
+    { command: 'taskRunnerUltimate.removeFromFolder', group: '1_favorites@4', when: `${inTree} && viewItem =~ ${FOLDER_MEMBER}` },
     // Non-inline groups are what the right-click menu shows.
     //
     // The two gestures the row itself answers to, named in the menu so they are
@@ -857,6 +891,15 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.deleteCustomTask', when: 'false' },
     { command: 'taskRunnerUltimate.newAiTask', when: 'false' },
     { command: 'taskRunnerUltimate.newShellTask', when: 'false' },
+    { command: 'taskRunnerUltimate.newFolder', when: 'false' },
+    { command: 'taskRunnerUltimate.newWorkflow', when: 'false' },
+    { command: 'taskRunnerUltimate.runTaskFolder', when: 'false' },
+    { command: 'taskRunnerUltimate.stopTaskFolder', when: 'false' },
+    { command: 'taskRunnerUltimate.addTasksToFolder', when: 'false' },
+    { command: 'taskRunnerUltimate.renameTaskFolder', when: 'false' },
+    { command: 'taskRunnerUltimate.deleteTaskFolder', when: 'false' },
+    { command: 'taskRunnerUltimate.addToFolder', when: 'false' },
+    { command: 'taskRunnerUltimate.removeFromFolder', when: 'false' },
     { command: 'taskRunnerUltimate.editAiTask', when: 'false' },
     { command: 'taskRunnerUltimate.editAiPrompt', when: 'false' },
     { command: 'taskRunnerUltimate.copyAiPrompt', when: 'false' },

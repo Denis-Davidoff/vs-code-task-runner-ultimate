@@ -396,6 +396,21 @@ export function notificationText(text: string): string {
   return text.replace(/\]\s*\(/g, '] (');
 }
 
+/** Who is told how each run ended, by row key — see `onAiRunEnd`. */
+const endListeners = new Set<(key: string, code: number) => void>();
+
+/**
+ * Hears how every AI task run ends: the row's key and the exit code its task
+ * ended with. The task system reports a code only for a process it started, and
+ * an AI task's process is ours, so a workflow waiting on one learns it here.
+ * Told before the task itself ends, so the code is in by the time anything
+ * listening for the end goes looking for it.
+ */
+export function onAiRunEnd(listener: (key: string, code: number) => void): { dispose(): void } {
+  endListeners.add(listener);
+  return { dispose: () => endListeners.delete(listener) };
+}
+
 /**
  * Every run that is open — looking for its agent, or with the agent up. An
  * agent is started in a process group of its own so that a stop reaches what it
@@ -680,6 +695,9 @@ export class AiRun implements vscode.Pseudoterminal {
     }
     if (failure !== undefined) {
       this.write(`\r\n${RED}${terminalText(failure)}${RESET}\r\n`);
+    }
+    for (const listener of [...endListeners]) {
+      listener(this.request.key, code);
     }
     this.closed.fire(code);
     if (failure === undefined) {

@@ -7,6 +7,8 @@ import {
   AiRun,
   findAgent,
   forgetAgents,
+  notificationText,
+  onAiRunEnd,
   setReportsRoot,
   stopAllRuns,
 } from './ai';
@@ -46,6 +48,11 @@ import {
   customTasksFile,
   CustomTaskValue,
   Ecosystem,
+  editTaskFolders,
+  TaskFolder,
+  taskFolders,
+  TaskFolderType,
+  TaskFolderValue,
   ecosystemOf,
   editCustomTasks,
   emptyManifests,
@@ -527,6 +534,15 @@ export function activate(context: vscode.ExtensionContext): void {
     // commands no row, so each asks for a folder when there is more than one.
     vscode.commands.registerCommand('taskRunnerUltimate.newAiTask', () => createAiTask(undefined)),
     vscode.commands.registerCommand('taskRunnerUltimate.newShellTask', () => createCustomTask(undefined)),
+    vscode.commands.registerCommand('taskRunnerUltimate.newFolder', () => createTaskFolder('folder')),
+    vscode.commands.registerCommand('taskRunnerUltimate.newWorkflow', () => createTaskFolder('workflow')),
+    vscode.commands.registerCommand('taskRunnerUltimate.runTaskFolder', (node?: TreeNode) => runTaskFolder(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.stopTaskFolder', (node?: TreeNode) => stopTaskFolder(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.addTasksToFolder', (node?: TreeNode) => addTasksToFolder(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.addToFolder', (node?: TreeNode) => addRowToFolder(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.removeFromFolder', (node?: TreeNode) => removeFromFolder(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.renameTaskFolder', (node?: TreeNode) => renameTaskFolder(node)),
+    vscode.commands.registerCommand('taskRunnerUltimate.deleteTaskFolder', (node?: TreeNode) => deleteTaskFolder(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.editAiTask', (node?: TreeNode) => editAiTask(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.editAiPrompt', (node?: TreeNode) => editAiPrompt(node)),
     vscode.commands.registerCommand('taskRunnerUltimate.copyAiPrompt', (node?: TreeNode) => copyAiPrompt(node)),
@@ -1744,7 +1760,7 @@ async function writeCustomTasks(
     });
     if (body === undefined) {
       if (refused !== undefined) {
-        void vscode.window.showWarningMessage(refused);
+        void vscode.window.showWarningMessage(notificationText(refused));
       }
       // The tree was drawn from the file as it was, which is what just proved
       // out of date.
@@ -1880,7 +1896,7 @@ async function renameCustomTask(script: ScriptEntry): Promise<void> {
   }
   const from = scriptRef(script);
   const to = `${groupRef(script)}::${name}`;
-  await writeCustomTasks(
+  const renamed = await writeCustomTasks(
     folder,
     (tasks) =>
       !tasks.some(([existing]) => existing === script.name)
@@ -1892,6 +1908,10 @@ async function renameCustomTask(script: ScriptEntry): Promise<void> {
     // not what runs, and that is not a reason to ask again.
     () => moveRef(from, to),
   );
+  // And in the folders and workflows that hold it, which name it by name.
+  if (renamed) {
+    await renameInFolders(folder, from, customStep(name));
+  }
 }
 
 /** A custom task taken out of its file, after a confirmation — and stopped first if it runs. */
@@ -1945,6 +1965,945 @@ async function deleteCustomTask(node: TreeNode | undefined): Promise<void> {
 /** What a custom task's prompt says when the file lost the task while it was open. */
 function gone(script: ScriptEntry): string {
   return `"${visible(script.name)}" is no longer in ${CUSTOM_TASKS_FILE}; nothing was saved.`;
+}
+
+// --- folders and workflows ---------------------------------------------------
+
+/**
+ * A folder and a workflow are lists of the user's own, kept under `folders` in
+ * the custom tasks file and drawn above Custom Tasks: any task the workspace
+ * has — a package script, a make target, a compose service, a custom or AI task
+ * — can be put in one, and stays in its own package as well, the way a starred
+ * task does. Both are run from their heading. A folder starts everything in it
+ * at once; a workflow starts one task, waits for it to finish, and goes on to
+ * the next only if it succeeded.
+ *
+ * Their scope is what a drag and the approval store know them by: the workspace
+ * folder as every other ref names it, and the folder's name.
+ */
+const TASK_FOLDER_SCOPE = '::taskfolder:';
+const FOLDER_ICON = 'folder-library';
+const WORKFLOW_ICON = 'list-ordered';
+
+function folderScope(folder: TaskFolder): string {
+  return `${TASK_FOLDER_SCOPE}${folderRef(folder.workspace)}::${folder.name}`;
+}
+
+function isFolderScope(scope: string | undefined): scope is string {
+  return !!scope?.startsWith(TASK_FOLDER_SCOPE);
+}
+
+/** The folder a scope names as the file has it now, or `undefined` when it is gone. */
+function folderOfScope(scope: string): TaskFolder | undefined {
+  return taskFolders().find((folder) => folderScope(folder) === scope);
+}
+
+/** The folder a heading stands for, read again from the last scan rather than trusted from the node. */
+function folderOfNode(node: TreeNode | undefined): TaskFolder | undefined {
+  return node?.kind === 'group' && node.taskFolder ? folderOfScope(folderScope(node.taskFolder)) : undefined;
+}
+
+/**
+ * A member as the file spells it, made into the ref the rest of the tree uses:
+ * `apps/web/package.json::dev` gains the workspace folder in front, and a bare
+ * name is a task of the file the folder is kept in.
+ */
+function stepRef(folder: { workspace: vscode.WorkspaceFolder }, step: string): string {
+  // At the first `::`: a path has none, and a task name may — `db::reset`.
+  const at = step.indexOf('::');
+  if (at < 0) {
+    return `${manifestRef(customTasksFile(folder.workspace))}::${step}`;
+  }
+  const relative = step.slice(0, at);
+  // Through the manifest's own URI rather than glued onto the folder's ref, so
+  // the spellings `manifestRef` keeps for its special cases — the folder's own
+  // root, a subfolder named like it — come out as they would for the row.
+  const manifest = relative
+    ? vscode.Uri.joinPath(folder.workspace.uri, ...relative.split('/'))
+    : folder.workspace.uri;
+  return `${manifestRef(manifest)}::${step.slice(at + 2)}`;
+}
+
+/**
+ * The other way round: how the file spells a task, or `undefined` for one in
+ * another workspace folder, which a folder kept in this one cannot name — its
+ * file travels with this folder's project and nobody else's.
+ */
+function fileStep(workspace: vscode.WorkspaceFolder, script: ScriptEntry): string | undefined {
+  if (vscode.workspace.getWorkspaceFolder(script.manifest)?.uri.toString() !== workspace.uri.toString()) {
+    return undefined;
+  }
+  if (groupRef(script) === manifestRef(customTasksFile(workspace))) {
+    return customStep(script.name);
+  }
+  // The path as it is on disk below the folder, and never a spelling that names
+  // the folder itself: the root's own shell scripts are `::deploy.sh`, not the
+  // folder's name, which is whatever the clone happened to be checked out as.
+  const relative = path.relative(workspace.uri.fsPath, script.manifest.fsPath).split(path.sep).join('/');
+  return relative.startsWith('..') ? undefined : `${relative}::${script.name}`;
+}
+
+/** A custom task as a folder names it: bare, unless the name would read as a path. */
+function customStep(name: string): string {
+  return name.includes('::') ? `${CUSTOM_TASKS_FILE}::${name}` : name;
+}
+
+/** A folder's members, each with the task it names when the scan has it. */
+function folderMembers(
+  folder: TaskFolder,
+  scripts: ReadonlyArray<ScriptEntry>,
+): Array<{ step: string; ref: string; script?: ScriptEntry }> {
+  const byRef = new Map(scripts.map((script) => [scriptRef(script), script]));
+  // Once each, by the task it names: a file can spell one custom task two ways,
+  // bare and with its path, and two rows of one task would be one tree id twice.
+  const seen = new Set<string>();
+  return folder.tasks.flatMap((step) => {
+    const ref = stepRef(folder, step);
+    if (seen.has(ref)) {
+      return [];
+    }
+    seen.add(ref);
+    return [{ step, ref, script: byRef.get(ref) }];
+  });
+}
+
+/** The heading of a folder or workflow, with a row per member. */
+function taskFolderNode(folder: TaskFolder, scripts: ReadonlyArray<ScriptEntry>): TreeNode & { kind: 'group' } {
+  const scope = folderScope(folder);
+  const workflow = folder.type === 'workflow';
+  return {
+    kind: 'group',
+    id: scope,
+    label: folder.name,
+    // The workspace folder it belongs to, once there is more than one to tell apart.
+    folder: (vscode.workspace.workspaceFolders?.length ?? 0) > 1 ? folder.workspace.name : undefined,
+    icon: workflow ? WORKFLOW_ICON : FOLDER_ICON,
+    scope,
+    taskFolder: folder,
+    children: folderMembers(folder, scripts).map(({ step, script }, index): TreeNode => {
+      const number = workflow ? index + 1 : undefined;
+      return script
+        ? { kind: 'script', script, inFolder: scope, step: number }
+        : { kind: 'missingStep', folder, step, number };
+    }),
+  };
+}
+
+function taskFolderItem(node: TreeNode & { kind: 'group' }, folder: TaskFolder): vscode.TreeItem {
+  const scope = folderScope(folder);
+  const workflow = folder.type === 'workflow';
+  const run = workflowRuns.get(scope);
+  const busy = !!run?.active || runningScriptsOf(node).length > 0;
+  const name = visible(folder.name);
+  const item = new vscode.TreeItem(
+    node.folder ? `${name} • ${node.folder}` : name,
+    folder.tasks.length === 0
+      ? vscode.TreeItemCollapsibleState.None
+      : isCollapsed(node)
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.Expanded,
+  );
+  item.id = node.id;
+  const count = folder.tasks.length;
+  item.description =
+    count === 0
+      ? 'empty — drag tasks here'
+      : run?.active
+        ? `step ${run.done + 1} of ${count}`
+        : workflow
+          ? `workflow · ${count} ${count === 1 ? 'step' : 'steps'}`
+          : `${count} ${count === 1 ? 'task' : 'tasks'}`;
+  item.tooltip = workflow
+    ? 'Workflow — ▶ runs its steps one after another, each once the one before it has finished, and stops at the first that fails.'
+    : 'Folder — ▶ starts every task in it at once.';
+  // A workflow that is going spins, the way a compose file does: it is the thing
+  // being run, and which step it is on is in the description beside it.
+  item.iconPath = run?.active
+    ? runningIcon()
+    : new vscode.ThemeIcon(workflow ? WORKFLOW_ICON : FOLDER_ICON, new vscode.ThemeColor(TITLE_COLOR));
+  item.contextValue = `taskfolder:${folder.type}${busy ? ':running' : ''}`;
+  return item;
+}
+
+function missingStepItem(node: TreeNode & { kind: 'missingStep' }): vscode.TreeItem {
+  const step = visible(node.step);
+  const item = new vscode.TreeItem(node.number !== undefined ? `${node.number}. ${step}` : step);
+  item.id = `missing:${folderScope(node.folder)}:${node.step}`;
+  item.description = 'not in this workspace';
+  item.tooltip =
+    `"${step}" names no task this workspace has — renamed, deleted, or in a manifest that is not here.` +
+    (node.folder.type === 'workflow' ? ' The workflow will not run until it is removed or comes back.' : '');
+  item.iconPath = new vscode.ThemeIcon('warning', new vscode.ThemeColor('problemsWarningIcon.foreground'));
+  item.contextValue = 'missingStep';
+  return item;
+}
+
+/**
+ * Where a workflow's run is, or how its last one went: how many steps have
+ * finished, and which one failed. Kept for the session, so the ticks and the
+ * cross stay on the rows after the run until the next one starts.
+ */
+interface WorkflowRun {
+  active: boolean;
+  /** Steps finished and passed, counted from the first. */
+  done: number;
+  /** The step that failed, counted from 1. */
+  failed?: number;
+  cancelled: boolean;
+}
+
+const workflowRuns = new Map<string, WorkflowRun>();
+
+function stepOutcome(scope: string, step: number): 'passed' | 'failed' | undefined {
+  const run = workflowRuns.get(scope);
+  if (!run) {
+    return undefined;
+  }
+  if (run.failed === step) {
+    return 'failed';
+  }
+  return step <= run.done ? 'passed' : undefined;
+}
+
+function outcomeIcon(outcome: 'passed' | 'failed'): vscode.ThemeIcon {
+  return outcome === 'passed'
+    ? new vscode.ThemeIcon('pass', new vscode.ThemeColor('testing.iconPassed'))
+    : new vscode.ThemeIcon('error', new vscode.ThemeColor('testing.iconFailed'));
+}
+
+// What is approved of a folder: its kind and its list, in order. A folder made
+// or changed in the tree is approved as it is saved; one that reached the file
+// some other way — a pull adding a step to a workflow that deploys — asks before
+// it first runs, and shows the list. Each task in it still answers for itself:
+// a custom or AI task asks on its own terms whatever folder starts it.
+const FOLDER_APPROVAL = '\u0000folder:';
+
+function folderApproval(folder: TaskFolderValue): string {
+  return FOLDER_APPROVAL + JSON.stringify({ type: folder.type, tasks: folder.tasks });
+}
+
+async function approveFolder(folder: TaskFolder): Promise<boolean> {
+  await approvalsReady;
+  const scope = folderScope(folder);
+  const now = folderApproval(folder);
+  const before = approvedText(scope);
+  if (before === now) {
+    return true;
+  }
+  const kind = folder.type === 'workflow' ? 'workflow' : 'folder';
+  const name = visible(folder.name);
+  // The whole list, however long: what is not shown here would be approved
+  // without having been read, and a step is one line.
+  const list = folder.tasks.map(
+    (step, index) => `${folder.type === 'workflow' ? `${index + 1}. ` : '• '}${visible(shownLine(step))}`,
+  );
+  const run = 'Run';
+  const answer = await vscode.window.showWarningMessage(
+    before === undefined
+      ? `Run the ${kind} "${name}"? It was not made in this tree.`
+      : `The ${kind} "${name}" has changed since you last ran it.`,
+    {
+      modal: true,
+      detail: [
+        ...list,
+        '',
+        `${folder.type === 'workflow' ? 'Runs these one after another' : 'Starts all of these at once'}, in ${folder.workspace.name}. Once run, it is not asked about again until its list changes.`,
+      ].join('\n'),
+    },
+    run,
+  );
+  if (answer !== run) {
+    return false;
+  }
+  await approve(scope, now);
+  return true;
+}
+
+/** ▶ on a folder or workflow heading. */
+async function runTaskFolder(node: TreeNode | undefined): Promise<void> {
+  const folder = folderOfNode(node);
+  if (!folder) {
+    return;
+  }
+  const scope = folderScope(folder);
+  const members = folderMembers(folder, await collectScripts());
+  if (members.length === 0) {
+    void vscode.window.showInformationMessage(
+      notificationText(`"${visible(folder.name)}" is empty. Drag tasks onto it, or use Add Tasks… on its heading.`),
+    );
+    return;
+  }
+  if (folder.type === 'workflow') {
+    await runWorkflow(folder, members, 0);
+    return;
+  }
+  // A second ▶ while the first is still asking its questions would start the
+  // same tasks twice: the first press holds the folder until it has started them.
+  if (folderStarts.has(scope)) {
+    return;
+  }
+  folderStarts.add(scope);
+  try {
+    if (!(await approveFolder(folder))) {
+      return;
+    }
+    const missing = members.filter((member) => !member.script);
+    if (missing.length > 0) {
+      void vscode.window.showWarningMessage(
+        notificationText(
+          `${missing.map((member) => `"${visible(member.step)}"`).join(', ')} in "${visible(folder.name)}" ${missing.length === 1 ? 'is' : 'are'} not a task in this workspace, and did not start.`,
+        ),
+      );
+    }
+    // Side by side: each start returns once its task is up, not once it is done.
+    // One already running is left as it is rather than started a second time —
+    // decided once, as ▶ was pressed, so a start in between cannot change the list.
+    const idle = members.flatMap(({ script }) => (script && !running.has(script.key) ? [script] : []));
+    for (const script of idle) {
+      await startScript(script, false);
+    }
+  } finally {
+    folderStarts.delete(scope);
+  }
+}
+
+/** The folders and workflows whose ▶ is being answered, so a second press is not a second run. */
+const folderStarts = new Set<string>();
+
+/**
+ * A workflow, from `from` on: every question asked first — the workflow's own
+ * approval and each custom or AI step's — so a run that has started is never
+ * left waiting on a dialog halfway through; then one step at a time, each in
+ * its own terminal, the next started only once the one before it has ended with
+ * exit code 0.
+ *
+ * A step that never ends — a dev server, a watcher — holds the workflow where it
+ * is until it is stopped, which is what a workflow of them would mean anyway.
+ */
+async function runWorkflow(
+  folder: TaskFolder,
+  members: Array<{ step: string; ref: string; script?: ScriptEntry }>,
+  from: number,
+): Promise<void> {
+  const scope = folderScope(folder);
+  const name = visible(folder.name);
+  if (folderStarts.has(scope) || workflowRuns.get(scope)?.active) {
+    void vscode.window.showInformationMessage(notificationText(`The workflow "${name}" is already running.`));
+    return;
+  }
+  // Held from the first question to the last step, so that a second ▶ — or a
+  // Run Again pressed while this one is still going — is refused, not doubled.
+  folderStarts.add(scope);
+  let outcome: WorkflowOutcome | undefined;
+  try {
+    outcome = await runWorkflowSteps(folder, members, from);
+  } finally {
+    folderStarts.delete(scope);
+  }
+  if (!outcome) {
+    return;
+  }
+  if (outcome.kind === 'stopped') {
+    vscode.window.setStatusBarMessage(`$(debug-stop) Workflow "${name}" stopped`, 5000);
+    return;
+  }
+  if (outcome.kind === 'changed') {
+    void vscode.window.showWarningMessage(
+      notificationText(
+        `The workflow "${name}" stopped after step ${outcome.after}: it was changed or removed while it ran, so what would run next is not what was started.`,
+      ),
+    );
+    return;
+  }
+  if (outcome.kind === 'passed') {
+    void vscode.window.showInformationMessage(
+      notificationText(`The workflow "${name}" finished: ${outcome.steps} ${outcome.steps === 1 ? 'step' : 'steps'} passed.`),
+    );
+    return;
+  }
+  const { step, number, code, ref } = outcome;
+  const show = 'Show Terminal';
+  const again = `Run Again from Step ${number}`;
+  const answer = await vscode.window.showErrorMessage(
+    notificationText(
+      `The workflow "${name}" stopped at step ${number}, "${displayName(step)}": ${code === undefined ? 'it ended without an exit code' : `exit code ${code}`}.`,
+    ),
+    show,
+    again,
+  );
+  if (answer === show) {
+    await showTerminal({ kind: 'script', script: step });
+  } else if (answer === again) {
+    // From the step that failed, found by what it is rather than where it was:
+    // the list may have changed while the message waited, and starting at the
+    // same position would start whatever moved into it — past the step that
+    // never passed.
+    const current = folderOfScope(scope);
+    const now = current ? folderMembers(current, await collectScripts()) : [];
+    const at = now.findIndex((member) => member.ref === ref);
+    if (!current || at < 0) {
+      void vscode.window.showWarningMessage(
+        notificationText(`"${displayName(step)}" is no longer a step of "${name}", so there is nowhere to run it again from.`),
+      );
+      return;
+    }
+    await runWorkflow(current, now, at);
+  }
+}
+
+/** How a workflow's run ended, for `runWorkflow` to say. */
+type WorkflowOutcome =
+  | { kind: 'passed'; steps: number }
+  | { kind: 'stopped' }
+  | { kind: 'changed'; after: number }
+  | { kind: 'failed'; step: ScriptEntry; number: number; code: number | undefined; ref: string };
+
+/**
+ * The run itself, from `from` on: every question asked first — the workflow's
+ * own approval and each custom or AI step's — so a run that has started is never
+ * left waiting on a dialog halfway through; then one step at a time, each in its
+ * own terminal, the next started only once the one before it has ended with exit
+ * code 0. `undefined` is a run that never started.
+ *
+ * Between steps it checks that the workflow is still the list it started as: a
+ * pull, an edit in the tree or a Delete in the meantime stops it rather than
+ * carrying on with steps that are no longer the workflow's.
+ *
+ * A step that never ends — a dev server, a watcher — holds the workflow where it
+ * is until it is stopped, which is what a workflow of them would mean anyway.
+ */
+async function runWorkflowSteps(
+  folder: TaskFolder,
+  members: Array<{ step: string; ref: string; script?: ScriptEntry }>,
+  from: number,
+): Promise<WorkflowOutcome | undefined> {
+  const scope = folderScope(folder);
+  const name = visible(folder.name);
+  const missing = members.filter((member) => !member.script);
+  if (missing.length > 0) {
+    void vscode.window.showWarningMessage(
+      notificationText(
+        `The workflow "${name}" did not start: ${missing.map((member) => `"${visible(member.step)}"`).join(', ')} ${missing.length === 1 ? 'is' : 'are'} not a task in this workspace. Remove ${missing.length === 1 ? 'it' : 'them'} from the workflow, or bring ${missing.length === 1 ? 'it' : 'them'} back.`,
+      ),
+    );
+    return undefined;
+  }
+  const steps = members.flatMap((member) => (member.script ? [{ script: member.script, ref: member.ref }] : []));
+  if (!(await approveFolder(folder))) {
+    return undefined;
+  }
+  for (const { script } of steps.slice(from)) {
+    if (!(await approveLaunch(script))) {
+      return undefined;
+    }
+  }
+  const busy = steps.slice(from).filter(({ script }) => running.has(script.key));
+  if (busy.length > 0) {
+    void vscode.window.showWarningMessage(
+      notificationText(
+        `The workflow "${name}" did not start: ${busy.map(({ script }) => `"${displayName(script)}"`).join(', ')} ${busy.length === 1 ? 'is' : 'are'} already running. A step has to be started by the workflow for it to know when the step is done.`,
+      ),
+    );
+    return undefined;
+  }
+
+  const started = JSON.stringify(folder.tasks);
+  const run: WorkflowRun = { active: true, done: from, cancelled: false };
+  workflowRuns.set(scope, run);
+  repaint();
+  try {
+    for (let index = from; index < steps.length; index++) {
+      if (run.cancelled) {
+        return { kind: 'stopped' };
+      }
+      const now = folderOfScope(scope);
+      if (index > from && (now?.type !== 'workflow' || JSON.stringify(now.tasks) !== started)) {
+        return { kind: 'changed', after: index };
+      }
+      const { script, ref } = steps[index];
+      const code = await runStep(script, run);
+      if (run.cancelled) {
+        return { kind: 'stopped' };
+      }
+      if (code !== 0) {
+        run.failed = index + 1;
+        return { kind: 'failed', step: script, number: index + 1, code, ref };
+      }
+      run.done = index + 1;
+      repaint();
+    }
+    return { kind: 'passed', steps: steps.length };
+  } finally {
+    run.active = false;
+    repaint();
+  }
+}
+
+/**
+ * Starts one step and resolves with the exit code it ended with — `undefined`
+ * when it ended without one, which a workflow counts as a failure: a task
+ * stopped by hand is the commonest way to get there.
+ *
+ * A shell or process task reports its code through `onDidEndTaskProcess`, which
+ * the task system fires before `onDidEndTask`. An AI task runs in a terminal of
+ * ours and has no process the task system can see, so its code comes from the
+ * run itself — see `onAiRunEnd`.
+ */
+function runStep(script: ScriptEntry, run: WorkflowRun): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    let code: number | undefined;
+    let settled = false;
+    const finish = (value: number | undefined) => {
+      if (!settled) {
+        settled = true;
+        for (const subscription of subscriptions) {
+          subscription.dispose();
+        }
+        resolve(value);
+      }
+    };
+    const subscriptions = [
+      vscode.tasks.onDidEndTaskProcess((event) => {
+        if (keyForTask(event.execution.task) === script.key) {
+          code = event.exitCode;
+        }
+      }),
+      onAiRunEnd((key, exit) => {
+        if (key === script.key) {
+          code = exit;
+        }
+      }),
+      vscode.tasks.onDidEndTask((event) => {
+        if (keyForTask(event.execution.task) === script.key) {
+          // A moment's grace for an exit code still on its way.
+          setTimeout(() => finish(code), 100);
+        }
+      }),
+    ];
+    vscode.tasks.executeTask(buildTask(script, true)).then(
+      (execution) => {
+        running.set(script.key, execution);
+        onStateChanged();
+        // ■ pressed while the step was still being started had nothing of it to
+        // stop yet; it is stopped now that it has started.
+        if (run.cancelled) {
+          void stopExecution(execution);
+        }
+      },
+      () => finish(undefined),
+    );
+  });
+}
+
+/** ■ on a folder or workflow heading: the workflow told to stop, and everything in it that runs stopped. */
+async function stopTaskFolder(node: TreeNode | undefined): Promise<void> {
+  const folder = folderOfNode(node);
+  if (!folder) {
+    return;
+  }
+  const run = workflowRuns.get(folderScope(folder));
+  if (run?.active) {
+    run.cancelled = true;
+  }
+  await stopGroup(node);
+}
+
+/**
+ * Tasks of the folder's workspace folder to add, picked from a list: several at
+ * once into a folder; one after another into a workflow, in the order picked,
+ * since there the order is what runs.
+ */
+async function pickFolderTasks(folder: TaskFolder | { workspace: vscode.WorkspaceFolder; type: TaskFolderType; tasks: string[] }, title: string): Promise<string[] | undefined> {
+  const scripts = (await collectScripts()).filter((script) => fileStep(folder.workspace, script) !== undefined);
+  const taken = new Set(folder.tasks.map((step) => stepRef(folder, step)));
+  const item = (script: ScriptEntry) => ({
+    label: displayName(script),
+    description: scriptDescription(script, true),
+    step: fileStep(folder.workspace, script) as string,
+  });
+  const available = scripts.filter((script) => !taken.has(scriptRef(script))).map(item);
+  if (available.length === 0) {
+    void vscode.window.showInformationMessage('Every task of this workspace folder is in it already.');
+    return [];
+  }
+  if (folder.type === 'folder') {
+    const picked = await vscode.window.showQuickPick(available, {
+      title,
+      placeHolder: 'Which tasks? Pick any number.',
+      canPickMany: true,
+      matchOnDescription: true,
+    });
+    return picked?.map((entry) => entry.step);
+  }
+  const chosen: string[] = [];
+  for (;;) {
+    const done = { label: `$(check) Done`, description: chosen.length === 0 ? 'no steps yet' : `${chosen.length} ${chosen.length === 1 ? 'step' : 'steps'}`, step: '' };
+    const left = available.filter((entry) => !chosen.includes(entry.step));
+    const picked = await vscode.window.showQuickPick([done, ...left], {
+      title: `${title} — step ${folder.tasks.length + chosen.length + 1}`,
+      placeHolder: 'Pick the next step, or Done',
+      matchOnDescription: true,
+    });
+    if (!picked) {
+      return chosen.length > 0 ? chosen : undefined;
+    }
+    if (picked === done || left.length === 1) {
+      if (picked !== done) {
+        chosen.push(picked.step);
+      }
+      return chosen;
+    }
+    chosen.push(picked.step);
+  }
+}
+
+/** The name a folder is given, refused when the file already has one by it. */
+function askFolderName(title: string, taken: Set<string>, value?: string): Thenable<string | undefined> {
+  return vscode.window.showInputBox({
+    title,
+    prompt: 'What the heading is called.',
+    placeHolder: 'e.g. Release',
+    value,
+    validateInput: (text) => {
+      const name = text.trim();
+      if (!name) {
+        return 'A folder needs a name.';
+      }
+      if (HIDDEN_CHARACTERS.test(text)) {
+        return 'Line breaks and hidden characters cannot be part of a name.';
+      }
+      return name !== value?.trim() && taken.has(name) ? `"${name}" is already a folder here.` : undefined;
+    },
+  });
+}
+
+/**
+ * Writes a folder's `folders` and rescans, or says why it could not — the
+ * folders' twin of `writeCustomTasks`, and approved the same way: what the tree
+ * writes is what the user just did.
+ */
+async function writeTaskFolders(
+  workspace: vscode.WorkspaceFolder,
+  edit: (folders: Array<[string, TaskFolderValue]>) => Array<[string, TaskFolderValue]> | string,
+  written?: () => Promise<void>,
+): Promise<boolean> {
+  let refused: string | undefined;
+  try {
+    const body = await editTaskFolders(workspace, (folders) => {
+      const next = edit(folders);
+      if (typeof next === 'string') {
+        refused = next;
+        return undefined;
+      }
+      return next;
+    });
+    if (body === undefined) {
+      if (refused !== undefined) {
+        void vscode.window.showWarningMessage(notificationText(refused));
+      }
+      invalidate();
+      return false;
+    }
+    customWritten.set(customTasksFile(workspace).toString(), body);
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      notificationText(`Folders were not saved: ${error instanceof Error ? error.message : String(error)}`),
+    );
+    return false;
+  }
+  resetSources();
+  await written?.();
+  invalidate();
+  return true;
+}
+
+/**
+ * A folder's members changed in the tree. `change` is applied to the list as the
+ * file has it now rather than as the tree last drew it, so two quick drags, or a
+ * pull landing in between, are both kept.
+ *
+ * The approval moves with the change only when the list on disk was approved
+ * before it: an edit in the tree is the user's, but the rest of the list is
+ * whatever the file says, and a step a pull put there has not been read by
+ * anybody yet. Dragging one more task onto it is not a reason to wave that
+ * through — the same rule `saveAiTask` keeps for an AI task.
+ */
+async function saveFolderTasks(folder: TaskFolder, change: (tasks: string[]) => string[]): Promise<boolean> {
+  const scope = folderScope(folder);
+  let next: TaskFolderValue | undefined;
+  let approved = false;
+  const saved = await writeTaskFolders(
+    folder.workspace,
+    (folders) => {
+      const now = folders.find(([name]) => name === folder.name)?.[1];
+      if (!now) {
+        return `"${visible(folder.name)}" is no longer in ${CUSTOM_TASKS_FILE}; nothing was saved.`;
+      }
+      approved = approvedText(scope) === folderApproval(now);
+      const value: TaskFolderValue = { type: now.type, tasks: [...new Set(change([...now.tasks]))] };
+      next = value;
+      return folders.map(([name, old]) => [name, name === folder.name ? value : old]);
+    },
+    async () => {
+      if (approved && next) {
+        await approve(scope, folderApproval(next));
+      }
+    },
+  );
+  // The ticks and the cross of the last run were for the list as it was.
+  const run = workflowRuns.get(scope);
+  if (saved && run && !run.active) {
+    workflowRuns.delete(scope);
+  }
+  return saved;
+}
+
+/** + → Folder or Workflow: a name, then the tasks in it. */
+async function createTaskFolder(type: TaskFolderType): Promise<void> {
+  const workspace = await customFolder(undefined);
+  if (!workspace) {
+    return;
+  }
+  const kind = type === 'workflow' ? 'Workflow' : 'Folder';
+  const taken = new Set(taskFolders().filter((folder) => folder.workspace === workspace).map((folder) => folder.name));
+  const name = (await askFolderName(`New ${kind}`, taken))?.trim();
+  if (!name) {
+    return;
+  }
+  const tasks = await pickFolderTasks({ workspace, type, tasks: [] }, `New ${kind}: ${name}`);
+  if (tasks === undefined) {
+    return;
+  }
+  const value: TaskFolderValue = { type, tasks };
+  const scope = folderScope({ name, workspace, ...value });
+  await writeTaskFolders(
+    workspace,
+    (folders) =>
+      folders.some(([existing]) => existing.trim() === name)
+        ? `"${name}" was added to ${CUSTOM_TASKS_FILE} while you were typing; nothing was saved.`
+        : [...folders, [name, value]],
+    () => approve(scope, folderApproval(value)),
+  );
+}
+
+/** Add Tasks… on a folder's heading. */
+async function addTasksToFolder(node: TreeNode | undefined): Promise<void> {
+  const folder = folderOfNode(node);
+  if (!folder) {
+    return;
+  }
+  const added = await pickFolderTasks(folder, `Add to "${visible(folder.name)}"`);
+  if (added && added.length > 0) {
+    await saveFolderTasks(folder, (tasks) => [...tasks, ...added.filter((step) => !holds(folder, tasks, step))]);
+  }
+}
+
+/** Add to Folder… on a task row: which folder or workflow to put it in. */
+async function addRowToFolder(node: TreeNode | undefined): Promise<void> {
+  const row = node?.kind === 'script' ? node : fileLead(node);
+  if (!row) {
+    return;
+  }
+  const workspace = vscode.workspace.getWorkspaceFolder(row.script.manifest);
+  const step = workspace ? fileStep(workspace, row.script) : undefined;
+  const folders = taskFolders().filter((folder) => workspace && folder.workspace.uri.toString() === workspace.uri.toString());
+  if (!step || folders.length === 0) {
+    void vscode.window.showInformationMessage('There is no folder or workflow to add it to yet — make one with + at the head of the panel.');
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(
+    folders.map((folder) => ({
+      label: `$(${folder.type === 'workflow' ? WORKFLOW_ICON : FOLDER_ICON}) ${visible(folder.name)}`,
+      description: holds(folder, folder.tasks, step) ? 'already in it' : folder.type === 'workflow' ? `as step ${folder.tasks.length + 1}` : undefined,
+      folder,
+    })),
+    { title: `Add "${displayName(row.script)}" to…`, placeHolder: 'Which folder or workflow?' },
+  );
+  if (picked && !holds(picked.folder, picked.folder.tasks, step)) {
+    await saveFolderTasks(picked.folder, (tasks) => (holds(picked.folder, tasks, step) ? tasks : [...tasks, step]));
+  }
+}
+
+/** Remove from Folder on a member row — the task itself stays where it is. */
+async function removeFromFolder(node: TreeNode | undefined): Promise<void> {
+  const folder =
+    node?.kind === 'missingStep'
+      ? folderOfScope(folderScope(node.folder))
+      : node?.kind === 'script' && node.inFolder
+        ? folderOfScope(node.inFolder)
+        : undefined;
+  if (!folder || (node?.kind !== 'missingStep' && node?.kind !== 'script')) {
+    return;
+  }
+  // By the task it names rather than by its spelling, so every spelling of it goes.
+  const ref = node.kind === 'missingStep' ? stepRef(folder, node.step) : scriptRef(node.script);
+  await saveFolderTasks(folder, (tasks) => tasks.filter((step) => stepRef(folder, step) !== ref));
+}
+
+/** Whether a list already names the task `step` names, in whichever spelling. */
+function holds(folder: { workspace: vscode.WorkspaceFolder }, tasks: ReadonlyArray<string>, step: string): boolean {
+  const ref = stepRef(folder, step);
+  return tasks.some((task) => stepRef(folder, task) === ref);
+}
+
+/** Rename… on a folder's heading. Its approval goes with it: a name is not what runs. */
+async function renameTaskFolder(node: TreeNode | undefined): Promise<void> {
+  const folder = folderOfNode(node);
+  if (!folder) {
+    return;
+  }
+  const taken = new Set(taskFolders().filter((other) => other.workspace === folder.workspace).map((other) => other.name));
+  const name = (await askFolderName(`Rename "${visible(folder.name)}"`, taken, folder.name))?.trim();
+  if (!name || name === folder.name) {
+    return;
+  }
+  const from = folderScope(folder);
+  const to = folderScope({ ...folder, name });
+  await writeTaskFolders(
+    folder.workspace,
+    (folders) =>
+      !folders.some(([existing]) => existing === folder.name)
+        ? `"${visible(folder.name)}" is no longer in ${CUSTOM_TASKS_FILE}; nothing was renamed.`
+        : folders.some(([existing]) => existing.trim() === name)
+          ? `"${name}" was added to ${CUSTOM_TASKS_FILE} while you were typing; nothing was renamed.`
+          : folders.map(([existing, value]) => [existing === folder.name ? name : existing, value]),
+    // Everything filed under its scope goes with it — the approval, the fold —
+    // and so does a run of it that is going, or the marks of the last one.
+    async () => {
+      await rewriteRefs((ref) => (ref === from ? to : ref));
+      const run = workflowRuns.get(from);
+      if (run) {
+        workflowRuns.delete(from);
+        workflowRuns.set(to, run);
+      }
+    },
+  );
+}
+
+/** Delete… on a folder's heading: the folder, not the tasks in it. */
+async function deleteTaskFolder(node: TreeNode | undefined): Promise<void> {
+  const folder = folderOfNode(node);
+  if (!folder) {
+    return;
+  }
+  const kind = folder.type === 'workflow' ? 'workflow' : 'folder';
+  const answer = await vscode.window.showWarningMessage(
+    `Delete the ${kind} "${visible(folder.name)}"?`,
+    { modal: true, detail: 'The tasks in it are not touched: each stays in its own package, and only the list goes.' },
+    'Delete',
+  );
+  if (answer !== 'Delete') {
+    return;
+  }
+  const scope = folderScope(folder);
+  // A run of it is stopped first: with the heading gone there would be no ■ left
+  // to stop the steps it has yet to start.
+  const run = workflowRuns.get(scope);
+  if (run?.active) {
+    run.cancelled = true;
+    await stopGroup(node);
+  }
+  workflowRuns.delete(scope);
+  await writeTaskFolders(
+    folder.workspace,
+    (folders) =>
+      folders.some(([name]) => name === folder.name)
+        ? folders.filter(([name]) => name !== folder.name)
+        : `"${visible(folder.name)}" is no longer in ${CUSTOM_TASKS_FILE}; nothing was deleted.`,
+    async () => {
+      const { [scope]: _gone, ...rest } = approvals();
+      await storage?.update(APPROVALS_KEY, rest);
+    },
+  );
+}
+
+/**
+ * A drop on a folder: tasks from anywhere are added at the row they were dropped
+ * on, or at the end on the heading; the folder's own rows dropped on each other
+ * are a reorder. The rows keep their place in their own packages — a folder is a
+ * second way in, as the starred rows are.
+ */
+async function dropOnFolder(scope: string, dragged: string[], from: string, anchor: string | undefined): Promise<void> {
+  const folder = folderOfScope(scope);
+  if (!folder) {
+    return;
+  }
+  const scripts = await collectScripts();
+  const byRef = new Map(scripts.map((script) => [scriptRef(script), script]));
+  const steps = dragged.flatMap((ref) => {
+    const script = byRef.get(ref);
+    const step = script ? fileStep(folder.workspace, script) : undefined;
+    return step ? [step] : [];
+  });
+  if (steps.length === 0) {
+    hint('$(circle-slash) Not a drop target — a folder holds the tasks of its own workspace folder');
+    return;
+  }
+  const refs = steps.map((step) => stepRef(folder, step));
+  const refOf = (step: string) => stepRef(folder, step);
+  if (from === scope) {
+    // Dropped on itself, or on a row travelling with it: nothing to work out —
+    // and without this the rows would land at the end of the list.
+    if (anchor === undefined || refs.includes(anchor)) {
+      clearHint();
+      return;
+    }
+    await saveFolderTasks(folder, (tasks) => {
+      const moved = tasks.filter((step) => refs.includes(refOf(step)));
+      const rest = tasks.filter((step) => !refs.includes(refOf(step)));
+      const at = tasks.find((step) => refOf(step) === anchor);
+      const index = at ? dropIndex(tasks, rest, moved, at) : rest.length;
+      return [...rest.slice(0, index), ...moved, ...rest.slice(index)];
+    });
+  } else {
+    if (steps.every((step) => holds(folder, folder.tasks, step))) {
+      hint('$(check) Already in this folder');
+      return;
+    }
+    await saveFolderTasks(folder, (tasks) => {
+      const added = steps.filter((step) => !holds(folder, tasks, step));
+      const at = anchor ? tasks.findIndex((step) => refOf(step) === anchor) : -1;
+      return at < 0 ? [...tasks, ...added] : [...tasks.slice(0, at), ...added, ...tasks.slice(at)];
+    });
+  }
+  clearHint();
+}
+
+/**
+ * A custom task renamed in the tree is renamed in every folder that holds it,
+ * so the rename does not leave a workflow with a step that names nothing.
+ */
+async function renameInFolders(workspace: vscode.WorkspaceFolder, from: string, to: string): Promise<void> {
+  const same = (folder: TaskFolder) => folder.workspace.uri.toString() === workspace.uri.toString();
+  const holding = (folder: TaskFolder, tasks: ReadonlyArray<string>) => tasks.some((step) => stepRef(folder, step) === from);
+  if (!taskFolders().some((folder) => same(folder) && holding(folder, folder.tasks))) {
+    return;
+  }
+  const reapproved: Array<[string, TaskFolderValue]> = [];
+  await writeTaskFolders(
+    workspace,
+    (folders) =>
+      folders.map(([name, value]) => {
+        const folder: TaskFolder = { name, workspace, ...value };
+        if (!holding(folder, value.tasks)) {
+          return [name, value];
+        }
+        const next: TaskFolderValue = {
+          ...value,
+          tasks: [...new Set(value.tasks.map((step) => (stepRef(folder, step) === from ? to : step)))],
+        };
+        // Only a folder that was approved as it was stays approved as it is.
+        if (approvedText(folderScope(folder)) === folderApproval(value)) {
+          reapproved.push([folderScope(folder), next]);
+        }
+        return [name, next];
+      }),
+    async () => {
+      for (const [scope, next] of reapproved) {
+        await approve(scope, folderApproval(next));
+      }
+    },
+  );
 }
 
 // --- AI tasks ----------------------------------------------------------------
@@ -4019,7 +4978,7 @@ async function refreshScripts(): Promise<void> {
   // the badge and in the status bar is checked against what is actually running,
   // which is the way back for anyone looking at a number they cannot explain.
   onStateChanged();
-  vscode.window.setStatusBarMessage('Task & Script Explorer: reloaded', 2000);
+  vscode.window.setStatusBarMessage('AI Task & Script Explorer: reloaded', 2000);
 }
 
 interface MenuItem extends vscode.QuickPickItem {
@@ -4287,7 +5246,7 @@ async function showMenu(): Promise<void> {
   ];
 
   const picked = await vscode.window.showQuickPick(items, {
-    title: 'Task & Script Explorer',
+    title: 'AI Task & Script Explorer',
     placeHolder: 'Pick an action',
   });
   await picked?.run?.();
@@ -4402,6 +5361,8 @@ type TreeNode =
        * that rewrites the order of the headings is aimed at it.
        */
       inFavorites?: boolean;
+      /** A folder or workflow of the user's own — see `taskFolderNode`. */
+      taskFolder?: TaskFolder;
       children: TreeNode[];
     }
   | {
@@ -4409,13 +5370,28 @@ type TreeNode =
       script: ScriptEntry;
       inFavorites?: boolean;
       /**
+       * The scope of the folder or workflow the row is drawn in, for a row that
+       * is a member of one rather than a task in its own package. See
+       * `folderScope`.
+       */
+      inFolder?: string;
+      /** Its place in a workflow, counted from 1 — absent in a folder, whose order runs nothing. */
+      step?: number;
+      /**
        * The folder a row came from, for the rows a `shell` heading has gathered
        * out of several — see `attachToHosts`. One heading over `scripts/` and
        * `bin/` would otherwise draw two `build.sh` rows that read identically.
        */
       origin?: string;
     }
-  | { kind: 'foreign'; execution: vscode.TaskExecution };
+  | { kind: 'foreign'; execution: vscode.TaskExecution }
+  /**
+   * A member of a folder or workflow that names a task the workspace does not
+   * have — renamed, deleted, or in a manifest that is not here. Drawn rather
+   * than skipped: in a workflow it is a step that would not run, and the place
+   * to see that is the list, not the failure.
+   */
+  | { kind: 'missingStep'; folder: TaskFolder; step: string; number?: number };
 
 const treeChanged = new vscode.EventEmitter<void>();
 let treeView: vscode.TreeView<TreeNode> | undefined;
@@ -4596,7 +5572,12 @@ function dragScope(node: TreeNode): string | undefined {
   if (node.kind === 'group') {
     return node.scope;
   }
-  return node.kind === 'script' ? (node.inFavorites ? FAVORITES_SCOPE : groupRef(node.script)) : undefined;
+  if (node.kind === 'missingStep') {
+    return folderScope(node.folder);
+  }
+  return node.kind === 'script'
+    ? (node.inFolder ?? (node.inFavorites ? FAVORITES_SCOPE : groupRef(node.script)))
+    : undefined;
 }
 
 /**
@@ -4738,9 +5719,11 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     const name = first.kind === 'script' ? displayName(first.script) : first.kind === 'group' ? groupHeading(first) : '';
     const what = refs.length > 1 ? `${refs.length} tasks` : `"${name}"`;
     hint(
-      scope === FAVORITES_SCOPE || first.kind !== 'script'
-        ? `$(move) Moving ${what} — drop on another starred task to reorder the top of the list`
-        : `$(move) Moving ${what} — drop inside ${packageTitle(first.script)} to reorder, or on a starred task to star it`,
+      isFolderScope(scope)
+        ? `$(move) Moving ${what} — drop on another row of this folder to reorder it`
+        : scope === FAVORITES_SCOPE || first.kind !== 'script'
+          ? `$(move) Moving ${what} — drop on another starred task to reorder the top of the list`
+          : `$(move) Moving ${what} — drop inside ${packageTitle(first.script)} to reorder, or on a starred task or a folder to add it there`,
     );
   },
 
@@ -4774,6 +5757,16 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     }
 
     const destination = dragScope(target);
+    // A folder takes tasks from anywhere, and its own rows are reordered in its
+    // file rather than in the saved order the packages keep.
+    if (isFolderScope(destination)) {
+      await dropOnFolder(destination, dragged, scope, rowRef(target));
+      return;
+    }
+    if (isFolderScope(scope)) {
+      hint('$(circle-slash) Not a drop target — a folder\'s row only moves inside its folder. Remove from Folder takes it out');
+      return;
+    }
     if (destination !== scope) {
       // Onto a starred row from anywhere: star it, and leave its own row where
       // it is. With no starred row on screen there is nothing to aim at, and ☆
@@ -4842,7 +5835,7 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
       ? target.inFavorites
         ? undefined
         : target.ecosystem
-      : target.kind === 'script' && !target.inFavorites
+      : target.kind === 'script' && !target.inFavorites && target.inFolder === undefined
         ? ecosystems.get(groupRef(target.script))
         : undefined;
 
@@ -5028,7 +6021,10 @@ function anchorGroup(target: TreeNode): string | undefined {
   if (target.kind === 'group') {
     return target.inFavorites ? undefined : target.ref;
   }
-  return target.kind === 'script' && !target.inFavorites ? groupRef(target.script) : undefined;
+  // A folder's row is not where its package is either, any more than a starred one.
+  return target.kind === 'script' && !target.inFavorites && target.inFolder === undefined
+    ? groupRef(target.script)
+    : undefined;
 }
 
 /**
@@ -5451,6 +6447,11 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
       [...custom, ...(rest.length > 1 ? parentRows(rest) : rest)]
     : attachToHosts(shown);
 
+  // The user's own folders and workflows, above Custom Tasks and everything
+  // else: they are lists somebody made to be run from the top. Above them in
+  // turn come OTHER TASKS and the starred rows, put in front of these below.
+  roots.unshift(...taskFolders().map((folder) => taskFolderNode(folder, scripts)));
+
   // Tasks that are not backed by a manifest have no group of their own.
   const foreign = foreignExecutions(scripts);
   if (foreign.length > 0) {
@@ -5842,6 +6843,9 @@ function decorationUri(color: string, name: string): vscode.Uri {
 const NO_TINT = '-';
 
 function treeItemFor(node: TreeNode): vscode.TreeItem {
+  if (node.kind === 'group' && node.taskFolder) {
+    return taskFolderItem(node, node.taskFolder);
+  }
   if (node.kind === 'group') {
     // A heading is read in two registers, and the row spells each in its own way.
     //
@@ -6102,16 +7106,26 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     return item;
   }
 
+  if (node.kind === 'missingStep') {
+    return missingStepItem(node);
+  }
+
   const isRunning = running.has(node.script.key);
   // Reported by Docker rather than by the task system, and only worth saying
   // when nothing of ours is running — there the spinner is the better answer.
   const up = !isRunning && containersUp(node.script);
-  const item = new vscode.TreeItem(displayName(node.script));
+  // A workflow's rows are numbered, since there the order is what runs.
+  const item = new vscode.TreeItem(
+    node.step !== undefined ? `${node.step}. ${displayName(node.script)}` : displayName(node.script),
+  );
   // A starred script is on screen twice, at the top of the list and in its own
   // group. Without ids of its own the tree cannot tell the two rows apart, and
   // the selection would jump between them. Built from the absolute `key` rather than
-  // the storage ref, which trades uniqueness for portability.
-  item.id = `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
+  // the storage ref, which trades uniqueness for portability. A row in a folder
+  // is a third copy, and one per folder it is in.
+  item.id = node.inFolder
+    ? `step:${node.inFolder}:${node.script.key}`
+    : `${node.inFavorites ? 'fav' : 'pkg'}:${node.script.key}`;
   // A custom task that will ask before it runs says so before it is clicked,
   // so the question is not a surprise — and a line pulled in from somewhere is
   // visible as that the moment it lands. See `approveLaunch`.
@@ -6120,7 +7134,9 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     CLEARANCE_NOTE[cleared],
     up ? 'up' : undefined,
     node.origin,
-    scriptDescription(node.script, node.inFavorites),
+    // Away from its own package, a row says which package it is — the starred
+    // rows have always done this, and a folder's rows are in the same place.
+    scriptDescription(node.script, node.inFavorites || node.inFolder !== undefined),
   ]
     .filter(Boolean)
     .join(' · ');
@@ -6144,12 +7160,19 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
   // over every other picked icon — a running row is answering a different
   // question — which is why this asks for one only while the row is idle.
   const specimen = isRunning ? undefined : storedSpecimen(scriptRef(node.script));
+  // A workflow's last run is read off its steps: a tick on the ones that passed,
+  // a cross on the one that failed. The spinner still says which one is going.
+  const outcome = !isRunning && node.inFolder !== undefined && node.step !== undefined
+    ? stepOutcome(node.inFolder, node.step)
+    : undefined;
   item.iconPath =
     !isRunning && cleared !== 'approved'
       ? clearanceIcon(cleared)
-      : specimen
-        ? specimenIcon(specimen)
-        : iconFor(node.script, isRunning, tint, up);
+      : outcome
+        ? outcomeIcon(outcome)
+        : specimen
+          ? specimenIcon(specimen)
+          : iconFor(node.script, isRunning, tint, up);
   // A painted task carries the same decoration trick the headings do, which is
   // the only way a tree label takes a colour at all. The description goes with it
   // — the decoration lands on the whole resource label and `.label-description`
@@ -6192,6 +7215,9 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
         : node.script.kind === 'custom'
           ? 'custom'
           : 'task',
+    // A row drawn inside a folder or workflow, which is what Remove from Folder
+    // is offered on. In front of the last axis, for the reason given above.
+    ...(node.inFolder !== undefined ? ['step'] : []),
     // The last axis, and absent altogether on a row whose file the tree draws as
     // one item — which is the whole of how neither half of the toggle reaches
     // one. Both clauses that offer it end in `:confirm$` or `:noconfirm$`, so a
@@ -6435,8 +7461,8 @@ async function checkContainers(announce: boolean): Promise<void> {
   const up = [...containers.values()].reduce((count, services) => count + services.size, 0);
   vscode.window.setStatusBarMessage(
     up > 0
-      ? `Task & Script Explorer: ${up} ${up === 1 ? 'service' : 'services'} up`
-      : 'Task & Script Explorer: nothing running',
+      ? `AI Task & Script Explorer: ${up} ${up === 1 ? 'service' : 'services'} up`
+      : 'AI Task & Script Explorer: nothing running',
     3000,
   );
 }
@@ -7341,6 +8367,9 @@ let lastClick: { id: string; at: number } | undefined;
 function clickId(node: TreeNode): string {
   if (node.kind === 'script') {
     return `script:${node.script.key}`;
+  }
+  if (node.kind === 'missingStep') {
+    return `missing:${node.step}`;
   }
   return node.kind === 'foreign' ? `foreign:${executionSerial(node.execution)}` : node.id;
 }

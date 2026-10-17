@@ -3,7 +3,7 @@
 **Every script in your workspace, and everything currently running, in one list. Start, stop and
 restart without ever going looking for a terminal tab.**
 
-![Task & Script Explorer in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
+![AI Task & Script Explorer in action](https://raw.githubusercontent.com/Denis-Davidoff/vs-code-task-runner-ultimate/main/promo-video.gif)
 
 ## Extension Features
 
@@ -14,6 +14,10 @@ restart without ever going looking for a terminal tab.**
   The agents are found on their own, Claude Code and Codex inside their VS Code extensions included.
   A prompt that changed behind your back — a teammate's commit, a hand edit — asks once before it
   runs, and says what changed.
+- 🔁 **[Folders and workflows — new](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#folders-and-workflows)** — lists of your own made out of
+  any tasks the workspace has. A **folder** starts everything in it at once — the whole dev stack in
+  one click. A **workflow** runs its steps one after another and stops at the first that fails:
+  *lint → test → AI review → build*. Drag tasks onto them, and commit them with the project.
 - 📋 **[A panel in the left bar](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#the-task--script-explorer-view)** — every task of the workspace as a
   tree, grouped by the manifest it came from. Nothing moves when a task starts, and the number of
   running tasks rides on the activity bar icon as a real VS Code badge.
@@ -84,7 +88,7 @@ them keeps its own in a `Makefile.toml`, the Python one in `pyproject.toml`, and
 `docker-compose.yml` two folders away, and the half-dozen `scripts/*.sh` nobody has opened since they
 were written are how the release actually goes out. The dev server you started an hour ago is
 alive in a tab you can no longer find, and running anything by hand means getting the directory
-*and* the tool right first. Task & Script Explorer collapses all of that into one list, and gives you
+*and* the tool right first. AI Task & Script Explorer collapses all of that into one list, and gives you
 three ways to reach it.
 
 **[Full documentation](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md)** —
@@ -100,6 +104,8 @@ Visual Studio Code Marketplace link: https://marketplace.visualstudio.com/items?
 Open VSX Registry link: https://open-vsx.org/extension/DenysDavydov/tab-browser-ultimate
 
 ## Change log 0.9
+
+- 0.9.9: New [folders and workflows](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#folders-and-workflows), made from the **+** at the head of the panel. Put any tasks of the workspace in one — package scripts, make targets, compose services, custom and AI tasks — by dragging them onto it, with **Add to Folder…** on a row, or with **Add Tasks…** on the folder. ▶ on a folder starts everything in it at once; ▶ on a workflow runs its steps one after another, marks each ✓ as it passes, and stops at the first that fails, offering to run again from that step. Both are kept in `.vscode/task-script-explorer.json`, and one that changed outside the tree asks once before it runs.
 
 - 0.9.8: New [AI tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#ai-tasks): a prompt for Claude Code or Codex, kept under **Custom Tasks** and run headless with the access you choose — read-only, edit files, or full. Press the new **+** at the head of the panel and pick **AI Task** — or **Shell Task** for a command line of your own. The answer opens as a Markdown report, goes to the clipboard or shows in a notification, and the agent's progress streams into the task's terminal, where ■ or Ctrl+C stops it. An AI task that reached the file some other way asks once before it runs, and again whenever its prompt, agent or access changes. Approvals of custom tasks and AI tasks alike are now signed with a key kept in VS Code's secret storage, so they cannot be forged by writing into workspace storage. A task whose agent is not installed on this machine, or whose model is not available here, offers to pick the agent and model again and run. New setting `taskRunnerUltimate.aiAgentPaths` for agents installed somewhere they are not found on their own.
 

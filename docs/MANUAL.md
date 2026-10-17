@@ -1,4 +1,4 @@
-# Task & Script Explorer — Manual
+# AI Task & Script Explorer — Manual
 
 Everything the extension does, in detail: what it scans, how it runs things, what every row and
 button means, and what each setting changes. The [README](../README.md) is the short version.
@@ -465,8 +465,9 @@ This is the one source that ships enabled *and* changes an existing tree on upgr
 
 Some commands belong to no manifest: the `docker compose down -v && docker compose up -d db` you type
 every other morning, or a `tail -f logs/*.log | grep ERROR`. A **custom task** is a name and a shell
-command, nothing more, and every one of them sits under a single **Custom Tasks** heading at the very
-top of the tree, above every package and in both [grouping modes](#grouping-by-ecosystem).
+command, nothing more, and every one of them sits under a single **Custom Tasks** heading near the
+top of the tree — above every package, below only your [folders and workflows](#folders-and-workflows)
+— in both [grouping modes](#grouping-by-ecosystem).
 
 The first one is made from the **+** at the head of the panel — **Shell Task** in the menu it drops
 down — or from [the menu](#the-menu): ⋮ → **Create custom task**. Either asks for a name and then for
@@ -695,6 +696,80 @@ by hand. It is machine-scoped, so a repository's own settings cannot point it so
 Reports are written to this workspace's extension storage, out of the project, so there is nothing
 to commit or ignore.
 
+### Folders and workflows
+
+A **folder** and a **workflow** are lists you make out of the tasks the workspace already has —
+package scripts, make targets, compose services, Dockerfile builds, custom and AI tasks alike — drawn as headings above
+**Custom Tasks**. A task put in one stays in its own package as well, the way a starred task does.
+Both are made from the **+** at the head of the panel, and both are run with ▶ on their heading.
+
+| | Folder | Workflow |
+| --- | --- | --- |
+| Icon | a stack of folders | a numbered list |
+| ▶ | starts every task in it **at once**, leaving the ones already running alone | starts the steps **one after another**: each starts once the one before it has ended with exit code 0 |
+| A step that fails | — | the workflow **stops** there; the step is marked ✗, and the message offers **Show Terminal** and **Run Again from Step N** |
+| ■ | stops whatever in it is running | stops the step that is running and the workflow with it |
+| Rows | in the order you put them | numbered, since there the order is what runs |
+
+A workflow marks its steps as it goes — ✓ on each that passed, ✗ on the one that failed, the spinner
+on the one running, and `step 2 of 4` beside its heading — and keeps the marks until its next run.
+
+Making one asks for a name and then for its tasks: several at once for a folder, one after another
+for a workflow, in the order they will run. After that:
+
+- **Drag** any task row onto a folder's heading or one of its rows to add it there, and drag the
+  folder's own rows to reorder them. Dropping a row on itself moves nothing.
+- **Add to Folder…** in a task row's right-click menu, and **Add Tasks…** on the heading's, do the same
+  from a list. A compose file and a Dockerfile are drawn as one row each, so their services, stages
+  and extra commands are not rows to drag — **Add Tasks…** lists them all.
+- **Remove from Folder** on a row inside one takes it out of the list, and nothing else.
+- **Rename…** and **Delete** on the heading. Deleting a folder deletes the list, not the tasks.
+
+A workflow waits for each step to *end*, so a step that never does — a dev server, a watcher — holds
+it there until you stop it; those belong in a folder. A step stopped by hand counts as a failure —
+a command line ends without an exit code, an AI task with 130. ■ on the heading stops the workflow
+itself, and nothing after the running step starts.
+
+A workflow runs the list it started with. If the list changes while it runs — a pull, an edit in the
+tree, **Delete** — it stops before the next step and says so, rather than carrying on with steps that
+are no longer the workflow's. **Run Again from Step N** starts from the step that failed, found by
+which task it is: if the list has changed since, it starts from wherever that task now is, and from
+nowhere if it is not in the list any more. Every question is asked before the first step starts —
+the approval of each custom and AI task in it — so a run that has started never stops halfway to wait
+on a dialog, and a step that is already running when ▶ is pressed keeps the workflow from starting,
+since it could not tell when a run it did not start is done.
+
+The lists are kept under `folders` in `.vscode/task-script-explorer.json`, beside the tasks, so the
+team shares them along with everything else in that file:
+
+```jsonc
+{
+  "tasks": { "Review changes": { "agent": "claude", "prompt": "…" } },
+  "folders": {
+    "Dev stack": { "type": "folder", "tasks": ["apps/api/package.json::dev", "apps/web/package.json::dev"] },
+    "Release": {
+      "type": "workflow",
+      "tasks": ["package.json::lint", "package.json::test", "Review changes", "package.json::build"]
+    }
+  }
+}
+```
+
+A task is named by its manifest's path inside the workspace folder and its name, or — for a custom or
+AI task of this same file — by its name alone; a folder holds the tasks of the workspace folder it is
+kept in. One that names a task the workspace does not have is drawn with a warning, as **not in this
+workspace**, and keeps a workflow from starting until it is removed or comes back. Renaming a custom
+task in the tree renames it in every folder that holds it.
+
+A folder or workflow that reached the file some other way — a teammate's commit adding a step to the
+workflow that deploys — asks once before it first runs, and lists what it will run, the way a
+[custom task](#approving-a-command-you-did-not-type) does; one made in the tree never asks. A change made
+in the tree — a task dragged onto it, a step removed — keeps an approved list approved, but does not
+approve one that was not: the rest of that list came from somewhere else, and is shown before it first
+runs. The dialog shows the whole list, however long.
+The tasks inside still answer for themselves: a custom or AI task asks on its own terms whichever
+folder starts it.
+
 ## Where the button appears
 
 | Place | Notes |
@@ -703,7 +778,7 @@ to commit or ignore.
 | Activity bar (left strip) | The **Task & Script Explorer** view: the same list as a tree, with a native count badge. Always visible, whatever the active editor is. |
 | File Explorer (bottom section) | The same tree again, as a **Task & Script Explorer** section under the file list — collapsed until you open it, so it costs one row until you want it. Toggle with `taskRunnerUltimate.showInFileExplorer`. |
 | Status bar (bottom left) | `$(play-circle) Tasks`, or `$(loading~spin) Tasks: N` while tasks run, followed by Restart all and Stop all buttons whenever something is running. Toggle with `taskRunnerUltimate.showInStatusBar`. |
-| Command palette | `Task & Script Explorer: Show Scripts` |
+| Command palette | `AI Task & Script Explorer: Show Scripts` |
 | Keybinding | `Ctrl+Cmd+T` on macOS, `Ctrl+Alt+T` on Windows and Linux — see [Keyboard shortcuts](#keyboard-shortcuts) |
 
 > The Command Center itself (the search field in the title bar) is **not** extensible: as of
@@ -963,7 +1038,8 @@ with the rows under it. `taskRunnerUltimate.groupIcons: "uniform"` puts a single
 every heading.
 
 The view header holds six actions. First is **new task** (+), a dropdown with **AI Task** and
-**Shell Task** — the two kinds of [custom task](#custom-tasks), each going on to its own questions.
+**Shell Task** — the two kinds of [custom task](#custom-tasks), each going on to its own questions —
+and below them **Folder** and **Workflow**, the two kinds of [list](#folders-and-workflows).
 **Restart all** (⟳) and **stop all** (◼) appear only while something is running, so the header stays
 quiet on an idle workspace; **open the dropdown** (▶), the **grouping switch** and the **menu** (⋮)
 are always there. The switch is one button drawn as whichever
@@ -993,7 +1069,7 @@ to read.
 
 What a rename does not reach is the tooltip on the activity bar icon itself. A view container's
 title is read out of the manifest when the extension is installed and there is no API to change it
-afterwards, so the icon keeps the extension's own name.
+afterwards, so the icon keeps the view's own name, **Task & Script Explorer**.
 
 ### The menu
 
@@ -1020,7 +1096,7 @@ The ⋮ in the view header opens everything that is not aimed at one row:
 Each reset says how much it is about to throw away — `3 renamed`, `2 lists reordered`, `4 painted`,
 `5 starred`, `2 guarded` — and asks once before it does it. The two broad resets are separated from the
 individual actions they bracket. Refresh is also in the command palette under
-**Task & Script Explorer: Refresh Scripts**.
+**AI Task & Script Explorer: Refresh Scripts**.
 
 Clicking an activity bar icon can only reveal its view, never run a command, so it cannot literally
 do "what the toolbar icon does". If you would rather have the dropdown anyway, set
@@ -1477,7 +1553,7 @@ obvious candidates are not:
 
 ### Changing it
 
-Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **Task & Script Explorer: Show Scripts** and click the
+Press `Cmd+K Cmd+S` (`Ctrl+K Ctrl+S`), search for **AI Task & Script Explorer: Show Scripts** and click the
 pencil. Or write it out in `keybindings.json`:
 
 ```json
@@ -1648,7 +1724,7 @@ in the very file being edited: switching a package from npm to pnpm has to chang
 are launched, not just what the list says. The cost is a rescan plus a few stat calls per package,
 on a change you made yourself.
 
-`Task & Script Explorer: Refresh Scripts` does exactly the same thing on demand, for the cases no
+`AI Task & Script Explorer: Refresh Scripts` does exactly the same thing on demand, for the cases no
 watcher can see — a manifest edited outside the workspace, say.
 
 ## Runner detection

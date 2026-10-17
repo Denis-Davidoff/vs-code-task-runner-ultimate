@@ -57,7 +57,7 @@ function uri(at) {
   };
 }
 
-function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }), shaped = [], folder, inputs = [], customFile = [], answer, liveKeys = false } = {}) {
+function harness({ settings = {}, stored = {}, executions = [], scan = [], shell: shellPath = '/bin/zsh', pinned = {}, pick = 0, stops = true, probeReply = () => ({ running: new Set(['web']) }), shaped = [], folder, inputs = [], customFile = [], answer, liveKeys = false, folders: taskFolderList = [] } = {}) {
   // What the custom task prompts are answered with, in order, and what each
   // write of the custom tasks file would have put on disk.
   const answers = [...inputs];
@@ -70,6 +70,18 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
   const staleScans = new Set();
   const probes = [];
   const launched = [];
+  const endProcess = new Set();
+  const endTask = new Set();
+  const folderWrites = [];
+  // The task launched `index`-th ends, with `code` — or with none, the way a task
+  // stopped by hand does, when `code` is undefined.
+  const finish = (index, code) => {
+    const execution = { task: launched[index] };
+    if (code !== undefined) {
+      for (const listener of [...endProcess]) listener({ execution, exitCode: code });
+    }
+    for (const listener of [...endTask]) listener({ execution });
+  };
   const terminals = [];
   const writes = [];
   const warnings = [];
@@ -166,6 +178,9 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     tasks: {
       taskExecutions: executions,
       executeTask: async (task) => (launched.push(task), { task, terminate() {} }),
+      // What a workflow listens to for a step's end; `finish` below fires them.
+      onDidEndTaskProcess: (listener) => (endProcess.add(listener), { dispose: () => endProcess.delete(listener) }),
+      onDidEndTask: (listener) => (endTask.add(listener), { dispose: () => endTask.delete(listener) }),
     },
     // Enough of a task to read back what was launched: the definition a row is
     // filed under, the name its terminal takes, and the words that actually run.
@@ -260,6 +275,15 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
           ? require('node:crypto')
           : name === './approval'
           ? approval
+          : name === './ai'
+          ? {
+              // The agent runner is a process boundary these tests stop at. What
+              // the tree reads from it is the notification escaping, verbatim,
+              // and the hook a workflow hears an AI step's exit code through.
+              notificationText: (text) => text.replace(/\]\s*\(/g, '] ('),
+              onAiRunEnd: () => ({ dispose() {} }),
+              agentsStopped: async () => {},
+            }
           : name === './aiTask'
           ? aiTask
           : name === './iconTheme'
@@ -298,6 +322,16 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
                 // `null` stands for a file that is there and is not ours to read.
                 readCustomTasks: async () => (customFile === null ? undefined : customFile.map((entry) => [...entry])),
                 readText: async () => undefined,
+                // The folders and workflows the file declares, which a test
+                // that is about them sets through `folders`.
+                taskFolders: () => taskFolderList,
+                editTaskFolders: async (_folder, edit) => {
+                  const next = edit(taskFolderList.map((folder) => [folder.name, { type: folder.type, tasks: [...folder.tasks] }]));
+                  if (next) {
+                    folderWrites.push(next);
+                  }
+                  return next ? JSON.stringify(next) : undefined;
+                },
                 ALL_ECOSYSTEMS: [...new Set(Object.values(ECOSYSTEMS))],
                 collectScripts: async () => scan,
                 emptyManifests: () => [],
@@ -333,11 +367,11 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async (execution) => (stopped.push(execution), ${stops});
-    exports.tree = { loadApprovalKey, setApprovalKey: (value) => { approvalKey = value; }, startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, copyCommandOf, activateNode, setFavorite, dragAndDropController, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
+    exports.tree = { runTaskFolder, stopTaskFolder, dropOnFolder, removeFromFolder, workflowRuns, loadApprovalKey, setApprovalKey: (value) => { approvalKey = value; }, startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, copyCommandOf, activateNode, setFavorite, dragAndDropController, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
   `,
     Object.assign(context, { memento, extUri: uri('/ext'), stopped, signingKey: KEY }),
   );
-  return { ...context.exports.tree, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked, customWrites, answers, dialogs, stopped, staleScans };
+  return { ...context.exports.tree, finish, folderWrites, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked, customWrites, answers, dialogs, stopped, staleScans };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -1040,13 +1074,19 @@ test('the one submenu is the panel header\'s +, and nothing points at the colour
     .filter((entry) => entry.submenu)
     .map((entry) => entry.submenu);
   assert.deepEqual(used, [id]);
-  // First in the header, and holding the two kinds of task in that order.
+  // First in the header, and holding the two kinds of task and then the two
+  // kinds of list, in that order.
   const title = manifest.contributes.menus['view/title'];
   assert.equal(title.find((entry) => entry.submenu === id).group, 'navigation@0');
   assert.ok(title.every((entry) => entry.submenu === id || entry.group > 'navigation@0'));
   assert.deepEqual(
     manifest.contributes.menus[id].map((entry) => entry.command),
-    ['taskRunnerUltimate.newAiTask', 'taskRunnerUltimate.newShellTask'],
+    [
+      'taskRunnerUltimate.newAiTask',
+      'taskRunnerUltimate.newShellTask',
+      'taskRunnerUltimate.newFolder',
+      'taskRunnerUltimate.newWorkflow',
+    ],
   );
 });
 
@@ -3556,4 +3596,274 @@ test('the marks of a subfolder named like its folder follow it to its own ref', 
   const both = harness({ folder, stored: { favorites: ['scripts/scripts::deploy.sh'] } });
   await both.migrateSubfolderRefs([sub, { ...shell('/scripts', 'build.sh'), cwd: uri('/scripts') }]);
   assert.deepEqual(json(both.memento.data.favorites), ['scripts/scripts::deploy.sh']);
+});
+
+// --- folders and workflows ----------------------------------------------------
+
+const RELEASE = {
+  name: 'Release',
+  type: 'workflow',
+  tasks: ['web/package.json::dev', 'Reset DB'],
+  workspace: FOLDER,
+};
+const RELEASE_SCOPE = '::taskfolder:repo::Release';
+const folderApproval = (folder) => `\u0000folder:${JSON.stringify({ type: folder.type, tasks: folder.tasks })}`;
+const tick = (ms = 150) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('a workflow is a heading above the rest, its steps numbered, a missing one drawn as missing', () => {
+  const folder = { ...RELEASE, tasks: [...RELEASE.tasks, 'gone/package.json::x'] };
+  const h = harness({ folder: FOLDER, folders: [folder], settings: { grouping: 'flat' } });
+  const [heading] = h.buildTreeRoots([RESET, WEB]);
+  assert.equal(heading.id, RELEASE_SCOPE);
+  const head = h.treeItemFor(heading);
+  assert.equal(head.contextValue, 'taskfolder:workflow');
+  assert.equal(head.iconPath.id, 'list-ordered');
+  assert.match(head.description, /workflow · 3 steps/);
+  const [first, second, third] = heading.children.map(h.treeItemFor);
+  assert.equal(first.label, '1. dev');
+  assert.equal(second.label, '2. Reset DB');
+  // A third copy of the row, with an id of its own and the step segment in
+  // front of the confirm axis, where every older clause still matches.
+  assert.notEqual(first.id, h.treeItemFor({ kind: 'script', script: WEB }).id);
+  assert.match(first.contextValue, /^script:idle:nofav:task:step:noconfirm$/);
+  assert.equal(third.contextValue, 'missingStep');
+  assert.match(third.label, /^3\. gone\/package\.json::x$/);
+});
+
+test('a folder runs nothing in order: its rows are not numbered, and its heading says so', () => {
+  const folder = { ...RELEASE, name: 'Stack', type: 'folder' };
+  const h = harness({ folder: FOLDER, folders: [folder] });
+  const [heading] = h.buildTreeRoots([RESET, WEB]);
+  assert.equal(h.treeItemFor(heading).contextValue, 'taskfolder:folder');
+  assert.equal(h.treeItemFor(heading).iconPath.id, 'folder-library');
+  assert.equal(h.treeItemFor(heading.children[0]).label, 'dev');
+});
+
+test('a workflow runs its steps one after another, each once the one before it passed', async () => {
+  const h = harness({
+    folder: FOLDER,
+    folders: [RELEASE],
+    scan: [RESET, WEB],
+    liveKeys: true,
+    stored: {
+      approvals: {
+        [RELEASE_SCOPE]: signed(folderApproval(RELEASE)),
+        'repo/.vscode/task-script-explorer.json::Reset DB': signed(RESET.line),
+      },
+    },
+  });
+  const [heading] = h.buildTreeRoots([RESET, WEB]);
+  const running = h.runTaskFolder(heading);
+  await tick(20);
+  assert.equal(h.launched.length, 1);
+  assert.equal(h.launched[0].definition.script, 'dev');
+  assert.equal(h.workflowRuns.get(RELEASE_SCOPE).active, true);
+  h.finish(0, 0);
+  await tick();
+  assert.equal(h.launched.length, 2);
+  assert.equal(h.launched[1].definition.script, 'Reset DB');
+  h.finish(1, 0);
+  await running;
+  const run = h.workflowRuns.get(RELEASE_SCOPE);
+  assert.equal(run.active, false);
+  assert.equal(run.done, 2);
+  assert.equal(run.failed, undefined);
+});
+
+test('a workflow stops at the first step that fails, or that ends with no exit code', async () => {
+  for (const code of [1, undefined]) {
+    const h = harness({
+      folder: FOLDER,
+      folders: [RELEASE],
+      scan: [RESET, WEB],
+      liveKeys: true,
+      stored: {
+        approvals: {
+          [RELEASE_SCOPE]: signed(folderApproval(RELEASE)),
+          'repo/.vscode/task-script-explorer.json::Reset DB': signed(RESET.line),
+        },
+      },
+    });
+    const [heading] = h.buildTreeRoots([RESET, WEB]);
+    const running = h.runTaskFolder(heading);
+    await tick(20);
+    h.finish(0, code);
+    await running;
+    assert.equal(h.launched.length, 1, String(code));
+    assert.equal(h.workflowRuns.get(RELEASE_SCOPE).failed, 1);
+    assert.match(h.warnings.at(-1), /stopped at step 1, "dev"/);
+    // The step's own row says it failed, the heading no longer spins.
+    const [again] = h.buildTreeRoots([RESET, WEB]);
+    assert.equal(h.treeItemFor(again.children[0]).iconPath.id, 'error');
+    assert.notEqual(h.treeItemFor(again).iconPath.id, 'loading~spin');
+  }
+});
+
+test('a workflow with a step the workspace does not have does not start', async () => {
+  const folder = { ...RELEASE, tasks: ['gone/package.json::x', ...RELEASE.tasks] };
+  const h = harness({ folder: FOLDER, folders: [folder], scan: [RESET, WEB], liveKeys: true });
+  const [heading] = h.buildTreeRoots([RESET, WEB]);
+  await h.runTaskFolder(heading);
+  assert.equal(h.launched.length, 0);
+  assert.match(h.dialogs.at(-1).message, /did not start: "gone\/package\.json::x" is not a task/);
+});
+
+test('a workflow that was not made in this tree shows its steps and asks before it runs', async () => {
+  const h = harness({ folder: FOLDER, folders: [RELEASE], scan: [RESET, WEB], liveKeys: true });
+  const [heading] = h.buildTreeRoots([RESET, WEB]);
+  await h.runTaskFolder(heading);
+  assert.equal(h.launched.length, 0);
+  const [dialog] = h.dialogs;
+  assert.equal(dialog.options.modal, true);
+  assert.match(dialog.message, /Run the workflow "Release"\? It was not made in this tree/);
+  assert.match(dialog.options.detail, /1\. web\/package\.json::dev\n2\. Reset DB/);
+});
+
+test('a folder starts everything in it at once, and leaves what already runs alone', async () => {
+  const folder = { ...RELEASE, name: 'Stack', type: 'folder', tasks: ['web/package.json::dev', 'engine/Cargo.toml::build'] };
+  const h = harness({
+    folder: FOLDER,
+    folders: [folder],
+    scan: [WEB, ENGINE],
+    stored: { approvals: { '::taskfolder:repo::Stack': signed(folderApproval(folder)) } },
+  });
+  h.running.set(ENGINE.key, { task: { name: 'build' } });
+  const [heading] = h.buildTreeRoots([WEB, ENGINE]);
+  await h.runTaskFolder(heading);
+  assert.deepEqual(h.launched.map((task) => task.definition.script), ['dev']);
+});
+
+test('a task dropped on a folder is added where it landed, and its rows reorder in place', async () => {
+  const folder = { ...RELEASE, name: 'Stack', type: 'folder', tasks: ['web/package.json::dev'] };
+  const h = harness({ folder: FOLDER, folders: [folder], scan: [WEB, ENGINE, RESET] });
+  await h.dropOnFolder('::taskfolder:repo::Stack', ['repo/engine/Cargo.toml::build'], 'repo/engine/Cargo.toml', undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.folderWrites.at(-1))), [
+    ['Stack', { type: 'folder', tasks: ['web/package.json::dev', 'engine/Cargo.toml::build'] }],
+  ]);
+  // A custom task of the same file is named by its name alone.
+  await h.dropOnFolder('::taskfolder:repo::Stack', ['repo/.vscode/task-script-explorer.json::Reset DB'], 'x', 'repo/web/package.json::dev');
+  assert.deepEqual([...h.folderWrites.at(-1)[0][1].tasks], ['Reset DB', 'web/package.json::dev']);
+  // Never approved, so a change in the tree does not approve it: the rest of
+  // the list is whatever the file said, and nobody has read that yet.
+  assert.equal(h.memento.data.approvals, undefined);
+});
+
+test('a change in the tree keeps an approved folder approved, and leaves an unapproved one asking', async () => {
+  const folder = { ...RELEASE, name: 'Stack', type: 'folder', tasks: ['web/package.json::dev'] };
+  const scope = '::taskfolder:repo::Stack';
+  const approved = harness({
+    folder: FOLDER,
+    folders: [folder],
+    scan: [WEB, ENGINE],
+    stored: { approvals: { [scope]: signed(folderApproval(folder)) } },
+  });
+  await approved.dropOnFolder(scope, ['repo/engine/Cargo.toml::build'], 'repo/engine/Cargo.toml', undefined);
+  assert.equal(opened(approved.memento.data.approvals)[scope], folderApproval({ type: 'folder', tasks: ['web/package.json::dev', 'engine/Cargo.toml::build'] }));
+
+  // A pull put `build` in a folder approved as [dev]; dragging one more task on
+  // does not approve `build` along with it.
+  const pulled = { ...folder, tasks: ['web/package.json::dev', 'engine/Cargo.toml::build'] };
+  const h = harness({
+    folder: FOLDER,
+    folders: [pulled],
+    scan: [WEB, ENGINE, RESET],
+    stored: { approvals: { [scope]: signed(folderApproval(folder)) } },
+  });
+  await h.dropOnFolder(scope, ['repo/.vscode/task-script-explorer.json::Reset DB'], 'x', undefined);
+  assert.equal(opened(h.memento.data.approvals)[scope], folderApproval(folder));
+});
+
+test('a folder row dropped on itself stays where it was', async () => {
+  const folder = { ...RELEASE, tasks: ['web/package.json::dev', 'engine/Cargo.toml::build'] };
+  const h = harness({ folder: FOLDER, folders: [folder], scan: [WEB, ENGINE] });
+  await h.dropOnFolder(RELEASE_SCOPE, ['repo/web/package.json::dev'], RELEASE_SCOPE, 'repo/web/package.json::dev');
+  assert.equal(h.folderWrites.length, 0);
+  // A real reorder still moves it.
+  await h.dropOnFolder(RELEASE_SCOPE, ['repo/web/package.json::dev'], RELEASE_SCOPE, 'repo/engine/Cargo.toml::build');
+  assert.deepEqual([...h.folderWrites.at(-1)[0][1].tasks], ['engine/Cargo.toml::build', 'web/package.json::dev']);
+});
+
+test('one task spelled two ways is one row, and Remove takes every spelling', async () => {
+  const folder = { ...RELEASE, name: 'Stack', type: 'folder', tasks: ['Reset DB', '.vscode/task-script-explorer.json::Reset DB', 'web/package.json::dev'] };
+  const h = harness({ folder: FOLDER, folders: [folder], scan: [RESET, WEB] });
+  const [heading] = h.buildTreeRoots([RESET, WEB]);
+  assert.equal(heading.children.length, 2);
+  const ids = heading.children.map((child) => h.treeItemFor(child).id);
+  assert.equal(new Set(ids).size, ids.length);
+  await h.removeFromFolder(heading.children[0]);
+  assert.deepEqual([...h.folderWrites.at(-1)[0][1].tasks], ['web/package.json::dev']);
+});
+
+test('a second ▶ while the first is still asking does not start the workflow twice', async () => {
+  const h = harness({
+    folder: FOLDER,
+    folders: [RELEASE],
+    scan: [RESET, WEB],
+    liveKeys: true,
+    stored: {
+      approvals: {
+        [RELEASE_SCOPE]: signed(folderApproval(RELEASE)),
+        'repo/.vscode/task-script-explorer.json::Reset DB': signed(RESET.line),
+      },
+    },
+  });
+  const [heading] = h.buildTreeRoots([RESET, WEB]);
+  const first = h.runTaskFolder(heading);
+  const second = h.runTaskFolder(heading);
+  await tick(20);
+  await second;
+  assert.equal(h.launched.length, 1);
+  h.finish(0, 0);
+  await tick();
+  h.finish(1, 0);
+  await first;
+  assert.equal(h.launched.length, 2);
+});
+
+test('a workflow changed while it runs stops before the next step', async () => {
+  const folders = [RELEASE];
+  const h = harness({
+    folder: FOLDER,
+    folders,
+    scan: [RESET, WEB],
+    liveKeys: true,
+    stored: {
+      approvals: {
+        [RELEASE_SCOPE]: signed(folderApproval(RELEASE)),
+        'repo/.vscode/task-script-explorer.json::Reset DB': signed(RESET.line),
+      },
+    },
+  });
+  const [heading] = h.buildTreeRoots([RESET, WEB]);
+  const running = h.runTaskFolder(heading);
+  await tick(20);
+  // A pull swaps the second step while the first runs.
+  folders[0] = { ...RELEASE, tasks: ['web/package.json::dev', 'engine/Cargo.toml::build'] };
+  h.finish(0, 0);
+  await running;
+  assert.equal(h.launched.length, 1);
+  assert.match(h.dialogs.at(-1).message, /stopped after step 1: it was changed or removed while it ran/);
+});
+
+
+test('a script in the root of the workspace is named without the folder the clone happens to be in', async () => {
+  const deploy = shell('/repo', 'deploy.sh');
+  const folder = { ...RELEASE, name: 'Stack', type: 'folder', tasks: [] };
+  const h = harness({ folder: FOLDER, folders: [folder], scan: [deploy] });
+  await h.dropOnFolder('::taskfolder:repo::Stack', [`repo/repo::deploy.sh`], 'x', undefined);
+  assert.deepEqual([...h.folderWrites.at(-1)[0][1].tasks], ['::deploy.sh']);
+  // And it reads back as that row, not as a missing one.
+  const [heading] = harness({ folder: FOLDER, folders: [{ ...folder, tasks: ['::deploy.sh'] }] }).buildTreeRoots([deploy]);
+  assert.equal(heading.children[0].kind, 'script');
+});
+
+test('a custom task with `::` in its name is written with its path, and read back as itself', async () => {
+  const reset = custom('db::reset', 'make reset');
+  const folder = { ...RELEASE, name: 'Stack', type: 'folder', tasks: [] };
+  const h = harness({ folder: FOLDER, folders: [folder], scan: [reset] });
+  await h.dropOnFolder('::taskfolder:repo::Stack', ['repo/.vscode/task-script-explorer.json::db::reset'], 'x', undefined);
+  const [step] = h.folderWrites.at(-1)[0][1].tasks;
+  assert.equal(step, '.vscode/task-script-explorer.json::db::reset');
+  const [heading] = harness({ folder: FOLDER, folders: [{ ...folder, tasks: [step] }] }).buildTreeRoots([reset]);
+  assert.equal(heading.children[0].kind, 'script');
 });

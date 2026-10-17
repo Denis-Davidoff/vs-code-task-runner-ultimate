@@ -115,7 +115,7 @@ function harness({ settings = {}, present = [], found = [], root, directory = {}
   vm.runInContext(
     compiled +
       `
-    exports.parsers = { WorkspaceIgnores, ignoreFilesRead: exports.ignoreFilesRead, parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parsePyproject, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, plainArgument, staleScan: exports.staleScan, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
+    exports.parsers = { WorkspaceIgnores, ignoreFilesRead: exports.ignoreFilesRead, parseCompose, parseDockerfile, yamlBlockKeys, shellDescription, manifestKind, collectShellScripts, parseMakefile, parsePyproject, parseJustfile, parseDenoJson, parsePackageJson, parseGoMod, parseTaskfile, parseTox, parseCustomTasks, editCustomTasks, readCustomTasks, parseTaskFolders, editTaskFolders, taskFolders, emptyManifestsOf: exports.emptyManifests, detectPackageManager, nodeHints, collectScripts, resetSources, settingShapedManifests, readText, plainArgument, staleScan: exports.staleScan, RUNNERS, SOURCE_GLOB: exports.SOURCE_GLOB, GO_GLOB: exports.GO_GLOB };
   `,
     context,
   );
@@ -1527,6 +1527,106 @@ test('the scan reads an AI task as a row with its task on it and no command line
   assert.equal(row.line, undefined);
   assert.equal(row.ai.access, 'edit');
   assert.equal(row.command, 'Claude Code · Edit files · Review the diff');
+});
+
+test('folders and workflows are read in file order, and what is not one is skipped', () => {
+  const { parseTaskFolders } = harness();
+  const text = JSON.stringify({
+    tasks: { build: 'make' },
+    folders: {
+      Stack: { type: 'folder', tasks: ['web/package.json::dev', 'api/package.json::dev', 'web/package.json::dev'] },
+      Release: { type: 'workflow', tasks: ['package.json::lint', 3, '', 'build'] },
+      Plain: { tasks: ['build'] },
+      Odd: { type: 'parallel', tasks: [] },
+      Broken: 'nope',
+    },
+  });
+  assert.deepEqual(plain(parseTaskFolders(text)), [
+    // A task listed twice is in the folder once.
+    ['Stack', { type: 'folder', tasks: ['web/package.json::dev', 'api/package.json::dev'] }],
+    ['Release', { type: 'workflow', tasks: ['package.json::lint', 'build'] }],
+    // No type is a folder, the kind that runs nothing in order.
+    ['Plain', { type: 'folder', tasks: ['build'] }],
+  ]);
+  assert.deepEqual(plain(parseTaskFolders('{ "tasks": {} }')), []);
+  assert.equal(parseTaskFolders('{ "folders": [] }'), undefined);
+});
+
+test('writing the folders leaves the tasks and everything else as they were', async () => {
+  const before = {
+    note: 'mine',
+    tasks: { build: 'make', review: { agent: 'claude', prompt: 'Review', extra: 1 } },
+    folders: { Stack: { type: 'folder', tasks: ['build'], color: 'red' } },
+  };
+  const h = harness({ found: { [CUSTOM]: JSON.stringify(before) } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await h.editTaskFolders(folder, (folders) => [
+    ...folders.map(([name, value]) => [name, { ...value, tasks: [...value.tasks, 'review'] }]),
+    ['Release', { type: 'workflow', tasks: ['build', 'review'] }],
+  ]);
+  const after = JSON.parse(h.written[CUSTOM]);
+  assert.deepEqual(after.tasks, before.tasks);
+  assert.equal(after.note, 'mine');
+  assert.deepEqual(after.folders, {
+    // A key the reader does not know stays on the folder it was on.
+    Stack: { type: 'folder', tasks: ['build', 'review'], color: 'red' },
+    Release: { type: 'workflow', tasks: ['build', 'review'] },
+  });
+  // And a `folders` that is not an object is refused, not replaced.
+  const broken = harness({ found: { [CUSTOM]: '{ "folders": [1] }' } });
+  await assert.rejects(broken.editTaskFolders(folder, (folders) => folders), /"folders" .* is not an object/);
+});
+
+test('writing the folders keeps what the reader skipped, and the order the file had', async () => {
+  const text =
+    '{ "folders": { "Release": { "type": "workflow", "tasks": [] }, "Deploy": { "type": "Workflow", "tasks": ["x"] }, "2024": { "tasks": [] }, "Draft": "wip" } }';
+  const h = harness({ found: { [CUSTOM]: text } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await h.editTaskFolders(folder, (folders) =>
+    folders.map(([name, value]) => [name, name === 'Release' ? { ...value, tasks: ['build'] } : value]),
+  );
+  const written = h.written[CUSTOM];
+  // A type the reader does not know and a value that is not a folder stay, and
+  // the folder named like a number keeps its place.
+  assert.deepEqual(
+    plain(h.parseTaskFolders(written)).map(([name]) => name),
+    ['Release', '2024'],
+  );
+  assert.ok(written.indexOf('"Release"') < written.indexOf('"Deploy"'));
+  assert.ok(written.indexOf('"Deploy"') < written.indexOf('"2024"'));
+  assert.match(written, /"Draft": "wip"/);
+  assert.match(written, /"type": "Workflow"/);
+});
+
+test('a folder write refuses a file whose tasks it could not read', async () => {
+  const h = harness({ found: { [CUSTOM]: '{ "tasks": ["make build"], "folders": {} }' } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await assert.rejects(
+    h.editTaskFolders(folder, (folders) => [...folders, ['New', { type: 'folder', tasks: [] }]]),
+    /"tasks" .* is not an object/,
+  );
+  assert.equal(h.written[CUSTOM], undefined);
+});
+
+test('editing the tasks keeps the folders in the order the file had', async () => {
+  const h = harness({ found: { [CUSTOM]: '{ "tasks": { "a": "1" }, "folders": { "Release": { "tasks": [] }, "2024": { "tasks": [] } } }' } });
+  const folder = { name: 'repo', uri: uri('/repo') };
+  await h.editCustomTasks(folder, (tasks) => [...tasks, ['b', '2']]);
+  const written = h.written[CUSTOM];
+  assert.ok(written.indexOf('"Release"') < written.indexOf('"2024"'));
+});
+
+test('the scan reads the folders of a file that has no task of its own', async () => {
+  const h = harness({
+    folders: ['/repo'],
+    root: '/repo',
+    found: { [CUSTOM]: JSON.stringify({ folders: { Release: { type: 'workflow', tasks: ['package.json::build'] } } }) },
+  });
+  await h.collectScripts();
+  assert.deepEqual(
+    plain(h.taskFolders().map((folder) => [folder.name, folder.type, folder.tasks, folder.workspace.name])),
+    [['Release', 'workflow', ['package.json::build'], 'repo']],
+  );
 });
 
 test('a `tasks` that is not an object is refused, not replaced', async () => {
