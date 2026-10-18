@@ -61,6 +61,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
   // What the custom task prompts are answered with, in order, and what each
   // write of the custom tasks file would have put on disk.
   const answers = [...inputs];
+  const inputPrompts = [];
   const customWrites = [];
   // Every warning dialog, with the options and buttons it was opened with.
   const dialogs = [];
@@ -119,7 +120,7 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
         Promise.resolve(answer)
       ),
       showErrorMessage: (message) => (warnings.push(message), Promise.resolve(undefined)),
-      showInputBox: () => Promise.resolve(answers.shift()),
+      showInputBox: (options) => (inputPrompts.push(options), Promise.resolve(answers.shift())),
       showInformationMessage: () => Promise.resolve(undefined),
       showQuickPick: (items, options) => {
         quickPicks.push({ items, options });
@@ -367,11 +368,11 @@ function harness({ settings = {}, stored = {}, executions = [], scan = [], shell
     // The real one waits fifteen seconds on a task that will not die. The
     // harness gives that answer straight away, either way round.
     stopExecution = async (execution) => (stopped.push(execution), ${stops});
-    exports.tree = { runTaskFolder, stopTaskFolder, dropOnFolder, removeFromFolder, workflowRuns, loadApprovalKey, setApprovalKey: (value) => { approvalKey = value; }, startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, copyCommandOf, activateNode, setFavorite, dragAndDropController, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
+    exports.tree = { createDefaultTask, runTaskFolder, stopTaskFolder, dropOnFolder, removeFromFolder, workflowRuns, loadApprovalKey, setApprovalKey: (value) => { approvalKey = value; }, startScript, restartNode, clearance, approveLaunch, createCustomTask, editCustomTask, deleteCustomTask, renameCustomTask, editTitle, buildTreeRoots, buildItems, groupedByEcosystem, orderedByHost, dropGroups, savedOrder, hiddenRefs, treeItemFor, iconFor, addToTerminal, copyCommandOf, activateNode, setFavorite, dragAndDropController, runGroup, stopStack, composeActions, buildImage, dockerfileActions, stopGroup, restartGroup, setGrouping, running, containers, checkContainers, recheckAfter, keyForTask, buildTask, stopContainers, pruneStaleRefs, fileBehind, copyPathOf, revealFile, scriptItem, pickColor, pickIcon, PALETTE, SCAN_SETTINGS, manifestRef, starDropped, saveOrder, migrateShellBuckets, migrateSubfolderRefs, foldedRefs };
   `,
     Object.assign(context, { memento, extUri: uri('/ext'), stopped, signingKey: KEY }),
   );
-  return { ...context.exports.tree, finish, folderWrites, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked, customWrites, answers, dialogs, stopped, staleScans };
+  return { ...context.exports.tree, finish, folderWrites, memento, settings, probes, launched, terminals, writes, warnings, hints, quickPicks, copied, invoked, customWrites, answers, inputPrompts, dialogs, stopped, staleScans };
 }
 
 /** What the stubbed `ecosystemOf` answers — the same map the real one holds. */
@@ -2981,9 +2982,9 @@ test('the custom tasks head the list in flat mode, under a heading of their own'
   ]);
   const item = h.treeItemFor(roots[0]);
   // No `.vscode` after the bullet: the path is the same for every folder's list.
-  assert.equal(item.label, 'Custom Tasks');
+  assert.equal(item.label, 'Shell scripts');
   assert.equal(item.contextValue, 'custom');
-  assert.equal(item.iconPath.id, 'zap');
+  assert.equal(item.iconPath.id, 'terminal');
 });
 
 test('in ecosystem mode the custom tasks stand at the root, not under a parent of their own', () => {
@@ -2998,6 +2999,40 @@ test('in ecosystem mode the custom tasks stand at the root, not under a parent o
     'group:file:///repo/.vscode/task-script-explorer.json',
     'group:file:///repo/web/package.json',
   ]);
+});
+
+test('shell and AI tasks have separate headings in both grouping modes', () => {
+  const ai = { ...custom('Review', ''), ai: aiTask.parseAiTask({ agent: 'claude', prompt: 'Review', access: 'read' }) };
+  for (const grouping of ['flat', 'ecosystem']) {
+    const h = harness({ folder: FOLDER, settings: { grouping } });
+    const roots = h.buildTreeRoots([ai, RESET, LOGS, WEB]);
+    const [shell, agents] = roots;
+    assert.equal(h.treeItemFor(shell).label, 'Shell scripts');
+    assert.equal(h.treeItemFor(agents).label, 'AI tasks');
+    assert.equal(h.treeItemFor(agents).iconPath.id, 'sparkle');
+    assert.deepEqual(Array.from(shell.children, row => row.script.name), ['Reset DB', 'Tail logs']);
+    assert.deepEqual(Array.from(agents.children, row => row.script.name), ['Review']);
+    assert.notEqual(shell.id, agents.id);
+    assert.notEqual(shell.ref, agents.ref);
+    // Row identities and their approvals/favorites survive the split.
+    assert.equal(h.treeItemFor(agents.children[0]).id, h.treeItemFor({ kind: 'script', script: ai }).id);
+  }
+});
+
+test('both default headings are available in a workspace with no tasks', () => {
+  const h = harness({ folder: FOLDER });
+  const roots = h.buildTreeRoots([]);
+  assert.deepEqual(Array.from(roots, row => row.label), ['Shell scripts', 'AI tasks']);
+  assert.ok(roots.every(row => row.children.length === 0 && h.treeItemFor(row).contextValue === 'custom'));
+});
+
+test('the + on each default heading opens the matching creation form', async () => {
+  for (const [index, title] of [[0, 'New Custom Task (1/2)'], [1, 'New AI Task']]) {
+    const h = harness({ folder: FOLDER });
+    await h.createDefaultTask(h.buildTreeRoots([])[index]);
+    assert.equal(h.inputPrompts[0].title, title);
+    assert.equal(h.customWrites.length, 0);
+  }
 });
 
 test('the saved order puts the custom tasks first whatever the heading order says', async () => {
@@ -3037,9 +3072,9 @@ test('a custom task row says what it is, and takes the + only on its heading', (
   assert.equal(offered('addToTerminal', row), true);
   // The + is on the heading in every state, and on no other heading.
   for (const value of ['custom', 'custom:running', 'custom:hidden', 'custom:carried:running']) {
-    assert.equal(offered('createCustomTask', value, 'inline'), true, value);
+    assert.equal(offered('createDefaultTask', value, 'inline'), true, value);
   }
-  assert.equal(offered('createCustomTask', 'group:package', 'inline'), false);
+  assert.equal(offered('createDefaultTask', 'group:package', 'inline'), false);
   // The heading keeps what every file heading has: open it, hide it, stop what runs.
   assert.equal(offered('openManifest', 'custom'), true);
   assert.equal(offered('hideGroup', 'custom'), true);
@@ -3868,4 +3903,215 @@ test('a custom task with `::` in its name is written with its path, and read bac
   assert.equal(step, '.vscode/task-script-explorer.json::db::reset');
   const [heading] = harness({ folder: FOLDER, folders: [{ ...folder, tasks: [step] }] }).buildTreeRoots([reset]);
   assert.equal(heading.children[0].kind, 'script');
+});
+
+// Root folders share one drag order, including headings without a manifest.
+function rootTransfer() {
+  const data = new Map();
+  return { set: (mime, item) => data.set(mime, item), get: (mime) => data.get(mime) };
+}
+
+test('all root folders can be reordered and restored in either grouping mode', async () => {
+  for (const grouping of ['flat', 'ecosystem']) {
+    const scan = [RESET, WEB, API, ENGINE];
+    const options = { folder: FOLDER, folders: [RELEASE], scan, settings: { grouping } };
+    const h = harness(options);
+    const before = h.buildTreeRoots(await h.savedOrder());
+    const shell = before.find(node => node.customType === 'shell');
+    const last = before.at(-1);
+    const transfer = rootTransfer();
+    h.dragAndDropController.handleDrag([shell], transfer);
+    await h.dragAndDropController.handleDrop(last, transfer);
+    const expected = [...before.filter(node => node !== shell).map(node => node.id), shell.id];
+    assert.deepEqual(ids(h.buildTreeRoots(await h.savedOrder())), expected);
+    // A workflow has no manifest ref, but moves among the same root folders.
+    const roots = h.buildTreeRoots(await h.savedOrder());
+    h.dragAndDropController.handleDrag([roots[0]], transfer);
+    await h.dragAndDropController.handleDrop(undefined, transfer);
+    const reordered = [...expected.slice(1), expected[0]];
+    assert.deepEqual(ids(h.buildTreeRoots(await h.savedOrder())), reordered);
+    const reopened = harness({ ...options, stored: h.memento.data });
+    assert.deepEqual(ids(reopened.buildTreeRoots(await reopened.savedOrder())), reordered);
+    const workflow = reopened.buildTreeRoots(scan).find(node => node.taskFolder);
+    assert.deepEqual(Array.from(workflow.children, node => node.script.name), ['dev', 'Reset DB']);
+  }
+});
+
+test('root orders are independent between flat and ecosystem views', async () => {
+  const scan = [RESET, WEB, API, ENGINE];
+  const h = harness({ folder: FOLDER, scan, settings: { grouping: 'flat' } });
+  const initial = h.buildTreeRoots(scan);
+  const transfer = rootTransfer();
+  h.dragAndDropController.handleDrag([initial[0]], transfer);
+  await h.dragAndDropController.handleDrop(initial.at(-1), transfer);
+  const flat = ids(h.buildTreeRoots(scan));
+  h.settings.grouping = 'ecosystem';
+  const eco = h.buildTreeRoots(scan);
+  assert.equal(eco[0].label, 'Shell scripts');
+  h.dragAndDropController.handleDrag([eco[1]], transfer);
+  await h.dragAndDropController.handleDrop(eco.at(-1), transfer);
+  assert.equal(h.buildTreeRoots(scan).at(-1).label, 'AI tasks');
+  h.settings.grouping = 'flat';
+  assert.deepEqual(ids(h.buildTreeRoots(scan)), flat);
+});
+
+test('an ecosystem root can move across custom folders while nested packages stay in their ecosystem', async () => {
+  const scan = [RESET, WEB, API, ENGINE];
+  const h = harness({ folder: FOLDER, scan, settings: { grouping: 'ecosystem' } });
+  const roots = h.buildTreeRoots(scan);
+  const node = roots.find(row => row.id === 'group:eco:node');
+  assert.ok(node.root);
+  assert.ok(node.children.every(row => !row.root));
+  const transfer = rootTransfer();
+  h.dragAndDropController.handleDrag([node], transfer);
+  await h.dragAndDropController.handleDrop(roots[0], transfer);
+  assert.equal(h.buildTreeRoots(scan)[0].id, node.id);
+  assert.deepEqual(ids(h.buildTreeRoots(scan)[0].children), ids(node.children));
+  // Dropping a root inside another folder must not reparent it.
+  h.dragAndDropController.handleDrag([h.buildTreeRoots(scan)[0]], transfer);
+  await h.dragAndDropController.handleDrop(node.children[0], transfer);
+  assert.match(h.hints.at(-1), /top-level folder/);
+  assert.equal(h.buildTreeRoots(scan)[0].id, node.id);
+});
+
+test('a root multi-selection moves together without carrying selected nested rows', async () => {
+  const scan = [RESET, WEB, API, ENGINE];
+  const h = harness({ folder: FOLDER, scan, settings: { grouping: 'ecosystem' } });
+  const roots = h.buildTreeRoots(scan);
+  const transfer = rootTransfer();
+  h.dragAndDropController.handleDrag([roots[0], roots[2].children[0], roots[1]], transfer);
+  await h.dragAndDropController.handleDrop(roots.at(-1), transfer);
+  assert.deepEqual(ids(h.buildTreeRoots(scan)), [...ids(roots.slice(2)), ...ids(roots.slice(0, 2))]);
+  const ordered = ids(h.buildTreeRoots(scan));
+  const moved = h.buildTreeRoots(scan).at(-1);
+  h.dragAndDropController.handleDrag([moved], transfer);
+  await h.dragAndDropController.handleDrop(moved, transfer);
+  assert.deepEqual(ids(h.buildTreeRoots(scan)), ordered);
+});
+
+test('hidden stays last while other root folders move in either grouping mode', async () => {
+  for (const grouping of ['flat', 'ecosystem']) {
+    const scan = [WEB, API, ENGINE];
+    const stored = {
+      favorites: ['file:///repo/api/package.json::start'],
+      hidden: ['file:///repo/web/package.json'],
+      order: { [`::roots:${grouping}`]: ['group:hidden', 'file:///repo/engine/Cargo.toml'] },
+    };
+    const h = harness({ scan, settings: { grouping }, stored });
+    const roots = h.buildTreeRoots(scan);
+    const hidden = roots.find(node => node.hidden);
+    assert.equal(roots.at(-1).id, hidden.id);
+    assert.ok(!hidden.root);
+    const transfer = rootTransfer();
+    h.dragAndDropController.handleDrag([hidden], transfer);
+    assert.equal(transfer.get('application/vnd.code.tree.taskrunnerultimate.tree'), undefined);
+    const movable = roots.find(node => node.root);
+    h.dragAndDropController.handleDrag([movable], transfer);
+    await h.dragAndDropController.handleDrop(undefined, transfer);
+    const after = h.buildTreeRoots(scan);
+    assert.equal(after.at(-1).id, hidden.id);
+    assert.equal(after.at(-2).id, movable.id);
+    assert.deepEqual(ids(after.at(-1).children), ids(hidden.children));
+    assert.deepEqual([...h.memento.data.hidden], ['file:///repo/web/package.json']);
+    // Dropping onto hidden hides eligible packages and never moves the pile.
+    h.dragAndDropController.handleDrag([after.find(node => node.root)], transfer);
+    await h.dragAndDropController.handleDrop(hidden, transfer);
+    assert.equal(h.buildTreeRoots(scan).at(-1).id, hidden.id);
+  }
+});
+
+test('dropping a root package or ecosystem onto hidden hides it and keeps the pile last', async () => {
+  for (const grouping of ['flat', 'ecosystem']) {
+    for (const destination of ['pile', 'heading', 'task']) {
+    const scan = [WEB, API, ENGINE];
+    const h = harness({ scan, settings: { grouping }, stored: { hidden: ['file:///repo/engine/Cargo.toml'] } });
+    const roots = h.buildTreeRoots(scan);
+    const source = grouping === 'flat'
+      ? roots.find(node => node.ref === 'file:///repo/web/package.json')
+      : roots.find(node => node.id === 'group:eco:node');
+    const transfer = rootTransfer();
+    h.dragAndDropController.handleDrag([source], transfer);
+    const pile = roots.find(node => node.id === 'group:hidden');
+    const target = destination === 'pile' ? pile
+      : destination === 'heading' ? pile.children[0] : pile.children[0].children[0];
+    await h.dragAndDropController.handleDrop(target, transfer);
+    assert.ok(h.memento.data.hidden.includes('file:///repo/web/package.json'));
+    if (grouping === 'ecosystem') {
+      assert.ok(h.memento.data.hidden.includes('file:///repo/api/package.json'));
+    }
+    const after = h.buildTreeRoots(await h.savedOrder());
+    assert.equal(after.at(-1).id, 'group:hidden');
+    assert.ok(after.at(-1).children.some(node => node.ref === 'file:///repo/web/package.json'));
+    assert.ok(!after.some(node => node.id === source.id));
+  }
+    }
+});
+
+test('dragging a hidden package back places it at the drop target despite its old root rank', async () => {
+  for (const targetTask of [false, true]) {
+  const scan = [WEB, API, ENGINE];
+  const h = harness({
+    scan,
+    settings: { grouping: 'flat' },
+    stored: {
+      hidden: ['file:///repo/engine/Cargo.toml'],
+      order: { '::roots:flat': [
+        'file:///repo/engine/Cargo.toml', 'file:///repo/web/package.json', 'file:///repo/api/package.json',
+      ] },
+    },
+  });
+  const roots = h.buildTreeRoots(scan);
+  const source = roots.find(node => node.id === 'group:hidden').children[0];
+  const target = roots.find(node => node.ref === 'file:///repo/api/package.json');
+  const transfer = rootTransfer();
+  h.dragAndDropController.handleDrag([source], transfer);
+  await h.dragAndDropController.handleDrop(targetTask ? target.children[0] : target, transfer);
+  const expected = [
+    'file:///repo/web/package.json', 'file:///repo/engine/Cargo.toml', 'file:///repo/api/package.json',
+  ];
+  assert.deepEqual(Array.from(h.buildTreeRoots(await h.savedOrder()), node => node.ref), expected);
+  assert.equal(h.memento.data.hidden.length, 0);
+  const reopened = harness({ scan, settings: { grouping: 'flat' }, stored: h.memento.data });
+  assert.deepEqual(Array.from(reopened.buildTreeRoots(await reopened.savedOrder()), node => node.ref), expected);
+  }
+});
+
+test('the shell context command on an AI heading still creates a shell script', async () => {
+  const h = harness({ folder: FOLDER, inputs: ['Build', 'make build'] });
+  const ai = h.buildTreeRoots([]).find(node => node.customType === 'ai');
+  await h.createCustomTask(ai);
+  assert.equal(h.inputPrompts[0].title, 'New Custom Task (1/2)');
+  assert.deepEqual(h.customWrites.map(tasks => Array.from(tasks, entry => Array.from(entry))), [[['Build', 'make build']]]);
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const menu = manifest.contributes.menus['view/item/context'];
+  assert.ok(menu.some(entry => entry.command === 'taskRunnerUltimate.createDefaultTask' && entry.group.startsWith('inline')));
+  assert.ok(menu.some(entry => entry.command === 'taskRunnerUltimate.createCustomTask' && entry.group.startsWith('0_actions')));
+  assert.ok(!menu.some(entry => entry.command === 'taskRunnerUltimate.createCustomTask' && entry.group.startsWith('inline')));
+});
+
+test('root drops on carried hidden contents hide the source but starred and folder copies do not', async () => {
+  const pkg = script('/repo/package.json', 'build', 'npm');
+  const stack = composeFile();
+  const scan = [pkg, ...stack, API];
+  for (const destination of ['carried', 'carriedTask', 'starred', 'folderCopy']) {
+    const h = harness({
+      scan,
+      settings: { grouping: 'flat' },
+      stored: { hidden: ['file:///repo/package.json'], favorites: ['file:///repo/package.json::build'] },
+    });
+    const roots = h.buildTreeRoots(scan);
+    const source = roots.find(node => node.ref === 'file:///repo/api/package.json');
+    const pile = roots.find(node => node.id === 'group:hidden');
+    const carried = pile.children[0].children.find(node => node.kind === 'group');
+    assert.ok(carried.carried);
+    const target = destination === 'carried' ? carried
+      : destination === 'carriedTask' ? carried.children[0]
+      : destination === 'starred' ? roots.find(node => node.kind === 'script' && node.inFavorites)
+      : { kind: 'script', script: pkg, inFolder: '::taskfolder:repo::example' };
+    const transfer = rootTransfer();
+    h.dragAndDropController.handleDrag([source], transfer);
+    await h.dragAndDropController.handleDrop(target, transfer);
+    assert.equal(h.memento.data.hidden.includes('file:///repo/api/package.json'), destination.startsWith('carried'));
+    assert.equal(h.buildTreeRoots(scan).at(-1).id, 'group:hidden');
+  }
 });

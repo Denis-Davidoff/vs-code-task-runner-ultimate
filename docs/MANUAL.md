@@ -465,13 +465,13 @@ This is the one source that ships enabled *and* changes an existing tree on upgr
 
 Some commands belong to no manifest: the `docker compose down -v && docker compose up -d db` you type
 every other morning, or a `tail -f logs/*.log | grep ERROR`. A **custom task** is a name and a shell
-command, nothing more, and every one of them sits under a single **Custom Tasks** heading near the
+command, nothing more, and every one of them sits under the **Shell scripts** heading near the
 top of the tree — above every package, below only your [folders and workflows](#folders-and-workflows)
 — in both [grouping modes](#grouping-by-ecosystem).
 
-The first one is made from the **+** at the head of the panel — **Shell Task** in the menu it drops
+The first one is made from the **+** at the head of the panel — **Shell script** in the menu it drops
 down — or from [the menu](#the-menu): ⋮ → **Create custom task**. Either asks for a name and then for
-the command. Once the heading exists it carries a **+** of its own, and its right-click
+the command. The heading is available even when empty and carries a **+** of its own; its right-click
 menu has **New Custom Task…** as well; the command palette has it under the same name. With more than
 one workspace folder open you are asked which folder the task belongs to, and each folder gets its
 own heading, with the folder's name after the bullet.
@@ -587,12 +587,12 @@ An **AI task** is a prompt handed to a coding agent — **Claude Code**, **Codex
 Copilot** — run headless in the workspace folder, with what the agent may do fixed by the task. Or
 handed to a model behind an **OpenAI-compatible API** — OpenAI, OpenRouter, a local Ollama or LM
 Studio — or to **any other command line** you name. *Review the uncommitted changes
-and list anything that looks like a bug*, kept as a row and run with a click. It sits under **Custom
-Tasks** beside the command lines, with a sparkle for an icon, and is a row like any other: star it,
+and list anything that looks like a bug*, kept as a row and run with a click. It sits under **AI tasks**,
+separate from **Shell scripts**, with a sparkle for an icon, and is a row like any other: star it,
 paint it, rename it, drag it, stop it with ■.
 
-It is made from the **+** at the head of the panel → **AI Task**, ⋮ → **Create AI task**, the
-**Custom Tasks** heading's right-click menu, or **New AI Task…** in the command palette, which asks in
+It is made from the **+** at the head of the panel → **AI task**, ⋮ → **Create AI task**, the
+**AI tasks** heading's **+** or right-click menu, or **New AI Task…** in the command palette, which asks in
 turn for:
 
 | Step | Choices |
@@ -1026,11 +1026,12 @@ reload, paint it, give it an icon, and stop or restart everything running anywhe
 ecosystem is what `taskRunnerUltimate.sources` does properly.
 
 Dragging still works, with one boundary: a package moves inside its own ecosystem, and an ecosystem
-row drags its whole block above or below another. A package dropped on a foreign ecosystem is
+row moves among all other root folders, including **Shell scripts**, **AI tasks** and workflows. A package dropped on a foreign ecosystem is
 refused with a note in the status bar rather than snapping back — the tree cannot grey out a
 forbidden target while the mouse is over it, so it says so instead.
 
-The dropdown follows: the same order, with the ecosystem naming the first separator of each run.
+The dropdown keeps the package order within each ecosystem, with the ecosystem naming the first
+separator of each run. The tree's root folder order is saved separately for each grouping mode.
 
 #### Clicking a row versus pressing Run
 
@@ -1120,8 +1121,8 @@ on all of them unless you [paint one](#painting-a-row), which is what keeps the 
 with the rows under it. `taskRunnerUltimate.groupIcons: "uniform"` puts a single stack (≣) back on
 every heading.
 
-The view header holds six actions. First is **new task** (+), a dropdown with **AI Task** and
-**Shell Task** — the two kinds of [custom task](#custom-tasks), each going on to its own questions —
+The view header holds six actions. First is **new task** (+), a dropdown with **AI task** and
+**Shell script** — the two kinds of [custom task](#custom-tasks), each going on to its own questions —
 and below them **Folder** and **Workflow**, the two kinds of [list](#folders-and-workflows).
 **Restart all** (⟳) and **stop all** (◼) appear only while something is running, so the header stays
 quiet on an idle workspace; **open the dropdown** (▶), the **grouping switch** and the **menu** (⋮)
@@ -1160,8 +1161,8 @@ The ⋮ in the view header opens everything that is not aimed at one row:
 
 | Entry | What it does |
 | --- | --- |
-| **Create custom task** | Asks for a name and a shell command and adds it to [Custom Tasks](#custom-tasks) at the top of the tree. First in the menu, because until that heading exists — with a **+** of its own — this is where the first one is made. |
-| **Create AI task** | Asks for a name, what runs it — an agent, an API or a command — a prompt, the access and what happens to the answer, and adds it to [Custom Tasks](#ai-tasks). |
+| **Create custom task** | Asks for a name and a shell command and adds it to [Shell scripts](#custom-tasks) at the top of the tree. The heading also has a **+** of its own. |
+| **Create AI task** | Asks for a name, what runs it — an agent, an API or a command — a prompt, the access and what happens to the answer, and adds it to [AI tasks](#ai-tasks). |
 | **AI providers** | The [OpenAI-compatible APIs](#api-providers) API tasks run on: set one up, change its key, or remove it. |
 | **Refresh scripts** | Reads every manifest again. Rarely needed — the manifests are watched — but there when a scan has gone stale. |
 | **Settings** | Opens the settings editor filtered to this extension, so all of [the settings](#settings) are in one list. |
@@ -1287,6 +1288,14 @@ dropped the next time the workspace is scanned, rather than asking with no switc
 [The menu](#the-menu) clears the lot with **Reset all confirmations**.
 
 ### Reordering rows
+
+Every top-level folder can be dragged into a different position in both **Flat view** and
+**By ecosystem**: packages, **Shell scripts**, **AI tasks**, user folders, workflows and the
+**Favorites** heading. **hidden** stays fixed at the bottom. Drop on another root folder to move above or below it,
+or in the empty space below the tree to move to the end. Contents stay in their folders.
+The order survives reloads and is saved independently for the two grouping modes.
+Dropping a package or ecosystem onto **hidden** hides its packages; dragging a hidden package
+back onto a visible package restores it at that position. **hidden** itself remains last.
 
 Drag a row in the tree to put it where you want it. A manifest lists its tasks in whatever order they
 were written in, which is rarely the order you use them in — so `dev` can sit at the top of its
@@ -1561,8 +1570,8 @@ An [ecosystem row](#grouping-by-ecosystem) has no manifest at all, so its fold, 
 icon are filed under a constant of ours — `group:eco:rust` — exactly as **OTHER TASKS**, the
 **Favorites** folder and the hidden pile are. Nothing about it can go stale, and the prune above never looks at it: it names no
 task, so there is no task whose disappearance could take it away. The ecosystems themselves are
-ordered by where their first package sits in the one saved order the headings already have, so
-dragging a whole ecosystem and dragging one package inside it write the same store.
+ordered with the other root folders in a saved order for each grouping mode. Moving a root
+folder changes this order; moving a nested package changes the order inside its ecosystem.
 
 ## In the dropdown
 

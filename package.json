@@ -1,8 +1,8 @@
 {
   "name": "task-runner-ultimate",
   "displayName": "AI Task & Script Explorer🏆",
-  "description": "AI task runner + script runner for all your monorepo's scripts, in a single list.: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
-  "version": "0.9.10",
+  "description": "AI task + script runner for all your monorepo's scripts, in a single list: package.json, Cargo.toml, pyproject.toml, Makefile, justfile, Taskfile and more. Batch & single run, stop and restart from anywhere, with a live count of what's running.",
+  "version": "0.9.11",
   "publisher": "DenysDavydov",
   "private": true,
   "license": "MIT",
@@ -123,10 +123,7 @@
         "command": "taskRunnerUltimate.show",
         "title": "Show Scripts",
         "category": "AI Task & Script Explorer",
-        "icon": {
-          "light": "media/scripts-light.svg",
-          "dark": "media/scripts-dark.svg"
-        }
+        "icon": "$(search)"
       },
       {
         "command": "taskRunnerUltimate.restartActive",
@@ -206,6 +203,12 @@
         "icon": "$(edit)"
       },
       {
+        "command": "taskRunnerUltimate.createDefaultTask",
+        "title": "New Task…",
+        "category": "AI Task & Script Explorer",
+        "icon": "$(add)"
+      },
+      {
         "command": "taskRunnerUltimate.createCustomTask",
         "title": "New Custom Task…",
         "category": "AI Task & Script Explorer",
@@ -237,13 +240,13 @@
       },
       {
         "command": "taskRunnerUltimate.newAiTask",
-        "title": "AI Task",
+        "title": "AI task",
         "category": "AI Task & Script Explorer",
         "icon": "$(sparkle)"
       },
       {
         "command": "taskRunnerUltimate.newShellTask",
-        "title": "Shell Task",
+        "title": "Shell script",
         "category": "AI Task & Script Explorer",
         "icon": "$(terminal)"
       },
@@ -758,7 +761,7 @@
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^dockerfile(:(fav|pin))?(:carried)?(:running)?$/"
         },
         {
-          "command": "taskRunnerUltimate.createCustomTask",
+          "command": "taskRunnerUltimate.createDefaultTask",
           "group": "inline@5",
           "when": "view =~ /^taskRunnerUltimate\\.(tree|explorer)$/ && viewItem =~ /^custom(:(hidden|carried))?(:running)?$/"
         },
@@ -1068,6 +1071,10 @@
         },
         {
           "command": "taskRunnerUltimate.deleteCustomTask",
+          "when": "false"
+        },
+        {
+          "command": "taskRunnerUltimate.createDefaultTask",
           "when": "false"
         },
         {

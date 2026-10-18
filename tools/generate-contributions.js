@@ -318,7 +318,7 @@ manifest.contributes.colors = [
 ];
 
 manifest.contributes.commands = [
-  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'AI Task & Script Explorer', icon: icon('') },
+  { command: 'taskRunnerUltimate.show', title: 'Show Scripts', category: 'AI Task & Script Explorer', icon: '$(search)' },
   { command: 'taskRunnerUltimate.restartActive', title: 'Restart Focused Script', category: 'AI Task & Script Explorer', icon: '$(debug-restart)' },
   { command: 'taskRunnerUltimate.refresh', title: 'Refresh Scripts', category: 'AI Task & Script Explorer', icon: '$(refresh)' },
   { command: 'taskRunnerUltimate.runItem', title: 'Run', category: 'AI Task & Script Explorer', icon: '$(play)' },
@@ -346,6 +346,7 @@ manifest.contributes.commands = [
   // The custom tasks, which the tree writes rather than reads. Creating one needs
   // no row — it is the + on the Custom Tasks heading, the first entry of the ⋯
   // menu, and a palette command — so it is the one of the three the palette keeps.
+  { command: 'taskRunnerUltimate.createDefaultTask', title: 'New Task…', category: 'AI Task & Script Explorer', icon: '$(add)' },
   { command: 'taskRunnerUltimate.createCustomTask', title: 'New Custom Task…', category: 'AI Task & Script Explorer', icon: '$(add)' },
   { command: 'taskRunnerUltimate.editCustomTask', title: 'Edit Command…', category: 'AI Task & Script Explorer', icon: '$(edit)' },
   { command: 'taskRunnerUltimate.deleteCustomTask', title: 'Delete Custom Task', category: 'AI Task & Script Explorer', icon: '$(trash)' },
@@ -359,8 +360,8 @@ manifest.contributes.commands = [
   // The two entries of the panel header's + menu, named for what they make
   // rather than as commands: in a menu titled New Task, "AI Task" is the whole
   // sentence. The palette has New AI Task… and New Custom Task… for the same.
-  { command: 'taskRunnerUltimate.newAiTask', title: 'AI Task', category: 'AI Task & Script Explorer', icon: '$(sparkle)' },
-  { command: 'taskRunnerUltimate.newShellTask', title: 'Shell Task', category: 'AI Task & Script Explorer', icon: '$(terminal)' },
+  { command: 'taskRunnerUltimate.newAiTask', title: 'AI task', category: 'AI Task & Script Explorer', icon: '$(sparkle)' },
+  { command: 'taskRunnerUltimate.newShellTask', title: 'Shell script', category: 'AI Task & Script Explorer', icon: '$(terminal)' },
   { command: 'taskRunnerUltimate.newFolder', title: 'Folder', category: 'AI Task & Script Explorer', icon: '$(folder-library)' },
   { command: 'taskRunnerUltimate.newWorkflow', title: 'Workflow', category: 'AI Task & Script Explorer', icon: '$(list-ordered)' },
   // A folder's and a workflow's own: ▶ and ■ on the heading, what is in it, and
@@ -728,7 +729,7 @@ manifest.contributes.menus = {
     // + on the Custom Tasks heading, in the last slot: inline actions are drawn
     // right-aligned, so it holds the row's right edge and the ↻ and ■ a running
     // task puts on the heading appear beside it rather than pushing it along.
-    { command: 'taskRunnerUltimate.createCustomTask', group: 'inline@5', when: `${inTree} && viewItem =~ ${CUSTOM_HEADING}` },
+    { command: 'taskRunnerUltimate.createDefaultTask', group: 'inline@5', when: `${inTree} && viewItem =~ ${CUSTOM_HEADING}` },
     { command: 'taskRunnerUltimate.stopTaskFolder', group: 'inline@4', when: `${inTree} && viewItem =~ ${TASK_FOLDER_RUNNING}` },
     { command: 'taskRunnerUltimate.runTaskFolder', group: 'inline@5', when: `${inTree} && viewItem =~ ${TASK_FOLDER_RUNNABLE}` },
     { command: 'taskRunnerUltimate.runTaskFolder', group: '0_actions@1', when: `${inTree} && viewItem =~ ${TASK_FOLDER_RUNNABLE}` },
@@ -892,6 +893,7 @@ manifest.contributes.menus = {
     { command: 'taskRunnerUltimate.editTitle', when: 'false' },
     { command: 'taskRunnerUltimate.editCustomTask', when: 'false' },
     { command: 'taskRunnerUltimate.deleteCustomTask', when: 'false' },
+    { command: 'taskRunnerUltimate.createDefaultTask', when: 'false' },
     { command: 'taskRunnerUltimate.newAiTask', when: 'false' },
     { command: 'taskRunnerUltimate.newShellTask', when: 'false' },
     { command: 'taskRunnerUltimate.newFolder', when: 'false' },

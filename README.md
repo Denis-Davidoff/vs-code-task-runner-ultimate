@@ -73,8 +73,8 @@ restart without ever going looking for a terminal tab.**
   terminal unrun, for when a script takes arguments, and **Copy Command** — on every script row that
   runs a command line, not only these, and on compose files and Dockerfiles — puts it on the clipboard.
 - ✍️ **[Custom tasks](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#custom-tasks)** — a name and a shell command of your own,
-  `docker compose down -v && docker compose up -d db` included, under one **Custom Tasks** heading at
-  the top of the tree. ⋮ → **Create custom task** makes the first, the heading's **+** the rest. Kept in
+  `docker compose down -v && docker compose up -d db` included, under **Shell scripts** at
+  the top of the tree, with AI tasks in a separate **AI tasks** folder. ⋮ → **Create custom task** makes the first, the heading's **+** the rest. Kept in
   `.vscode/task-script-explorer.json`: commit it for the team, or keep it to yourself.
 - 🧠 **[Knows how to run things](https://github.com/Denis-Davidoff/vs-code-task-runner-ultimate/blob/main/docs/MANUAL.md#runner-detection)** — npm, yarn, pnpm, bun or deno detected per
   package from `packageManager`, the lock files and `engines`; everything else named by the table it

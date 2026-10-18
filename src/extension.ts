@@ -55,7 +55,6 @@ import {
   enabledEcosystems,
   collectScripts,
   commandFor,
-  CUSTOM_GROUP_NAME,
   CUSTOM_TASKS_FILE,
   customTasksFile,
   CustomTaskValue,
@@ -536,6 +535,9 @@ export function activate(context: vscode.ExtensionContext): void {
     // or the + on the heading, which hands its own folder over.
     vscode.commands.registerCommand('taskRunnerUltimate.createCustomTask', (node?: TreeNode) =>
       createCustomTask(node),
+    ),
+    vscode.commands.registerCommand('taskRunnerUltimate.createDefaultTask', (node?: TreeNode) =>
+      createDefaultTask(node),
     ),
     vscode.commands.registerCommand('taskRunnerUltimate.editCustomTask', (node?: TreeNode) =>
       editCustomTask(node),
@@ -1812,7 +1814,16 @@ function customRef(folder: vscode.WorkspaceFolder, name: string): string {
   return `${manifestRef(customTasksFile(folder))}::${name}`;
 }
 
-/** A name and a command line, asked one after the other, filed in the folder's custom tasks. */
+/** The heading's + creates the type of task shown inside that heading. */
+async function createDefaultTask(node: TreeNode | undefined): Promise<void> {
+  if (node?.kind === 'group' && node.customType === 'ai') {
+    await createAiTask(node);
+    return;
+  }
+  await createCustomTask(node);
+}
+
+/** A name and a shell command, independent of the heading the context menu belongs to. */
 async function createCustomTask(node: TreeNode | undefined): Promise<void> {
   const folder = await customFolder(node);
   if (!folder) {
@@ -4804,6 +4815,79 @@ function orderedScripts(scripts: ScriptEntry[]): ScriptEntry[] {
 /** The headings themselves as a drag scope — a drag that moves whole groups. */
 const GROUPS_SCOPE = '::groups';
 
+/** Root folders have an independent order in each grouping mode. */
+function rootOrderScope(): string {
+  return `::roots:${hierarchical() ? 'ecosystem' : 'flat'}`;
+}
+
+function rootFolderRef(node: TreeNode & { kind: 'group' }): string {
+  return node.ref ?? node.id;
+}
+
+function orderedRootFolders(roots: TreeNode[]): TreeNode[] {
+  const rank = new Map((manualOrders()[rootOrderScope()] ?? []).map((ref, index) => [ref, index]));
+  let anchor = -1;
+  const folders = roots.flatMap((node, position) => {
+    if (node.kind !== 'group' || node.inFavorites || node.id === HIDDEN_GROUP_ID) {
+      return [];
+    }
+    const known = rank.get(rootFolderRef(node));
+    if (known !== undefined) {
+      anchor = known;
+    }
+    return [{ node: { ...node, root: true }, position, rank: known ?? anchor, unknown: known === undefined ? 1 : 0 }];
+  });
+  folders.sort((a, b) => a.rank - b.rank || a.unknown - b.unknown || a.position - b.position);
+  let next = 0;
+  return roots.map((node) =>
+    node.kind === 'group' && !node.inFavorites && node.id !== HIDDEN_GROUP_ID ? folders[next++].node : node,
+  );
+}
+
+async function dropRootFolders(dragged: string[], target: TreeNode | undefined, fromHidden = false): Promise<void> {
+  const tree = buildTreeRoots(await savedOrder());
+  const roots = tree.filter(
+    (node): node is TreeNode & { kind: 'group' } => node.kind === 'group' && !!node.root,
+  );
+  const current = roots.map(rootFolderRef);
+  // Hiding also accepts headings and tasks inside the pile, including rows
+  // carried there by their project. Starred and folder copies are outside it.
+  const matchesHiddenTarget = (node: TreeNode): boolean =>
+    (node.kind === 'group' && target?.kind === 'group' && node.id === target.id) ||
+    (node.kind === 'script' && target?.kind === 'script' &&
+      !target.inFavorites && target.inFolder === undefined && node.script.key === target.script.key) ||
+    (node.kind === 'group' && node.children.some(matchesHiddenTarget));
+  const hidden = tree.find((node) => node.kind === 'group' && node.id === HIDDEN_GROUP_ID);
+  if (hidden && matchesHiddenTarget(hidden)) {
+    const selected = new Set(dragged);
+    const refs = roots.filter((node) => selected.has(rootFolderRef(node))).flatMap((node) =>
+      node.ref ? [node.ref] : node.ecosystem ? node.children.flatMap((child) =>
+        child.kind === 'group' && child.ref ? [child.ref] : [],
+      ) : [],
+    );
+    await setGroupsHidden(refs, true);
+    return;
+  }
+  const anchor = target?.kind === 'group' && target.root ? rootFolderRef(target) : undefined;
+  if (target && (!anchor || !current.includes(anchor))) {
+    hint('$(circle-slash) Not a drop target — drop on another top-level folder to reorder');
+    return;
+  }
+  const selected = new Set(dragged);
+  const moved = current.filter((ref) => selected.has(ref));
+  if (moved.length === 0 || (anchor && selected.has(anchor))) {
+    clearHint();
+    return;
+  }
+  const rest = current.filter((ref) => !selected.has(ref));
+  const at = anchor
+    ? fromHidden ? rest.indexOf(anchor) : dropIndex(current, rest, moved, anchor)
+    : rest.length;
+  await saveOrder(rootOrderScope(), [...rest.slice(0, at), ...moved, ...rest.slice(at)]);
+  clearHint();
+  repaint();
+}
+
 /**
  * The manifest groups in the order the user put them in, top to bottom. A flat
  * list rather than a map: there is only ever one order of headings, where the
@@ -5528,7 +5612,7 @@ async function showMenu(): Promise<void> {
     {
       label: '$(add) Create custom task',
       description: 'a shell command of your own',
-      detail: `Kept in ${CUSTOM_TASKS_FILE}, listed under ${CUSTOM_GROUP_NAME} at the top.`,
+      detail: `Kept in ${CUSTOM_TASKS_FILE}, listed under Shell scripts at the top.`,
       run: () => createCustomTask(undefined),
     },
     {
@@ -5664,6 +5748,10 @@ type TreeNode =
       ecosystem?: Ecosystem;
       /** What kind of manifest the heading is, for the two rules that turn on it. */
       source?: SourceKind;
+      /** Default task created by the + on this custom heading. */
+      customType?: 'shell' | 'ai';
+      /** A folder at the first level, movable among all other root folders. */
+      root?: boolean;
       /**
        * The folder the heading occupies — the directory a manifest sits in, and
        * for a shell group the directory it *is*. What `attachToHosts` matches
@@ -5964,6 +6052,21 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
   dropMimeTypes: DRAG_MIMES,
 
   handleDrag(source, transfer) {
+    if (source[0]?.kind === 'group' && source[0].id === HIDDEN_GROUP_ID) {
+      hint('$(pin) hidden stays at the bottom');
+      return;
+    }
+    if (source[0]?.kind === 'group' && source[0].root) {
+      const refs = source.flatMap((node) =>
+        node.kind === 'group' && node.root ? [rootFolderRef(node)] : [],
+      );
+      const payload = new vscode.DataTransferItem(JSON.stringify({ scope: rootOrderScope(), refs }));
+      for (const mime of DRAG_MIMES) {
+        transfer.set(mime, payload);
+      }
+      hint('$(move) Drop on another top-level folder to reorder, or below the tree to move to the end');
+      return;
+    }
     // A heading dragged is a heading moved, which is a different edit from a task
     // dragged: it rewrites the order of the groups instead of the order inside one.
     // The two never mix in one gesture — the row the drag started on decides which
@@ -6005,7 +6108,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
       const first = groups[0];
       if (!first) {
         if (parent.source === 'custom') {
-          hint(`$(pin) ${CUSTOM_GROUP_NAME} stays at the top — drag the tasks inside it to reorder them`);
+          hint(`$(pin) ${parent.label} stays at the top — drag the tasks inside it to reorder them`);
         }
         return;
       }
@@ -6060,8 +6163,7 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
 
   async handleDrop(target, transfer) {
     const raw = await draggedPayload(transfer);
-    // No target means the empty space below the tree, which names no position.
-    if (!raw || !target) {
+    if (!raw) {
       clearHint();
       return;
     }
@@ -6078,6 +6180,19 @@ const dragAndDropController: vscode.TreeDragAndDropController<TreeNode> = {
     // against the table rather than trusted: it arrives as JSON off a clipboard.
     const block = ALL_ECOSYSTEMS.find((name) => name === payload.block);
     if (!scope || dragged.length === 0) {
+      clearHint();
+      return;
+    }
+
+    if (scope.startsWith('::roots:')) {
+      if (scope === rootOrderScope()) {
+        await dropRootFolders(dragged, target);
+      } else {
+        clearHint();
+      }
+      return;
+    }
+    if (!target) {
       clearHint();
       return;
     }
@@ -6277,6 +6392,21 @@ async function dropGroups(dragged: string[], target: TreeNode, block?: Ecosystem
     moved.filter((ref) => buried.has(ref)),
     false,
   );
+  if (!nested) {
+    const restored = moved.filter((ref) => buried.has(ref));
+    if (restored.length > 0) {
+      const rootTarget = target.kind === 'group' && target.root
+        ? target
+        : target.kind === 'script' && !target.inFavorites && target.inFolder === undefined
+          ? buildTreeRoots(await savedOrder()).find((node) =>
+              node.kind === 'group' && node.root && node.ref === groupRef(target.script),
+            )
+          : undefined;
+      if (rootTarget) {
+        await dropRootFolders(restored, rootTarget, true);
+      }
+    }
+  }
   clearHint();
   repaint();
 }
@@ -6632,7 +6762,8 @@ function createTree(): vscode.Disposable[] {
 }
 
 /**
- * One group per manifest. Scripts keep the order the manifest declares them in,
+ * One group per manifest, with shell and AI custom tasks in separate groups.
+ * Scripts keep the order the manifest declares them in,
  * running or not — a row that moves when you start it is a row you have to find
  * again to stop it — unless `pinRunningTasks` says otherwise, which `listScripts`
  * has already applied by the time the rows get here. The groups themselves never
@@ -6646,7 +6777,47 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
   const crowded = crowdedFolders(scripts);
   const colliding = collidingHeadings(scripts, crowded);
 
+  const customGroup = (manifest: vscode.Uri, type: 'shell' | 'ai') => {
+    const key = manifest.toString() + (type === 'ai' ? ':ai' : '');
+    let group = byManifest.get(key);
+    if (!group) {
+      const label = type === 'ai' ? 'AI tasks' : 'Shell scripts';
+      group = {
+        kind: 'group',
+        id: `group:${key}`,
+        label,
+        place: label,
+        detail: CUSTOM_TASKS_FILE,
+        folder:
+          (vscode.workspace.workspaceFolders?.length ?? 0) > 1
+            ? vscode.workspace.getWorkspaceFolder(manifest)?.name
+            : undefined,
+        icon: GROUP_ICON,
+        // Keep task identities and manual ordering in the original manifest scope.
+        scope: manifestRef(manifest),
+        ref: manifestRef(manifest) + (type === 'ai' ? ':ai' : ''),
+        manifest,
+        ecosystem: 'custom',
+        source: 'custom',
+        customType: type,
+        children: [],
+      };
+      byManifest.set(key, group);
+      groups.push(group);
+    }
+    return group;
+  };
+  // Keep both creation targets available even before their first task is saved.
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    customGroup(customTasksFile(folder), 'shell');
+    customGroup(customTasksFile(folder), 'ai');
+  }
+
   for (const script of scripts) {
+    if (script.kind === 'custom') {
+      customGroup(script.manifest, script.ai ? 'ai' : 'shell').children.push({ kind: 'script', script });
+      continue;
+    }
     const key = script.manifest.toString();
     let group = byManifest.get(key);
     if (!group) {
@@ -6696,18 +6867,11 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
         // `ecosystem` mode is where that row is drawn; in `flat` mode a
         // project's script folders are one `shell` row by the time the tree has
         // them, and that row is named rather than pathed. See `attachToHosts`.
-        //
-        // The custom tasks take neither either. Their file is always the same
-        // `.vscode/…` path, so it tells the eye nothing; what can differ is the
-        // workspace folder, and only once there is more than one of those.
-        folder:
-          script.kind === 'custom'
-            ? customHeadingFolder(script)
-            : script.file
-              ? undefined
-              : colliding.has(headingKey(script, shared))
-                ? packagePath(script)
-                : packageFolder(script),
+        folder: script.file
+          ? undefined
+          : colliding.has(headingKey(script, shared))
+            ? packagePath(script)
+            : packageFolder(script),
         place: script.file ? packagePath(script) : packageHeading(script, shared),
         icon: GROUP_ICON,
         scope: groupRef(script),
@@ -6880,7 +7044,7 @@ function buildTreeRoots(scripts: ScriptEntry[]): TreeNode[] {
     });
   }
 
-  return roots;
+  return orderedRootFolders(roots);
 }
 
 /**
@@ -7289,7 +7453,12 @@ function treeItemFor(node: TreeNode): vscode.TreeItem {
     // The custom tasks are the same case — their file is a `.json` the theme
     // would draw as every other JSON file — and wear their ecosystem's glyph too.
     const own = node.source === 'shell' || node.source === 'custom' ? node.source : undefined;
-    const stock = own && typeIcons() ? ECOSYSTEMS[own].icon : node.icon;
+    const stock =
+      own && typeIcons()
+        ? node.customType
+          ? node.customType === 'ai' ? 'sparkle' : 'terminal'
+          : ECOSYSTEMS[own].icon
+        : node.icon;
     if (alive && isFileItem(node)) {
       // A compose file and a Dockerfile are the two headings that *are* the thing
       // being run — the stack and the image, which is why ▶ sits on the row — so
@@ -8096,15 +8265,6 @@ function packageFolder(script: ScriptEntry): string {
   const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
   const folder = multiRoot ? vscode.workspace.getWorkspaceFolder(script.manifest) : undefined;
   return [folder?.name, script.directory].filter(Boolean).join('/');
-}
-
-/**
- * What a Custom Tasks heading says after its bullet: the workspace folder, when
- * there is more than one to tell apart, and nothing otherwise.
- */
-function customHeadingFolder(script: ScriptEntry): string | undefined {
-  const multiRoot = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
-  return multiRoot ? vscode.workspace.getWorkspaceFolder(script.manifest)?.name : undefined;
 }
 
 /** Dimmed part of a group row: the manifest path relative to its workspace folder. */

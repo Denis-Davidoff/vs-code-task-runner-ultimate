@@ -7,7 +7,9 @@
       "result": "none",
       "notify": "done",
       "prompt": "Commit all the changes into main branch directly"
-    }
+    },
+    "Just ls": "ls",
+    "Just ls2": "ls"
   },
   "folders": {
     "Global test": {
